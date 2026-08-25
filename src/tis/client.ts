@@ -4,8 +4,19 @@ import { dirname, join } from "node:path";
 import { CliError } from "../core/errors.js";
 import type { Semester } from "../core/semester.js";
 import { TisSession } from "./auth.js";
-import { normaliseCourse } from "./normalise.js";
-import type { Course, TisWriteResult } from "./types.js";
+import {
+  normaliseCourse,
+  normaliseExam,
+  normaliseGrade,
+  normalisePersonalScheduleEntry,
+} from "./normalise.js";
+import type {
+  Course,
+  ExamRecord,
+  GradeRecord,
+  PersonalScheduleEntry,
+  TisWriteResult,
+} from "./types.js";
 
 const CATALOG_TTL_MS = 60 * 60 * 1000;
 
@@ -21,16 +32,24 @@ export class TisClient {
     semester: Semester,
     options: { keyword?: string; limit: number; refresh?: boolean },
   ): Promise<{ courses: Course[]; total: number; source: "cache" | "live" }> {
-    const cache = options.refresh ? undefined : await readCatalogCache(semester);
-    const source: "cache" | "live" = cache ? "cache" : "live";
-    const allCourses = cache ?? (await this.fetchCatalog(semester));
-    if (!cache) await writeCatalogCache(semester, allCourses);
+    const { courses: allCourses, source } = await this.catalog(semester, options.refresh);
 
     const keyword = options.keyword?.trim().toLowerCase() ?? "";
     const matches = keyword
       ? allCourses.filter((course) => searchable(course).includes(keyword))
       : allCourses;
     return { courses: matches.slice(0, options.limit), total: matches.length, source };
+  }
+
+  public async catalog(
+    semester: Semester,
+    refresh = false,
+  ): Promise<{ courses: Course[]; source: "cache" | "live" }> {
+    const cache = refresh ? undefined : await readCatalogCache(semester);
+    if (cache) return { courses: cache, source: "cache" };
+    const courses = await this.fetchCatalog(semester);
+    await writeCatalogCache(semester, courses);
+    return { courses, source: "live" };
   }
 
   public async searchAvailable(
@@ -79,7 +98,10 @@ export class TisClient {
       );
     }
     const list = asRecord(raw.kxrwList);
-    const currentRound = asRecord(raw.xkgzszOne) || asRecord(asRecord(raw.xsxkPage).xkgzszOne);
+    const directRound = asRecord(raw.xkgzszOne);
+    const currentRound = Object.keys(directRound).length > 0
+      ? directRound
+      : asRecord(asRecord(raw.xsxkPage).xkgzszOne);
     return {
       courses: asRecords(list.list).map(normaliseCourse),
       total: numberValue(list.total) ?? 0,
@@ -89,9 +111,46 @@ export class TisClient {
     };
   }
 
-  public async enrolled(semester: Semester): Promise<unknown[]> {
+  public async enrolled(semester: Semester): Promise<PersonalScheduleEntry[]> {
     const response = await this.session.postForm("/xszykb/queryxszykbzong", { xn: semester.xn, xq: semester.xq });
-    return Array.isArray(response) ? response : [];
+    return asRecords(response).map(normalisePersonalScheduleEntry);
+  }
+
+  public async schedule(semester: Semester, week?: number): Promise<PersonalScheduleEntry[]> {
+    const response = week === undefined
+      ? await this.session.postForm("/xszykb/queryxszykbzong", { xn: semester.xn, xq: semester.xq })
+      : await this.session.postForm("/xszykb/queryxszykbzhou", { xn: semester.xn, xq: semester.xq, zc: week });
+    return asRecords(response).map(normalisePersonalScheduleEntry);
+  }
+
+  public async currentWeek(): Promise<number> {
+    const raw = (await this.session.postText("/component/querydangqianzc")).trim();
+    const week = Number(raw);
+    if (!Number.isSafeInteger(week) || week < 1 || week > 36) {
+      throw new CliError("TIS returned an invalid current week.", "TIS_PROTOCOL_ERROR", 1, { received: raw });
+    }
+    return week;
+  }
+
+  public async grades(semester?: Semester): Promise<GradeRecord[]> {
+    const response = asRecord(await this.session.postJson("/cjgl/grcjcx/grcjcx", {
+      xn: null,
+      xq: null,
+      kcmc: null,
+      cxbj: "-1",
+      pylx: "1",
+      current: 1,
+      pageSize: 500,
+    }));
+    const grades = asRecords(asRecord(response.content).list).map(normaliseGrade);
+    return semester ? grades.filter((grade) => semesterMatches(grade.semester, semester)) : grades;
+  }
+
+  public async exams(): Promise<ExamRecord[]> {
+    const response = await this.session.postJson("/component/queryKsxxByXs", {});
+    return asRecords(response)
+      .map(normaliseExam)
+      .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
   }
 
   public async addCourse(input: {
@@ -114,7 +173,7 @@ export class TisClient {
   private async fetchCatalog(semester: Semester): Promise<Course[]> {
     const courses: Course[] = [];
     const pageSize = 500;
-    for (let page = 1; page <= 9; page += 1) {
+    for (let page = 1; page <= 100; page += 1) {
       const response = asRecord(
         await this.session.postForm("/Xsxktz/queryRwxxcxList", {
           p_xn: semester.xn,
@@ -131,9 +190,19 @@ export class TisClient {
           pageSize: String(pageSize),
         }),
       );
-      const rows = asRecords(asRecord(response.rwList).list);
+      const list = asRecord(response.rwList);
+      const rows = asRecords(list.list);
       courses.push(...rows.map(normaliseCourse));
-      if (rows.length < pageSize) break;
+      const declaredTotal = numberValue(list.total) ?? numberValue(response.total);
+      if (rows.length < pageSize || (declaredTotal !== undefined && courses.length >= declaredTotal)) return courses;
+      if (page === 100) {
+        throw new CliError(
+          "TIS catalog exceeded the safe pagination limit.",
+          "TIS_PAGINATION_LIMIT",
+          1,
+          { fetched: courses.length, declaredTotal },
+        );
+      }
       await delay(550);
     }
     return courses;
@@ -227,7 +296,7 @@ async function writeCatalogCache(semester: Semester, courses: Course[]): Promise
 
 function cachePath(semester: Semester): string {
   const base = process.env.XDG_CACHE_HOME || join(homedir(), "Library", "Caches");
-  return join(base, "sustech-survival", `catalog-${semester.value}.json`);
+  return join(base, "sustech-cli", `catalog-${semester.value}.json`);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -253,4 +322,13 @@ function numberValue(value: unknown): number | undefined {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function semesterMatches(label: string, semester: Semester): boolean {
+  const season = semester.xq === "1" ? "秋季" : semester.xq === "2" ? "春季" : "夏季";
+  const startYear = semester.xn.slice(0, 4);
+  const endYear = semester.xn.slice(5);
+  return [semester.value, `${semester.xn}${semester.xq}`, `${startYear}${season}`, `${endYear}${season}`]
+    .some((candidate) => label.includes(candidate))
+    || (label.includes(semester.xn) && label.includes(season));
 }

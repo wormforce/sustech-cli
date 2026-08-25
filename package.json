@@ -1,6 +1,6 @@
 {
   "name": "sustech-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
@@ -8,7 +8,12 @@
     "sustech": "./dist/cli.js"
   },
   "files": [
-    "dist",
+    "dist/cli.d.ts",
+    "dist/cli.js",
+    "dist/cli.js.map",
+    "dist/core",
+    "dist/tis",
+    "dist/transit",
     "README.md",
     "LICENSE",
     "NOTICE.md"
@@ -34,6 +39,8 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "check": "tsc --noEmit --project tsconfig.json",
+    "prepare": "npm run build",
+    "start": "node dist/cli.js",
     "test": "npm run build && node --test dist/test/*.test.js",
     "prepack": "npm run check && npm test"
   },

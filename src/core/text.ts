@@ -1,5 +1,6 @@
 import type { Semester } from "./semester.js";
-import type { Course } from "../tis/types.js";
+import type { TimetableResult } from "../tis/planner.js";
+import type { Course, ExamRecord, GpaSummary, GradeRecord, PersonalScheduleEntry } from "../tis/types.js";
 
 interface Column<T> {
   heading: string;
@@ -56,24 +57,114 @@ export function formatAvailableCourses(input: {
   return `${header}\n\n${body}\n\n${input.total} match(es); showing ${input.courses.length}.`;
 }
 
-export function formatEnrolledCourses(semester: Semester, courses: unknown[]): string {
+export function formatEnrolledCourses(semester: Semester, courses: PersonalScheduleEntry[]): string {
   const header = `Enrolled courses · ${semester.value}`;
   if (courses.length === 0) return `${header}\n\nNo enrolled courses returned by TIS.`;
-  const blocks = courses.map((value, index) => {
-    const course = asRecord(value);
-    const name = firstString(course, ["KCMC", "KCWZSM", "kcmc", "name"]) || "Unnamed course";
-    const code = firstString(course, ["KCDM", "kcdm", "code"]);
-    const teacher = firstString(course, ["SKJS", "DGJSMC", "teacher"]);
-    const place = firstString(course, ["SKDD", "JXDD", "room"]);
-    const time = firstString(course, ["SKSJ", "SKSJ_EN", "time"]);
+  const blocks = courses.map((course, index) => {
+    const name = course.courseName || course.description || course.descriptionEn || "Unnamed course";
     const details = [
-      teacher && `Teacher: ${teacher}`,
-      time && `Time: ${time}`,
-      place && `Room: ${place}`,
+      course.teacher && `Teacher: ${course.teacher}`,
+      course.description && `Time: ${course.description}`,
+      course.room && `Room: ${course.room}`,
     ].filter(Boolean).join(" · ");
-    return `${index + 1}. ${code ? `${code} — ` : ""}${name}${details ? `\n   ${details}` : ""}`;
+    return `${index + 1}. ${course.courseCode ? `${course.courseCode} — ` : ""}${name}${details ? `\n   ${details}` : ""}`;
   });
   return `${header}\n\n${blocks.join("\n\n")}\n\n${courses.length} course record(s).`;
+}
+
+export function formatScheduleEntries(
+  semester: Semester,
+  entries: PersonalScheduleEntry[],
+  week?: number,
+): string {
+  const title = `Personal schedule · ${semester.value}${week === undefined ? " · full semester" : ` · week ${week}`}`;
+  if (entries.length === 0) return `${title}\n\nNo schedule entries returned by TIS.`;
+  const lines = entries.map((entry, index) => {
+    const label = entry.courseName || entry.description || entry.descriptionEn || entry.rwh || "Unnamed entry";
+    const details = [
+      entry.key,
+      entry.periodStart !== undefined ? `period ${entry.periodStart}-${entry.periodEnd ?? entry.periodStart}` : "",
+      entry.teacher,
+      entry.room,
+    ].filter(Boolean).join(" · ");
+    return `${index + 1}. ${entry.courseCode ? `${entry.courseCode} — ` : ""}${label}${details ? `\n   ${details}` : ""}`;
+  });
+  return `${title}\n\n${lines.join("\n\n")}\n\n${entries.length} schedule entry/entries.`;
+}
+
+export function formatGrades(grades: GradeRecord[], summary: GpaSummary): string {
+  const columns: Column<GradeRecord>[] = [
+    { heading: "SEMESTER", width: 14, value: (grade) => grade.semester || "-" },
+    { heading: "CODE", width: 12, value: (grade) => grade.code || "-" },
+    { heading: "COURSE", width: 30, value: (grade) => grade.name || grade.nameEn || "-" },
+    { heading: "GRADE", width: 7, value: (grade) => grade.letterGrade || "-" },
+    { heading: "SCORE", width: 7, value: (grade) => grade.numericScore?.toString() ?? "-" },
+    { heading: "CREDITS", width: 8, value: (grade) => grade.credits.toString() },
+  ];
+  if (grades.length === 0) return "Grades\n\nNo grade records returned by TIS.";
+  return [
+    "Grades",
+    "",
+    formatTable(columns, grades),
+    "",
+    `GPA ${summary.gpa.toFixed(3)} · ${summary.credits} counted credits · ${summary.courseCount} counted course(s)`,
+  ].join("\n");
+}
+
+export function formatExams(exams: ExamRecord[]): string {
+  if (exams.length === 0) return "Exam schedule\n\nNo exams returned by TIS.";
+  const blocks = exams.map((exam, index) => {
+    const location = [exam.campus, exam.building, exam.room].filter(Boolean).join(" ") || "TBA";
+    const period = exam.periodStart === undefined
+      ? ""
+      : ` · period ${exam.periodStart}-${exam.periodEnd ?? exam.periodStart}`;
+    return [
+      `${index + 1}. ${exam.code ? `${exam.code} — ` : ""}${exam.name || "Unnamed exam"}`,
+      `   ${exam.date || "TBA"} ${exam.weekday} · ${exam.time || "TBA"}${period}`,
+      `   ${location}${exam.type ? ` · ${exam.type}` : ""}`,
+    ].join("\n");
+  });
+  return `Exam schedule\n\n${blocks.join("\n\n")}\n\n${exams.length} exam(s).`;
+}
+
+export function formatTimetables(result: TimetableResult): string {
+  const candidateSummary = result.requestedCodes
+    .map((code) => {
+      const excluded = result.excludedUnscheduledByCode[code] ?? 0;
+      return `${code}=${result.candidatesByCode[code] ?? 0}${excluded > 0 ? ` (+${excluded} time-TBA excluded)` : ""}`;
+    })
+    .join(", ");
+  if (result.missingCodes.length > 0) {
+    return [
+      "Timetable solver",
+      "",
+      `No solution search was run because these codes have no eligible sections: ${result.missingCodes.join(", ")}`,
+      `Candidates: ${candidateSummary}`,
+    ].join("\n");
+  }
+  if (result.solutions.length === 0) {
+    return `Timetable solver\n\nNo conflict-free timetable found.\nCandidates: ${candidateSummary}`;
+  }
+  const solutions = result.solutions.map((solution) => {
+    const sections = solution.sections.map((course) => {
+      const schedule = course.schedule.map((slot) =>
+        `${slot.dayName} ${slot.periodStart}-${slot.periodEnd} ${slot.room}`,
+      ).join("; ") || "time TBA";
+      return `  - ${course.code}/${course.classGroup || "?"} · ${course.teachers.join(", ") || "teacher TBA"} · ${schedule} · RWH ${course.rwh}`;
+    });
+    return [`Solution ${solution.index} · ${solution.totalCredits} credits`, ...sections].join("\n");
+  });
+  return [
+    "Timetable solver",
+    `Candidates: ${candidateSummary}`,
+    result.blocked.length > 0
+      ? `Blocked: ${result.blocked.map((entry) => `${entry.dayName} ${entry.periodStart}-${entry.periodEnd}`).join(", ")}`
+      : "",
+    "",
+    solutions.join("\n\n"),
+    "",
+    `${result.solutions.length} solution(s)${result.truncated ? " (truncated at --max)" : ""}.`,
+  ].filter((line, index) => line !== "" || index > 1).join("\n");
 }
 
 export function formatEnrollPreview(target: {
@@ -97,8 +188,18 @@ export function formatEnrollPreview(target: {
   ].join("\n");
 }
 
-export function formatEnrollSuccess(rwh: string, message: string): string {
-  return `Enrollment submitted successfully.\nRWH: ${rwh}\nTIS: ${message || "success"}`;
+export function formatEnrollSuccess(
+  rwh: string,
+  message: string,
+  verification: { status: "confirmed" | "not_observed" | "unavailable"; message: string },
+): string {
+  return [
+    "Enrollment request accepted by TIS.",
+    `RWH: ${rwh}`,
+    `TIS: ${message || "success"}`,
+    `Verification: ${verification.status} — ${verification.message}`,
+    verification.status === "confirmed" ? "" : "Do not retry automatically; inspect TIS before another write.",
+  ].filter(Boolean).join("\n");
 }
 
 function formatTable<T>(columns: Column<T>[], rows: T[]): string {
@@ -140,16 +241,4 @@ function truncateDisplay(value: string, width: number): string {
 
 function displayWidth(value: string): number {
   return [...value].reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
 }

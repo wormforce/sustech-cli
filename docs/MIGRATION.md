@@ -8,10 +8,12 @@ Ports are fixture-driven and land in this standalone repository.
 | Core CLI | text/JSON/JSONL, typed errors, exit codes | confirmation policy | Implemented | P0 |
 | SSO/CAS | TIS login, cookie session | none | Initial implementation | P0 |
 | TIS catalog | search, normalized schedules, cache | none | Initial implementation | P0 |
-| TIS personal | selectable courses, enrolled schedule | enroll | Initial implementation; live QA pending | P0 |
-| TIS remaining | terms, weeks, grades, exams, evaluations | cart, drop, bids | Not started | P1 |
+| TIS personal | selectable courses, normalized enrolled/week schedule | enroll | Implemented; live QA pending | P0 |
+| TIS academics | grades/GPA, exams | none | Implemented; live QA pending | P1 |
+| TIS planning | week-aware timetable solver, blocked periods | none | Implemented with fixtures | P1 |
+| TIS remaining | evaluations, classroom data, calendar export | cart, drop, bids | Not started | P1 |
 | Calendar | academic terms, holidays, date intelligence | local override | Not started | P1 |
-| Transit | schedules, live GPS, routing data | none | Not started | P1 |
+| Transit | facilities, search, lines, schedules, stops, live GPS | none | Implemented and live-smoked; routing not ported | P1 |
 | Faculty | department list, search, profile | none | Not started | P1 |
 | Context | classes, deadlines, exams, weather/AQI snapshot | none | Not started | P1 |
 | Blackboard | courses, content, assignments, downloads | submissions | Not started | P2 |

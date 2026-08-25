@@ -3,7 +3,8 @@ import type { Credentials } from "../core/credentials.js";
 
 const CAS_BASE = "https://cas.sustech.edu.cn/cas";
 const TIS_BASE = "https://tis.sustech.edu.cn";
-const USER_AGENT = "sustech-cli/0.1 (+https://github.com/aprylewu/sustech-cli)";
+const USER_AGENT = "sustech-cli/0.2 (+https://github.com/aprylewu/sustech-cli)";
+const REQUEST_TIMEOUT_MS = 30_000;
 
 interface Cookie {
   name: string;
@@ -95,7 +96,6 @@ export class TisSession {
   }
 
   public async postForm(path: string, data: Record<string, string | number | string[]>): Promise<unknown> {
-    if (!this.authenticated) await this.login();
     const form = new URLSearchParams();
     for (const [key, value] of Object.entries(data)) {
       if (Array.isArray(value)) {
@@ -104,17 +104,45 @@ export class TisSession {
         form.set(key, String(value));
       }
     }
+    const response = await this.post(path, {
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "x-requested-with": "XMLHttpRequest",
+    }, form.toString());
+    return this.parseJsonResponse(response, path);
+  }
+
+  public async postJson(path: string, data: Record<string, unknown>): Promise<unknown> {
+    const response = await this.post(path, {
+      "content-type": "application/json",
+      "x-requested-with": "XMLHttpRequest",
+    }, JSON.stringify(data));
+    return this.parseJsonResponse(response, path);
+  }
+
+  public async postText(path: string, data: Record<string, string | number> = {}): Promise<string> {
+    const form = new URLSearchParams();
+    for (const [key, value] of Object.entries(data)) form.set(key, String(value));
+    const response = await this.post(path, {
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "x-requested-with": "XMLHttpRequest",
+    }, form.toString());
+    return response.text();
+  }
+
+  private async post(path: string, headers: Record<string, string>, body: string): Promise<Response> {
+    if (!this.authenticated) await this.login();
     const response = await this.request(`${TIS_BASE}${path}`, {
       method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "x-requested-with": "XMLHttpRequest",
-      },
-      body: form.toString(),
+      headers,
+      body,
     });
     if (!response.ok) {
       throw new CliError("TIS request failed.", "TIS_HTTP_ERROR", 1, { path, status: response.status });
     }
+    return response;
+  }
+
+  private async parseJsonResponse(response: Response, path: string): Promise<unknown> {
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("json")) {
       throw new CliError("TIS returned HTML instead of JSON; the session may have expired.", "TIS_SESSION_EXPIRED", 1, { path });
@@ -127,6 +155,7 @@ export class TisSession {
     let method = init.method ?? "GET";
     let body = init.body;
     let headers = new Headers(init.headers);
+    const signal = init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
     for (let redirects = 0; redirects < 8; redirects += 1) {
       const cookie = this.cookies.header(new URL(currentUrl));
@@ -136,11 +165,12 @@ export class TisSession {
 
       let response: Response;
       try {
-        response = await fetch(currentUrl, { method, headers, body, redirect: "manual" });
+        response = await fetch(currentUrl, { method, headers, body, redirect: "manual", signal });
       } catch (error) {
+        const timedOut = signal.aborted;
         throw new CliError(
-          "Could not reach SUSTech CAS/TIS.",
-          "NETWORK_ERROR",
+          timedOut ? "SUSTech CAS/TIS request timed out." : "Could not reach SUSTech CAS/TIS.",
+          timedOut ? "NETWORK_TIMEOUT" : "NETWORK_ERROR",
           1,
           { cause: error instanceof Error ? error.message : String(error) },
         );
@@ -150,7 +180,14 @@ export class TisSession {
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers.get("location");
       if (!location) return response;
-      currentUrl = new URL(location, currentUrl).toString();
+      const nextUrl = new URL(location, currentUrl);
+      if (nextUrl.protocol !== "https:" || !isSustechHost(nextUrl.hostname)) {
+        throw new CliError("CAS/TIS attempted an unsafe redirect.", "UNSAFE_REDIRECT", 1, {
+          from: new URL(currentUrl).hostname,
+          to: nextUrl.hostname,
+        });
+      }
+      currentUrl = nextUrl.toString();
       if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
         method = "GET";
         body = undefined;
@@ -159,4 +196,8 @@ export class TisSession {
     }
     throw new CliError("CAS/TIS redirected too many times.", "TOO_MANY_REDIRECTS", 1);
   }
+}
+
+function isSustechHost(hostname: string): boolean {
+  return hostname === "sustech.edu.cn" || hostname.endsWith(".sustech.edu.cn");
 }

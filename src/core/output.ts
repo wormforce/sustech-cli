@@ -62,7 +62,8 @@ export function inferOutputOptions(argv: string[]): OutputOptions {
   if (argv.includes("--jsonl")) return { mode: "jsonl", pretty: false };
   if (argv.includes("--json")) return { mode: "json", pretty: argv.includes("--pretty") };
   const outputIndex = argv.indexOf("--output");
-  const output = outputIndex >= 0 ? argv[outputIndex + 1] : undefined;
+  const inlineOutput = argv.find((argument) => argument.startsWith("--output="))?.slice("--output=".length);
+  const output = inlineOutput ?? (outputIndex >= 0 ? argv[outputIndex + 1] : undefined);
   return {
     mode: isOutputMode(output) ? output : "text",
     pretty: argv.includes("--pretty"),
