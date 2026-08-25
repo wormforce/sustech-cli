@@ -1,0 +1,45 @@
+{
+  "name": "sustech-cli",
+  "version": "0.1.0",
+  "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "bin": {
+    "sustech": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aprylewu/sustech-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aprylewu/sustech-cli/issues"
+  },
+  "homepage": "https://github.com/aprylewu/sustech-cli#readme",
+  "keywords": [
+    "sustech",
+    "cli",
+    "agent",
+    "tis",
+    "course-selection"
+  ],
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "check": "tsc --noEmit --project tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "prepack": "npm run check && npm test"
+  },
+  "packageManager": "npm@10.9.3",
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3"
+  }
+}
