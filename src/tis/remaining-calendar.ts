@@ -21,8 +21,17 @@ export interface IcsOccurrence {
   periodEnd: number;
 }
 
+export interface TeachingPeriodWindow {
+  date: string;
+  time: string;
+  weekday: number;
+  periodStart: number;
+  periodEnd: number;
+  periodLabel: string;
+}
+
 const CHINA_OFFSET_MINUTES = 8 * 60;
-const PERIOD_START_TIMES: Readonly<Record<number, [number, number]>> = {
+export const PERIOD_START_TIMES: Readonly<Record<number, [number, number]>> = {
   1: [8, 0],
   2: [9, 0],
   3: [10, 20],
@@ -37,7 +46,7 @@ const PERIOD_START_TIMES: Readonly<Record<number, [number, number]>> = {
   12: [21, 0],
   13: [22, 0],
 };
-const PERIOD_DURATION_MINUTES = 50;
+export const PERIOD_DURATION_MINUTES = 50;
 
 export function inferWeekOneMonday(todayIsoDate: string, currentWeek: number): string {
   if (!Number.isInteger(currentWeek) || currentWeek < 1) {
@@ -124,6 +133,43 @@ export function buildScheduleIcs(
   return `${lines.join("\r\n")}\r\n`;
 }
 
+export function teachingPeriodAtShenzhenTime(value: Date): TeachingPeriodWindow | undefined {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(value);
+  const year = Number(partValue(parts, "year"));
+  const month = Number(partValue(parts, "month"));
+  const day = Number(partValue(parts, "day"));
+  const hour = Number(partValue(parts, "hour"));
+  const minute = Number(partValue(parts, "minute"));
+  if (![year, month, day, hour, minute].every((entry) => Number.isInteger(entry))) return undefined;
+
+  const wallClockDate = new Date(Date.UTC(year, month - 1, day));
+  const weekday = wallClockDate.getUTCDay() === 0 ? 7 : wallClockDate.getUTCDay();
+  const minutesSinceMidnight = hour * 60 + minute;
+  for (const [periodText, [startHour, startMinute]] of Object.entries(PERIOD_START_TIMES)) {
+    const periodStart = Number(periodText);
+    const startTotal = startHour * 60 + startMinute;
+    const endTotal = startTotal + PERIOD_DURATION_MINUTES;
+    if (minutesSinceMidnight < startTotal || minutesSinceMidnight >= endTotal) continue;
+    return {
+      date: `${partValue(parts, "year")}-${partValue(parts, "month")}-${partValue(parts, "day")}`,
+      time: `${partValue(parts, "hour")}:${partValue(parts, "minute")}`,
+      weekday,
+      periodStart,
+      periodEnd: periodStart,
+      periodLabel: `P${periodStart} ${String(startHour).padStart(2, "0")}:${String(startMinute).padStart(2, "0")}-${formatPeriodEnd(endTotal)}`,
+    };
+  }
+  return undefined;
+}
+
 function periodStartUtc(date: Date, period: number): string {
   const slot = PERIOD_START_TIMES[period];
   if (!slot) throw new CliError("ICS export encountered an unsupported class period.", "UNSUPPORTED_PERIOD", 2, { period });
@@ -162,4 +208,14 @@ function escapeIcs(value: string): string {
     .replace(/;/g, "\\;")
     .replace(/,/g, "\\,")
     .replace(/\n/g, "\\n");
+}
+
+function partValue(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((part) => part.type === type)?.value ?? "";
+}
+
+function formatPeriodEnd(minutesSinceMidnight: number): string {
+  const hour = Math.floor(minutesSinceMidnight / 60);
+  const minute = minutesSinceMidnight % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }

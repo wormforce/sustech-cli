@@ -10,6 +10,7 @@ import {
   normaliseGrade,
   normalisePersonalScheduleEntry,
 } from "./normalise.js";
+import type { SelectionPreview } from "./remaining-selection.js";
 import type {
   Course,
   ExamRecord,
@@ -23,6 +24,15 @@ const CATALOG_TTL_MS = 60 * 60 * 1000;
 interface CatalogCache {
   savedAt: number;
   courses: Course[];
+}
+
+export interface TisSelectionState {
+  currentTerm: Record<string, unknown>;
+  courses: Course[];
+  total: number;
+  enrolled: Record<string, unknown>[];
+  cart: Record<string, unknown>[];
+  round: Record<string, unknown>;
 }
 
 export class TisClient {
@@ -56,10 +66,28 @@ export class TisClient {
     semester: Semester,
     options: { keyword?: string; round: string; limit: number },
   ): Promise<{ courses: Course[]; total: number; enrolled: unknown[]; cart: unknown[]; round: Record<string, unknown> }> {
-    const dq = asRecord(await this.session.postForm("/Xsxk/queryXkdqXnxq", {}));
+    const state = await this.selectionState(semester, options);
+    return {
+      courses: state.courses,
+      total: state.total,
+      enrolled: state.enrolled,
+      cart: state.cart,
+      round: state.round,
+    };
+  }
+
+  public async currentTerm(): Promise<Record<string, unknown>> {
+    return asRecord(await this.session.postForm("/Xsxk/queryXkdqXnxq", {}));
+  }
+
+  public async selectionState(
+    semester: Semester,
+    options: { keyword?: string; round: string; limit: number; cultivation?: "1" | "2" } ,
+  ): Promise<TisSelectionState> {
+    const dq = await this.currentTerm();
     const raw = asRecord(
       await this.session.postForm("/Xsxk/queryKxrw", {
-        p_pylx: "1",
+        p_pylx: options.cultivation ?? "1",
         p_sfgldjr: "",
         p_sfredis: "",
         p_sfsyxkgwc: "1",
@@ -84,7 +112,7 @@ export class TisClient {
         p_skyy: "",
         p_sfmxzj: "0",
         cxsfmt: stringValue(dq.cxsfmt) || "0",
-        mxpylx: "1",
+        mxpylx: options.cultivation ?? "1",
         pageNum: "1",
         pageSize: String(options.limit),
       }),
@@ -103,10 +131,11 @@ export class TisClient {
       ? directRound
       : asRecord(asRecord(raw.xsxkPage).xkgzszOne);
     return {
+      currentTerm: dq,
       courses: asRecords(list.list).map(normaliseCourse),
       total: numberValue(list.total) ?? 0,
-      enrolled: asUnknownArray(raw.yxkcList),
-      cart: asUnknownArray(raw.xkgwcList),
+      enrolled: asRecords(raw.yxkcList),
+      cart: asRecords(raw.xkgwcList),
       round: currentRound,
     };
   }
@@ -167,6 +196,17 @@ export class TisClient {
         buildWritePayload(input, dq),
       ),
     );
+    return { jg: stringValue(response.jg), message: stringValue(response.message), raw: response };
+  }
+
+  public async selectionWrite(preview: SelectionPreview): Promise<TisWriteResult> {
+    if (!selectionWriteAllowed(preview)) {
+      throw new CliError("Unsupported TIS selection mutation endpoint.", "UNSUPPORTED_SELECTION_OPERATION", 2, {
+        operation: preview.operation,
+        endpoint: preview.endpoint,
+      });
+    }
+    const response = asRecord(await this.session.postForm(preview.endpoint, preview.payload));
     return { jg: stringValue(response.jg), message: stringValue(response.message), raw: response };
   }
 
@@ -331,4 +371,15 @@ function semesterMatches(label: string, semester: Semester): boolean {
   return [semester.value, `${semester.xn}${semester.xq}`, `${startYear}${season}`, `${endYear}${season}`]
     .some((candidate) => label.includes(candidate))
     || (label.includes(semester.xn) && label.includes(season));
+}
+
+function selectionWriteAllowed(preview: SelectionPreview): boolean {
+  if (preview.operation === "enroll") return preview.endpoint === "/Xsxk/addXuanke";
+  if (preview.operation === "drop") return preview.endpoint === "/Xsxk/tuike";
+  if (preview.operation === "cart.add") return preview.endpoint === "/Xsxk/addGouwuche";
+  if (preview.operation === "cart.remove") return preview.endpoint === "/Xsxk/delGouwuche";
+  if (preview.operation === "bid.update") {
+    return preview.endpoint === "/Xsxk/addGouwuche" || preview.endpoint === "/Xsxk/updXkxsByyx";
+  }
+  return false;
 }

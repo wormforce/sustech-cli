@@ -179,6 +179,10 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const bbPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb submit preview");
   const bbAttachments = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb attachments");
   const bbDownload = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb download");
+  const selectionApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis selection apply");
+  const bidApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis bid apply");
+  const classroomLive = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom live");
+  const classroomNow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom now");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -197,6 +201,12 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(bbAttachments.authentication, "bb");
   assert.equal(bbDownload.kind, "mutation");
   assert.equal(bbDownload.confirmation, "none");
+  assert.equal(selectionApply.kind, "mutation");
+  assert.equal(selectionApply.confirmation, "required");
+  assert.equal(bidApply.kind, "mutation");
+  assert.equal(bidApply.confirmation, "required");
+  assert.equal(classroomLive.kind, "read");
+  assert.equal(classroomNow.kind, "read");
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -249,6 +259,17 @@ test("new local Agent surfaces remain machine-readable and mutation-free", () =>
   assert.equal(selection.status, 0);
   assert.equal(JSON.parse(selection.stdout).data.mutation, false);
   assert.equal(JSON.parse(selection.stdout).data.applyAvailable, false);
+
+  const exactSelection = run([
+    "tis", "selection", "preview", "cart.remove",
+    "--semester", "2025-2026-1",
+    "--course-id", "deadbeef",
+    "--rwh", "2025-2026-1-CS101-001",
+    "--json",
+  ]);
+  assert.equal(exactSelection.status, 0);
+  assert.equal(JSON.parse(exactSelection.stdout).data.applyAvailable, true);
+  assert.match(JSON.parse(exactSelection.stdout).data.confirmation.command, /tis selection apply cart\.remove/);
 
   const library = run(["library", "search-url", "machine", "learning", "--json"]);
   assert.equal(library.status, 0);
@@ -315,6 +336,25 @@ test("new authenticated commands reject invalid inputs before network or credent
     assert.equal(result.status, 2);
     assert.equal(JSON.parse(result.stdout).error.code, expectedCode);
   }
+});
+
+test("selection and bid apply require --confirm before any credential lookup or network", () => {
+  const selection = runWithoutCredentials([
+    "tis", "selection", "apply", "drop",
+    "--course-id", "deadbeef",
+    "--rwh", "2025-2026-1-CS101-001",
+    "--json",
+  ]);
+  assert.equal(selection.status, 3);
+  assert.equal(JSON.parse(selection.stdout).error.code, "CONFIRMATION_REQUIRED");
+
+  const bid = runWithoutCredentials([
+    "tis", "bid", "apply",
+    "--pick", "2025-2026-1-CS101-001:deadbeef:3",
+    "--json",
+  ]);
+  assert.equal(bid.status, 3);
+  assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
 function run(args: string[]): { status: number | null; stdout: string; stderr: string } {

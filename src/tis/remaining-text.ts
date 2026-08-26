@@ -1,10 +1,16 @@
 import type {
+  BidPick,
   ClassroomOccupancyEntry,
+  ClassroomLiveEntry,
+  ClassroomLiveRoom,
   ClassroomRoom,
   BidPlan,
   EvaluationCourseStatus,
   EvaluationSummary,
+  SelectionApplyTarget,
   SelectionPreview,
+  SelectionStateObservation,
+  SelectionVerificationResult,
 } from "./remaining.js";
 
 export function formatClassrooms(rooms: readonly ClassroomRoom[], title: string): string {
@@ -34,6 +40,42 @@ export function formatClassroomOccupancy(
   ].join("\n");
 }
 
+export function formatClassroomLive(
+  room: ClassroomLiveRoom,
+  entries: readonly ClassroomLiveEntry[],
+  options: { title: string },
+): string {
+  const capacity = room.declaredCapacity === undefined ? "" : ` · ${room.declaredCapacity} seats`;
+  if (entries.length === 0) {
+    return `${options.title}\n${room.roomLabel} · ${room.roomCode}${capacity}\nNo live classroom entries returned by TIS.`;
+  }
+  return [
+    options.title,
+    `${room.roomLabel} · ${room.roomCode}${capacity} · ${entries.length}`,
+    ...entries.map(formatLiveEntry),
+  ].join("\n");
+}
+
+export function formatClassroomNow(
+  room: ClassroomLiveRoom,
+  entries: readonly ClassroomLiveEntry[],
+  options: { date: string; time: string; week: number; weekday: number; periodLabel?: string },
+): string {
+  const capacity = room.declaredCapacity === undefined ? "" : ` · ${room.declaredCapacity} seats`;
+  const title = `Live classroom now · ${options.date} ${options.time} · week ${options.week}, day ${options.weekday}${options.periodLabel ? `, ${options.periodLabel}` : ""}`;
+  if (!options.periodLabel) {
+    return `${title}\n${room.roomLabel} · ${room.roomCode}${capacity}\nCurrent time is outside the configured teaching periods.`;
+  }
+  if (entries.length === 0) {
+    return `${title}\n${room.roomLabel} · ${room.roomCode}${capacity}\nNo active live classroom entry overlaps the current period.`;
+  }
+  return [
+    title,
+    `${room.roomLabel} · ${room.roomCode}${capacity} · ${entries.length}`,
+    ...entries.map(formatLiveEntry),
+  ].join("\n");
+}
+
 export function formatEvaluationStatuses(
   rows: readonly EvaluationCourseStatus[],
   summary: EvaluationSummary,
@@ -45,30 +87,90 @@ export function formatEvaluationStatuses(
   ].join("\n");
 }
 
-export function formatSelectionPreview(preview: SelectionPreview): string {
+export function formatSelectionPreview(
+  preview: SelectionPreview,
+  options: { applyCommand?: string; exactTarget?: { courseId: string; rwh?: string } } = {},
+): string {
   const payload = Object.entries(preview.payload)
     .filter(([, value]) => value !== "" && (!Array.isArray(value) || value.length > 0))
     .map(([key, value]) => `  ${key}=${Array.isArray(value) ? value.join(",") : value}`);
   return [
     `TIS selection preview · ${preview.operation}`,
     "No network request or mutation was performed.",
+    ...(options.exactTarget
+      ? [
+          "Exact target",
+          `  courseId=${options.exactTarget.courseId}`,
+          ...(options.exactTarget.rwh ? [`  rwh=${options.exactTarget.rwh}`] : ["  rwh=(required for apply)"]),
+        ]
+      : []),
     `Endpoint  ${preview.endpoint}`,
     "Payload",
     ...payload,
     `Success   ${preview.successHeuristic}`,
     "Verification",
     ...preview.verification.map((step) => `  - ${step.description}`),
-    "Apply is unavailable until exact read-back verification is implemented.",
+    ...(options.applyCommand
+      ? ["Apply", options.applyCommand]
+      : ["Apply remains unavailable until an exact RWH binding is provided."]),
   ].join("\n");
 }
 
-export function formatBidPlan(plan: BidPlan): string {
+export function formatBidPlan(plan: BidPlan, options: { applyCommand?: string } = {}): string {
   return [
     `TIS bid plan · ${plan.where}`,
     `Total bid  ${plan.totalBid}${plan.limit === undefined ? "" : ` / ${plan.limit}`}`,
     `Over limit ${plan.overLimit ? "yes" : "no"}`,
-    ...Object.entries(plan.picks).map(([courseId, bid]) => `  ${courseId}  ${bid}`),
+    ...plan.pickDetails.map((pick: BidPick) => `  ${pick.courseId}  ${pick.bid}${pick.rwh ? `  (${pick.rwh})` : ""}`),
     ...(plan.errors.length > 0 ? ["Errors", ...plan.errors.map((error) => `  - ${error}`)] : []),
+    ...(options.applyCommand ? ["Apply", options.applyCommand] : []),
     `${plan.previews.length} write previews generated; no network request or mutation was performed.`,
   ].join("\n");
+}
+
+export function formatSelectionApplySuccess(
+  target: SelectionApplyTarget,
+  message: string,
+  verification: SelectionVerificationResult,
+): string {
+  return [
+    `TIS selection request confirmed · ${target.operation}`,
+    `RWH: ${target.rwh}`,
+    `TIS ID: ${target.courseId}`,
+    `Round: ${target.round}`,
+    ...(target.operation === "bid.update" || target.operation === "cart.add" ? [`Bid: ${target.bid}`] : []),
+    `TIS: ${message || "success"}`,
+    `Verification: ${verification.status} — ${verification.message}`,
+    formatSelectionObservation(verification.observation),
+  ].join("\n");
+}
+
+export function formatBidApplySuccess(
+  picks: readonly BidPick[],
+  where: string,
+  round: string,
+  verification: SelectionStateObservation,
+): string {
+  return [
+    `TIS bid apply confirmed · ${where}`,
+    `Round: ${round}`,
+    `Updated: ${picks.length}`,
+    ...picks.map((pick) => `  ${pick.courseId} ${pick.bid}${pick.rwh ? ` (${pick.rwh})` : ""}`),
+    formatSelectionObservation(verification),
+  ].join("\n");
+}
+
+function formatLiveEntry(entry: ClassroomLiveEntry): string {
+  const label = entry.kind === "borrowing"
+    ? `borrow ${entry.borrower ?? entry.purpose ?? entry.rawText}`
+    : `${entry.courseCode ?? "-"} ${entry.courseName ?? entry.rawText}`;
+  const weeks = entry.weeks.length > 0 ? `[${entry.weeks.join(",")}]` : "[?]";
+  const extra = entry.phone ? ` · ${entry.phone}` : entry.purpose ? ` · ${entry.purpose}` : "";
+  return `${entry.weekday} P${entry.periodStart}-${entry.periodEnd} ${weeks} ${label}${extra}`;
+}
+
+function formatSelectionObservation(observation: SelectionStateObservation): string {
+  const round = observation.roundCode ? `round=${observation.roundCode}` : "round=(missing)";
+  const limit = observation.roundLimit === undefined ? "" : ` limit=${observation.roundLimit}`;
+  return `Observed state: totalBid=${observation.totalBid} ${round}${limit}`.trim();
 }

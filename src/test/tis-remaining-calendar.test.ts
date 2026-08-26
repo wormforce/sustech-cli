@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildScheduleIcs, inferWeekOneMonday, scheduleOccurrences } from "../tis/remaining-calendar.js";
+import { buildScheduleIcs, inferWeekOneMonday, scheduleOccurrences, teachingPeriodAtShenzhenTime } from "../tis/remaining-calendar.js";
 import type { PersonalScheduleEntry } from "../tis/types.js";
 
 const ENTRIES: PersonalScheduleEntry[] = [
@@ -53,4 +53,15 @@ test("ICS export supports the thirteenth TIS period", () => {
   const [occurrence] = scheduleOccurrences([lateEntry], { weekOneMonday: "2026-02-23" });
   assert.equal(occurrence?.startUtc, "20260223T140000Z");
   assert.equal(occurrence?.endUtc, "20260223T145000Z");
+});
+
+test("teaching-period lookup uses Asia/Shanghai wall clock boundaries", () => {
+  const period = teachingPeriodAtShenzhenTime(new Date("2026-08-26T02:25:00Z"));
+  assert.equal(period?.date, "2026-08-26");
+  assert.equal(period?.weekday, 3);
+  assert.equal(period?.periodStart, 3);
+  assert.match(period?.periodLabel ?? "", /P3 10:20-11:10/);
+
+  const none = teachingPeriodAtShenzhenTime(new Date("2026-08-26T04:15:00Z"));
+  assert.equal(none, undefined);
 });

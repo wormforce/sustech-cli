@@ -3,9 +3,11 @@ import test from "node:test";
 import type { Semester } from "../core/semester.js";
 import {
   buildClassroomDirectory,
+  fetchLiveRoomCatalog,
   fetchLiveRoomSchedule,
   normaliseRoomName,
   parseLiveScheduleText,
+  resolveLiveRoom,
   summariseLiveOccupancy,
 } from "../tis/remaining-classroom.js";
 import type { Course } from "../tis/types.js";
@@ -97,4 +99,29 @@ test("live classroom rows are parsed into borrowings and can be filtered by acti
     summariseLiveOccupancy(entries, { week: 2, day: 1, periodStart: 3, periodEnd: 3 }).map((entry) => entry.kind),
     ["borrowing"],
   );
+});
+
+test("live classroom catalog resolution keeps ambiguous fuzzy matches unresolved", async () => {
+  const session = {
+    async postForm(path: string, data: Record<string, string | number | string[]>): Promise<unknown> {
+      assert.equal(path, "/component/queryDiDian");
+      if (String(data.pageNum) === "1") {
+        return {
+          total: 2,
+          list: [
+            { dm: "ROOM-A", mc: "智华楼101", zws: "80" },
+            { dm: "ROOM-B", mc: "智华楼102", zws: "90" },
+          ],
+        };
+      }
+      return { total: 2, list: [] };
+    },
+  };
+
+  const rooms = await fetchLiveRoomCatalog(session, SEMESTER);
+  assert.equal(rooms.length, 2);
+  assert.equal(resolveLiveRoom(rooms, "ROOM-A").status, "resolved");
+  const ambiguous = resolveLiveRoom(rooms, "智华");
+  assert.equal(ambiguous.status, "ambiguous");
+  assert.equal(ambiguous.matches.length, 2);
 });

@@ -58,26 +58,41 @@ import {
 } from "./core/text.js";
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
-import { TisClient } from "./tis/client.js";
+import { TisClient, type TisSelectionState } from "./tis/client.js";
 import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
 import {
+  fetchLiveRoomCatalog,
+  fetchLiveRoomSchedule,
   buildClassroomDirectory,
   buildScheduleIcs,
   buildSelectionPreview,
+  ensureSelectionVerified,
   EvaluationStatusClient,
   inferWeekOneMonday,
   planBidUpdates,
+  projectBidTotal,
+  revalidateSelectionWrite,
+  resolveLiveRoom,
   scheduleOccurrences,
   summariseEvaluationStatuses,
+  summariseLiveOccupancy,
+  teachingPeriodAtShenzhenTime,
+  verifySelectionWrite,
+  type BidPick,
   type EvaluationStatusFilter,
+  type SelectionApplyTarget,
   type SelectionBidWhere,
   type SelectionOperation,
 } from "./tis/remaining.js";
 import {
+  formatBidApplySuccess,
   formatBidPlan,
+  formatClassroomLive,
+  formatClassroomNow,
   formatClassroomOccupancy,
   formatClassrooms,
   formatEvaluationStatuses,
+  formatSelectionApplySuccess,
   formatSelectionPreview,
 } from "./tis/remaining-text.js";
 import { TransitClient } from "./transit/client.js";
@@ -238,10 +253,14 @@ Usage:
   sustech tis classroom rooms [KEYWORD] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom occupancy ROOM --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom free --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
+  sustech tis classroom live ROOM [--semester YYYY-YYYY-N]
+  sustech tis classroom now ROOM [--semester YYYY-YYYY-N]
   sustech tis evals [--semester YYYY-YYYY-N] [--status all|pending|draft|submitted]
   sustech tis ical [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-name NAME]
-  sustech tis selection preview OP --course-id ID [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
-  sustech tis bid plan --pick COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--bid-limit N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2]
+  sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
+  sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
+  sustech tis bid plan --pick COURSE_ID:BID|RWH:COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--bid-limit N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2]
+  sustech tis bid apply --pick RWH:COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2] --confirm
   sustech tis enroll preview --course-id TIS_ID --rwh TASK_ID [--semester YYYY-YYYY-N] [--round ROUND] [--bid N]
   sustech tis enroll apply --course-id TIS_ID --rwh TASK_ID [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] --confirm
   sustech transit facilities
@@ -391,12 +410,16 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis classroom rooms": ["credentials-file", "semester", "refresh"],
   "tis classroom occupancy": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
   "tis classroom free": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
+  "tis classroom live": ["credentials-file", "semester"],
+  "tis classroom now": ["credentials-file", "semester"],
   "tis evals": ["credentials-file", "semester", "status"],
   "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-name"],
   "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
   "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
-  "tis selection preview": ["semester", "course-id", "round", "bid", "where", "cultivation"],
+  "tis selection preview": ["semester", "course-id", "rwh", "round", "bid", "where", "cultivation"],
+  "tis selection apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "where", "cultivation", "confirm"],
   "tis bid plan": ["semester", "pick", "bid-limit", "where", "round", "cultivation"],
+  "tis bid apply": ["credentials-file", "semester", "pick", "where", "round", "cultivation", "confirm"],
   "tis enroll apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "confirm"],
   "transit find": ["limit"],
   "transit lines": ["day"],
@@ -755,6 +778,101 @@ async function main(argv: string[]): Promise<void> {
     }, output);
     return;
   }
+  if (command === "classroom" && operation === "live") {
+    const roomQuery = parsed.positionals.slice(3).join(" ").trim();
+    if (!roomQuery) throw usageError("A classroom room name or room code is required.");
+    const semester = parseSemester(values.semester);
+    const { session } = await authenticatedSession(values);
+    const rooms = await fetchLiveRoomCatalog(session, semester);
+    const resolution = resolveLiveRoom(rooms, roomQuery);
+    if (resolution.status === "missing") {
+      throw new CliError("No live classroom room matched the provided name or room code.", "TIS_CLASSROOM_NOT_FOUND", 1, {
+        room: roomQuery,
+      });
+    }
+    if (resolution.status === "ambiguous") {
+      throw new CliError("Multiple live classroom rooms matched the provided name; use an exact room code or full name.", "TIS_CLASSROOM_AMBIGUOUS", 2, {
+        room: roomQuery,
+        matches: resolution.matches.slice(0, 10),
+      });
+    }
+    const room = resolution.room;
+    if (!room) throw new CliError("Resolved live classroom room is missing.", "TIS_PROTOCOL_ERROR", 1, { room: roomQuery });
+    const entries = await fetchLiveRoomSchedule(session, semester, room.roomCode);
+    writeSuccess({
+      command: "tis classroom live",
+      data: { semester, query: roomQuery, room, entries, total: entries.length },
+      text: formatClassroomLive(room, entries, { title: `Live classroom schedule · ${semester.value}` }),
+      items: entries,
+      summary: { semester: semester.value, room: room.roomLabel, roomCode: room.roomCode, total: entries.length },
+    }, output);
+    return;
+  }
+  if (command === "classroom" && operation === "now") {
+    const roomQuery = parsed.positionals.slice(3).join(" ").trim();
+    if (!roomQuery) throw usageError("A classroom room name or room code is required.");
+    const semester = parseSemester(values.semester);
+    const { session } = await authenticatedSession(values);
+    const rooms = await fetchLiveRoomCatalog(session, semester);
+    const resolution = resolveLiveRoom(rooms, roomQuery);
+    if (resolution.status === "missing") {
+      throw new CliError("No live classroom room matched the provided name or room code.", "TIS_CLASSROOM_NOT_FOUND", 1, {
+        room: roomQuery,
+      });
+    }
+    if (resolution.status === "ambiguous") {
+      throw new CliError("Multiple live classroom rooms matched the provided name; use an exact room code or full name.", "TIS_CLASSROOM_AMBIGUOUS", 2, {
+        room: roomQuery,
+        matches: resolution.matches.slice(0, 10),
+      });
+    }
+    const room = resolution.room;
+    if (!room) throw new CliError("Resolved live classroom room is missing.", "TIS_PROTOCOL_ERROR", 1, { room: roomQuery });
+    const client = new TisClient(session);
+    const week = await client.currentWeek();
+    const entries = await fetchLiveRoomSchedule(session, semester, room.roomCode);
+    const window = teachingPeriodAtShenzhenTime(new Date());
+    const fallbackNow = { date: todayInShenzhen(), time: timeInShenzhen(), weekday: weekdayInShenzhen() };
+    const active = window
+      ? summariseLiveOccupancy(entries, {
+          week,
+          day: window.weekday,
+          periodStart: window.periodStart,
+          periodEnd: window.periodEnd,
+        })
+      : [];
+    writeSuccess({
+      command: "tis classroom now",
+      data: {
+        semester,
+        query: roomQuery,
+        room,
+        now: {
+          week,
+          ...(window ?? fallbackNow),
+        },
+        entries: active,
+        total: active.length,
+      },
+      text: formatClassroomNow(room, active, {
+        date: window?.date ?? fallbackNow.date,
+        time: window?.time ?? fallbackNow.time,
+        week,
+        weekday: window?.weekday ?? fallbackNow.weekday,
+        ...(window ? { periodLabel: window.periodLabel } : {}),
+      }),
+      items: active,
+      summary: {
+        semester: semester.value,
+        room: room.roomLabel,
+        roomCode: room.roomCode,
+        week,
+        weekday: window?.weekday ?? fallbackNow.weekday,
+        total: active.length,
+      },
+    }, output);
+    return;
+  }
   if (command === "evals" && operation === undefined) {
     const semester = parseSemester(values.semester);
     const status = evaluationStatus(values.status);
@@ -800,6 +918,7 @@ async function main(argv: string[]): Promise<void> {
     const semester = parseSemester(values.semester);
     const selectionOperation = selectionOperationValue(required(parsed.positionals[3], "selection operation"));
     const courseId = opaqueToken(required(values["course-id"], "--course-id"), "--course-id");
+    const rwh = values.rwh ? opaqueToken(values.rwh, "--rwh") : undefined;
     const where = selectionWhere(values.where);
     const bid = values.bid === undefined ? undefined : parsePositiveInteger(values.bid, 1, "--bid");
     const cultivation = selectionCultivation(values.cultivation);
@@ -813,14 +932,123 @@ async function main(argv: string[]): Promise<void> {
         where,
       },
     );
+    const applyCommand = selectionOperation === "enroll"
+      ? (rwh ? buildEnrollApplyCommand({
+          semester,
+          courseId,
+          rwh,
+          round: opaqueToken(values.round ?? "yixuan", "--round"),
+          bid: bid ?? 1,
+        }) : undefined)
+      : (rwh ? buildSelectionApplyCommand({
+          operation: selectionOperation,
+          courseId,
+          rwh,
+          round: opaqueToken(values.round ?? defaultSelectionRound(selectionOperation), "--round"),
+          bid: bid ?? defaultSelectionBid(selectionOperation),
+          where,
+          cultivation,
+          semester,
+        }) : undefined);
     const data = {
       mode: "preview",
       mutation: false,
-      applyAvailable: false,
+      applyAvailable: Boolean(applyCommand),
       contextSource: "local",
       preview,
+      exactTarget: { courseId, ...(rwh ? { rwh } : {}) },
+      ...(applyCommand ? { confirmation: { required: true, command: applyCommand } } : {}),
     };
-    writeSuccess({ command: "tis selection preview", data, text: formatSelectionPreview(preview) }, output);
+    writeSuccess({
+      command: "tis selection preview",
+      data,
+      text: formatSelectionPreview(preview, {
+        exactTarget: { courseId, ...(rwh ? { rwh } : {}) },
+        ...(applyCommand ? { applyCommand } : {}),
+      }),
+    }, output);
+    return;
+  }
+  if (command === "selection" && operation === "apply" && parsed.positionals.length === 4) {
+    const selectionOperation = selectionOperationValue(required(parsed.positionals[3], "selection operation"));
+    if (selectionOperation === "enroll") {
+      throw usageError("Use `sustech tis enroll apply` for enroll operations.");
+    }
+    if (!values.confirm) {
+      throw new CliError(
+        "TIS selection apply changes remote selection state. Re-run with --confirm after reviewing the preview.",
+        "CONFIRMATION_REQUIRED",
+        3,
+        { action: "tis selection apply" },
+      );
+    }
+    const semester = parseSemester(values.semester);
+    const cultivation = selectionCultivation(values.cultivation);
+    const target = selectionApplyTarget(values, selectionOperation);
+    const client = await tisClient(values);
+    const state = await client.selectionState(semester, {
+      keyword: "",
+      round: target.round,
+      limit: 50,
+      cultivation,
+    });
+    const precheck = revalidateSelectionWrite(state, target);
+    if (!precheck.ok) {
+      throw new CliError("TIS selection pre-check failed; no mutation was performed.", precheck.code, 4, {
+        target,
+        observation: precheck.observation,
+        reason: precheck.message,
+        warning: "NO_MUTATION_PERFORMED",
+      });
+    }
+    const preview = buildSelectionPreview(
+      { semester, cultivation, currentTerm: state.currentTerm },
+      {
+        operation: target.operation,
+        courseId: target.courseId,
+        round: target.round,
+        bid: target.bid,
+        where: target.where,
+      },
+    );
+    const result = await client.selectionWrite(preview);
+    if (result.jg !== "1") {
+      throw new CliError(result.message || "TIS rejected the selection mutation.", "TIS_WRITE_REJECTED", 4, {
+        target,
+        tisCode: result.jg,
+      });
+    }
+    let verification;
+    try {
+      const postState = await client.selectionState(semester, {
+        keyword: "",
+        round: target.round,
+        limit: 50,
+        cultivation,
+      });
+      verification = verifySelectionWrite(postState, target);
+    } catch (error) {
+      throw new CliError(
+        "TIS accepted the selection mutation, but read-back verification could not be completed.",
+        "TIS_SELECTION_OUTCOME_UNKNOWN",
+        5,
+        {
+          target,
+          cause: error instanceof Error ? error.message : String(error),
+          warning: "DO_NOT_RETRY_AUTOMATICALLY",
+        },
+      );
+    }
+    ensureSelectionVerified(verification, {
+      message: "TIS accepted the selection mutation, but the exact target was not conclusively verified.",
+      code: "TIS_SELECTION_NOT_CONFIRMED",
+      details: { target, result },
+    });
+    writeSuccess({
+      command: "tis selection apply",
+      data: { mode: "apply", mutation: true, target, result, verification },
+      text: formatSelectionApplySuccess(target, result.message, verification),
+    }, output);
     return;
   }
   if (command === "bid" && operation === "plan" && parsed.positionals.length === 3) {
@@ -836,12 +1064,178 @@ async function main(argv: string[]): Promise<void> {
       picks,
       { where, round: opaqueToken(values.round ?? "yixuan", "--round"), limit },
     );
+    const applyCommand = plan.errors.length === 0 && plan.pickDetails.length > 0 && plan.pickDetails.every((pick) => pick.rwh)
+      ? buildBidApplyCommand({
+          picks: plan.pickDetails,
+          where,
+          round: opaqueToken(values.round ?? "yixuan", "--round"),
+          cultivation,
+          semester,
+        })
+      : undefined;
     writeSuccess({
       command: "tis bid plan",
-      data: { mode: "plan", mutation: false, applyAvailable: false, semester, ...plan },
-      text: formatBidPlan(plan),
+      data: {
+        mode: "plan",
+        mutation: false,
+        applyAvailable: Boolean(applyCommand),
+        semester,
+        ...plan,
+        ...(applyCommand ? { confirmation: { required: true, command: applyCommand } } : {}),
+      },
+      text: formatBidPlan(plan, applyCommand ? { applyCommand } : {}),
       items: plan.previews,
       summary: { semester: semester.value, where, totalBid: plan.totalBid, limit, overLimit: plan.overLimit, total: plan.previews.length },
+    }, output);
+    return;
+  }
+  if (command === "bid" && operation === "apply" && parsed.positionals.length === 3) {
+    if (!values.confirm) {
+      throw new CliError(
+        "TIS bid apply changes remote bid state. Re-run with --confirm after reviewing the plan.",
+        "CONFIRMATION_REQUIRED",
+        3,
+        { action: "tis bid apply" },
+      );
+    }
+    const semester = parseSemester(values.semester);
+    const picks = parseBidPicks(values.pick ?? []);
+    if (picks.some((pick) => !pick.rwh)) {
+      throw usageError("tis bid apply requires every --pick to use RWH:COURSE_ID:BID.");
+    }
+    const where = selectionWhere(values.where);
+    const cultivation = selectionCultivation(values.cultivation);
+    const round = opaqueToken(values.round ?? "yixuan", "--round");
+    const client = await tisClient(values);
+    let state = await client.selectionState(semester, { keyword: "", round, limit: 50, cultivation });
+    const projection = projectBidTotal(state, picks, where);
+    if (projection.missingTargets.length > 0) {
+      throw new CliError("TIS bid pre-check failed; some exact targets were not observed in live state.", "TIS_BID_PRECHECK_FAILED", 4, {
+        where,
+        round,
+        missingTargets: projection.missingTargets,
+        warning: "NO_MUTATION_PERFORMED",
+      });
+    }
+    if (projection.overLimit) {
+      throw new CliError("The live round bid budget would be exceeded; no mutation was performed.", "TIS_BID_LIMIT_EXCEEDED", 4, {
+        where,
+        round,
+        projectedTotalBid: projection.totalBid,
+        previousTotalBid: projection.previousTotalBid,
+        limit: projection.limit,
+        warning: "NO_MUTATION_PERFORMED",
+      });
+    }
+
+    const confirmed: BidPick[] = [];
+    const unchanged: BidPick[] = [];
+    for (const pick of picks) {
+      const target: SelectionApplyTarget = {
+        operation: "bid.update",
+        courseId: pick.courseId,
+        rwh: pick.rwh!,
+        round,
+        bid: pick.bid,
+        where,
+      };
+      const precheck = revalidateSelectionWrite(state, target);
+      if (!precheck.ok) {
+        if (confirmed.length > 0) {
+          throw new CliError("TIS bid flow is partial: earlier picks were confirmed, but a later live pre-check failed.", "TIS_BID_PARTIAL_UNKNOWN", 5, {
+            target,
+            confirmed,
+            unchanged,
+            observation: precheck.observation,
+            reason: precheck.message,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          });
+        }
+        throw new CliError("TIS bid pre-check failed before the next write; no mutation was performed.", precheck.code, 4, {
+          target,
+          confirmed,
+          unchanged,
+          observation: precheck.observation,
+          reason: precheck.message,
+          warning: "NO_MUTATION_PERFORMED",
+        });
+      }
+      const observed = where === "cart" ? precheck.observation.cart : precheck.observation.enrolled;
+      if (observed?.bid === pick.bid) {
+        unchanged.push(pick);
+        continue;
+      }
+      const preview = buildSelectionPreview(
+        { semester, cultivation, currentTerm: state.currentTerm },
+        {
+          operation: "bid.update",
+          courseId: pick.courseId,
+          round,
+          bid: pick.bid,
+          where,
+        },
+      );
+      const result = await client.selectionWrite(preview);
+      if (result.jg !== "1") {
+        if (confirmed.length > 0) {
+          throw new CliError("TIS bid flow is partial: earlier picks were confirmed, but a later bid update was rejected.", "TIS_BID_PARTIAL_UNKNOWN", 5, {
+            target,
+            confirmed,
+            unchanged,
+            tisCode: result.jg,
+            result,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          });
+        }
+        throw new CliError(result.message || "TIS rejected the bid update.", "TIS_WRITE_REJECTED", 4, {
+          target,
+          confirmed,
+          unchanged,
+          tisCode: result.jg,
+        });
+      }
+      try {
+        state = await client.selectionState(semester, { keyword: "", round, limit: 50, cultivation });
+      } catch (error) {
+        throw new CliError(
+          "TIS accepted a bid update, but read-back verification could not be completed.",
+          "TIS_BID_OUTCOME_UNKNOWN",
+          5,
+          {
+            target,
+            confirmed,
+            unchanged,
+            cause: error instanceof Error ? error.message : String(error),
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      const verification = verifySelectionWrite(state, target);
+      ensureSelectionVerified(verification, {
+        message: "TIS accepted a bid update, but the exact target was not conclusively verified.",
+        code: "TIS_BID_NOT_CONFIRMED",
+        details: { target, confirmed, unchanged },
+      });
+      confirmed.push(pick);
+    }
+    const finalObservation = {
+      totalBid: projection.totalBid,
+      roundCode: state.round.xkfsdm ? String(state.round.xkfsdm) : undefined,
+      roundLimit: state.round.jffs === undefined ? undefined : Number(state.round.jffs),
+    };
+    writeSuccess({
+      command: "tis bid apply",
+      data: {
+        mode: "apply",
+        mutation: true,
+        where,
+        round,
+        confirmed,
+        unchanged,
+        total: picks.length,
+        observedState: finalObservation,
+      },
+      text: formatBidApplySuccess(picks, where, round, finalObservation),
     }, output);
     return;
   }
@@ -2661,17 +3055,118 @@ function selectionCultivation(value: string | undefined): "1" | "2" {
   throw usageError("--cultivation must be 1 or 2.");
 }
 
-function parseBidPicks(values: readonly string[]): Record<string, number> {
-  if (values.length === 0) throw usageError("At least one --pick COURSE_ID:BID is required.");
-  const picks: Record<string, number> = {};
+function parseBidPicks(values: readonly string[]): BidPick[] {
+  if (values.length === 0) throw usageError("At least one --pick COURSE_ID:BID or RWH:COURSE_ID:BID is required.");
+  const picks = new Map<string, BidPick>();
   for (const value of values) {
-    const delimiter = value.lastIndexOf(":");
-    if (delimiter <= 0) throw usageError(`Invalid --pick value: ${value}`);
-    const courseId = opaqueToken(value.slice(0, delimiter), "--pick course ID");
-    const bid = parsePositiveInteger(value.slice(delimiter + 1), 1, "--pick bid");
-    picks[courseId] = bid;
+    const parts = value.split(":");
+    if (parts.length !== 2 && parts.length !== 3) throw usageError(`Invalid --pick value: ${value}`);
+    if (parts.length === 2) {
+      const courseId = opaqueToken(parts[0], "--pick course ID");
+      const bid = parsePositiveInteger(parts[1], 1, "--pick bid");
+      picks.set(courseId, { courseId, bid });
+      continue;
+    }
+    const rwh = opaqueToken(parts[0], "--pick rwh");
+    const courseId = opaqueToken(parts[1], "--pick course ID");
+    const bid = parsePositiveInteger(parts[2], 1, "--pick bid");
+    picks.set(`${rwh}#${courseId}`, { rwh, courseId, bid });
   }
-  return picks;
+  return [...picks.values()];
+}
+
+function selectionApplyTarget(values: Values, operation: SelectionOperation): SelectionApplyTarget {
+  return {
+    operation,
+    courseId: opaqueToken(required(values["course-id"], "--course-id"), "--course-id"),
+    rwh: opaqueToken(required(values.rwh, "--rwh"), "--rwh"),
+    round: opaqueToken(values.round ?? defaultSelectionRound(operation), "--round"),
+    bid: values.bid === undefined ? defaultSelectionBid(operation) : parsePositiveInteger(values.bid, 1, "--bid"),
+    where: selectionWhere(values.where),
+  };
+}
+
+function defaultSelectionRound(operation: SelectionOperation): string {
+  return operation === "cart.add" ? "bxxk" : "yixuan";
+}
+
+function defaultSelectionBid(operation: SelectionOperation): number {
+  return operation === "drop" || operation === "cart.remove" ? 1 : 1;
+}
+
+function buildEnrollApplyCommand(target: {
+  semester: ReturnType<typeof parseSemester>;
+  courseId: string;
+  rwh: string;
+  round: string;
+  bid: number;
+}): string {
+  return [
+    "sustech",
+    "tis",
+    "enroll",
+    "apply",
+    "--course-id",
+    target.courseId,
+    "--rwh",
+    target.rwh,
+    ...(target.semester ? ["--semester", target.semester.value] : []),
+    "--round",
+    target.round,
+    "--bid",
+    String(target.bid),
+    "--confirm",
+  ].map(shellQuote).join(" ");
+}
+
+function buildSelectionApplyCommand(target: SelectionApplyTarget & { cultivation: "1" | "2"; semester: ReturnType<typeof parseSemester> }): string {
+  return [
+    "sustech",
+    "tis",
+    "selection",
+    "apply",
+    target.operation,
+    "--course-id",
+    target.courseId,
+    "--rwh",
+    target.rwh,
+    "--semester",
+    target.semester.value,
+    "--round",
+    target.round,
+    "--bid",
+    String(target.bid),
+    "--where",
+    target.where,
+    "--cultivation",
+    target.cultivation,
+    "--confirm",
+  ].map(shellQuote).join(" ");
+}
+
+function buildBidApplyCommand(input: {
+  picks: readonly BidPick[];
+  where: SelectionBidWhere;
+  round: string;
+  cultivation: "1" | "2";
+  semester: ReturnType<typeof parseSemester>;
+}): string {
+  return [
+    "sustech",
+    "tis",
+    "bid",
+    "apply",
+    ...input.picks.flatMap((pick) => ["--pick", `${pick.rwh}:${pick.courseId}:${pick.bid}`]),
+    "--semester",
+    input.semester.value,
+    "--where",
+    input.where,
+    "--round",
+    input.round,
+    "--cultivation",
+    input.cultivation,
+    "--confirm",
+  ].map(shellQuote).join(" ");
 }
 
 function isoDate(value: string, option: string): string {
@@ -2703,6 +3198,29 @@ function todayInShenzhen(): string {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+function timeInShenzhen(): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date());
+}
+
+function weekdayInShenzhen(): number {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    weekday: "short",
+  }).format(new Date());
+  if (weekday === "Mon") return 1;
+  if (weekday === "Tue") return 2;
+  if (weekday === "Wed") return 3;
+  if (weekday === "Thu") return 4;
+  if (weekday === "Fri") return 5;
+  if (weekday === "Sat") return 6;
+  return 7;
 }
 
 function objectValue(value: unknown): Record<string, unknown> {

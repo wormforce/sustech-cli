@@ -45,8 +45,23 @@ export interface ClassroomLiveEntry {
   source: Record<string, unknown>;
 }
 
+export interface ClassroomLiveRoom {
+  roomCode: string;
+  roomLabel: string;
+  canonicalLabel: string;
+  declaredCapacity?: number;
+  source: Record<string, unknown>;
+}
+
 export interface ClassroomLiveSession {
   postForm(path: string, data: Record<string, string | number | string[]>): Promise<unknown>;
+}
+
+export interface ClassroomLiveRoomResolution {
+  status: "resolved" | "missing" | "ambiguous";
+  query: string;
+  matches: ClassroomLiveRoom[];
+  room?: ClassroomLiveRoom;
 }
 
 interface ParsedLiveScheduleText {
@@ -244,6 +259,84 @@ export async function fetchLiveRoomSchedule(
     .map((entry) => parseLiveRoomEntry(entry, roomCode))
     .filter((entry): entry is ClassroomLiveEntry => entry !== undefined)
     .sort((left, right) => left.weekday - right.weekday || left.periodStart - right.periodStart || left.rawText.localeCompare(right.rawText));
+}
+
+export async function fetchLiveRoomCatalog(
+  session: ClassroomLiveSession,
+  semester: Semester,
+): Promise<ClassroomLiveRoom[]> {
+  const rooms = new Map<string, ClassroomLiveRoom>();
+  for (let page = 1; page <= 20; page += 1) {
+    const response = asRecord(await session.postForm("/component/queryDiDian", {
+      pylx: "1",
+      pageNum: String(page),
+      pageSize: "100",
+      xn: semester.xn,
+      xq: semester.xq,
+      hlct: "0",
+      hltyxct: "0",
+      sfjtjs: "2",
+      zysfkyd: "2",
+      jslx: "",
+      xiaoqu: "1",
+      lc: "",
+      kkyx: "",
+      key: "",
+      sybm: "",
+      mxid: "[]",
+      sfxsyxzws: "0",
+      yqzws: "0",
+      yqkszws: "0",
+      yxzws: "0",
+      yxkszws: "0",
+      bjrs: "0",
+      zws: "0",
+      kszws: "0",
+    }));
+    const rows = asRecords(response.list);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const roomCode = stringValue(row.dm) || stringValue(row.CDDM);
+      const roomLabel = normaliseRoomName(stringValue(row.mc) || stringValue(row.CDMC) || stringValue(row.CDMC_EN));
+      if (!roomCode || !roomLabel) continue;
+      const previous = rooms.get(roomCode);
+      const declaredCapacity = maxNumber(previous?.declaredCapacity, numberValue(row.zws) ?? numberValue(row.ZWS) ?? numberValue(row.jszw) ?? numberValue(row.JSZW));
+      rooms.set(roomCode, {
+        roomCode,
+        roomLabel,
+        canonicalLabel: canonicalRoomKey(roomLabel),
+        declaredCapacity,
+        source: row,
+      });
+    }
+    const total = numberValue(response.total);
+    if (total !== undefined && rooms.size >= total) break;
+  }
+  return [...rooms.values()].sort((left, right) => left.roomLabel.localeCompare(right.roomLabel, "zh-Hans-CN"));
+}
+
+export function resolveLiveRoom(
+  rooms: readonly ClassroomLiveRoom[],
+  query: string,
+): ClassroomLiveRoomResolution {
+  const trimmed = query.trim();
+  const canonical = canonicalRoomKey(trimmed);
+  if (!canonical) return { status: "missing", query: trimmed, matches: [] };
+
+  const directCode = rooms.find((room) => room.roomCode.toLowerCase() === trimmed.toLowerCase());
+  if (directCode) return { status: "resolved", query: trimmed, matches: [directCode], room: directCode };
+
+  const exact = rooms.filter((room) => room.canonicalLabel === canonical);
+  if (exact.length === 1) return { status: "resolved", query: trimmed, matches: exact, room: exact[0] };
+  if (exact.length > 1) return { status: "ambiguous", query: trimmed, matches: exact };
+
+  const contains = rooms.filter((room) => room.canonicalLabel.includes(canonical));
+  if (contains.length === 1) return { status: "resolved", query: trimmed, matches: contains, room: contains[0] };
+  if (contains.length > 1) {
+    return { status: "ambiguous", query: trimmed, matches: contains };
+  }
+
+  return { status: "missing", query: trimmed, matches: [] };
 }
 
 export function summariseLiveOccupancy(

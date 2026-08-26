@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Semester } from "../core/semester.js";
+import { CliError } from "../core/errors.js";
 import {
   buildSelectionPreview,
+  ensureSelectionVerified,
   planBidUpdates,
+  projectBidTotal,
+  revalidateSelectionWrite,
   selectionEndpoint,
+  verifySelectionWrite,
 } from "../tis/remaining-selection.js";
 
 const SEMESTER: Semester = { xn: "2025-2026", xq: "1", value: "2025-2026-1" };
@@ -55,4 +60,108 @@ test("bid planning validates per-course bids before generating previews", () => 
   assert.deepEqual(plan.errors, ["A: bid must be >= 1"]);
   assert.equal(plan.previews.length, 1);
   assert.equal(selectionEndpoint("drop"), "/Xsxk/tuike");
+});
+
+test("selection apply precheck requires exact live course binding for create-like writes", () => {
+  const precheck = revalidateSelectionWrite({
+    courses: [{ id: "other-id", rwh: "OTHER-RWH" }],
+    cart: [],
+    enrolled: [],
+    round: { xkfsdm: "bxxk" },
+  }, {
+    operation: "cart.add",
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "bxxk",
+    bid: 1,
+    where: "cart",
+  });
+  assert.equal(precheck.ok, false);
+  assert.match(precheck.message, /live selectable-course state/i);
+});
+
+test("selection apply rejects observed targets whose course id is missing", () => {
+  const precheck = revalidateSelectionWrite({
+    courses: [{ id: "hex-id", rwh: "RWH-1" }],
+    cart: [{ rwh: "RWH-1", xkxs: "2" }],
+    enrolled: [],
+    round: { xkfsdm: "yixuan" },
+  }, {
+    operation: "cart.remove",
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "yixuan",
+    bid: 1,
+    where: "cart",
+  });
+  assert.equal(precheck.ok, false);
+  assert.match(precheck.message, /did not expose its course ID/i);
+});
+
+test("selection verification confirms exact read-back and exit-5 guard marks ambiguous outcomes non-retriable", () => {
+  const confirmed = verifySelectionWrite({
+    courses: [{ id: "hex-id", rwh: "RWH-1" }],
+    cart: [{ rwh: "RWH-1", id: "hex-id", xkxs: "5" }],
+    enrolled: [],
+    round: { xkfsdm: "yixuan", jffs: "8" },
+  }, {
+    operation: "bid.update",
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "yixuan",
+    bid: 5,
+    where: "cart",
+  });
+  assert.equal(confirmed.status, "confirmed");
+  assert.doesNotThrow(() => ensureSelectionVerified(confirmed, {
+    message: "should not throw",
+    code: "TEST",
+  }));
+
+  const ambiguous = verifySelectionWrite({
+    courses: [{ id: "hex-id", rwh: "RWH-1" }],
+    cart: [{ rwh: "RWH-1", id: "hex-id", xkxs: "3" }],
+    enrolled: [],
+    round: { xkfsdm: "yixuan", jffs: "8" },
+  }, {
+    operation: "bid.update",
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "yixuan",
+    bid: 5,
+    where: "cart",
+  });
+  assert.equal(ambiguous.status, "not_observed");
+  assert.throws(
+    () => ensureSelectionVerified(ambiguous, {
+      message: "ambiguous",
+      code: "TIS_BID_NOT_CONFIRMED",
+      details: { target: "RWH-1" },
+    }),
+    (error: unknown) => error instanceof CliError
+      && error.code === "TIS_BID_NOT_CONFIRMED"
+      && error.exitCode === 5
+      && error.details?.warning === "DO_NOT_RETRY_AUTOMATICALLY",
+  );
+});
+
+test("batch bid projection keys on exact RWH, not only course id", () => {
+  const projection = projectBidTotal({
+    courses: [
+      { id: "same-id", rwh: "RWH-1" },
+      { id: "same-id", rwh: "RWH-2" },
+    ],
+    cart: [
+      { rwh: "RWH-1", id: "same-id", xkxs: "1" },
+      { rwh: "RWH-2", id: "same-id", xkxs: "1" },
+    ],
+    enrolled: [],
+    round: { xkfsdm: "yixuan", jffs: "8" },
+  }, [
+    { rwh: "RWH-1", courseId: "same-id", bid: 2 },
+    { rwh: "RWH-2", courseId: "same-id", bid: 3 },
+  ], "cart");
+  assert.equal(projection.previousTotalBid, 2);
+  assert.equal(projection.totalBid, 5);
+  assert.deepEqual(projection.missingTargets, []);
 });
