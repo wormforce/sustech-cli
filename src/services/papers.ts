@@ -63,7 +63,7 @@ export async function searchCrossref(
   const maxResults = Math.max(1, Math.min(options.maxResults ?? 10, 100));
   const params: Record<string, string | number> = {
     "query.bibliographic": query,
-    rows: Math.min(maxResults * 8, 100),
+    rows: Math.min(Math.max(maxResults * 8, 50), 100),
     select: "DOI,title,author,published-print,published-online,container-title,type,is-referenced-by-count",
     sort: "relevance",
   };

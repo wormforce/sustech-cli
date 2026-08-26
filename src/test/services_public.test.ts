@@ -76,9 +76,10 @@ test("papers search normalizes CrossRef results and hydrates Unpaywall open-acce
     throw new Error(`Unexpected URL ${url}`);
   });
 
-  const papers = await searchCrossref("example query", { maxResults: 5, adapter });
+  const papers = await searchCrossref("example query", { maxResults: 1, adapter });
   const parsed = new URL(crossrefUrl);
   assert.equal(parsed.searchParams.get("query.bibliographic"), "example query");
+  assert.equal(parsed.searchParams.get("rows"), "50");
   assert.equal(parsed.searchParams.get("sort"), "relevance");
   assert.deepEqual(papers, [{
     title: "Example Research Article",
