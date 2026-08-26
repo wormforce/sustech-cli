@@ -83,6 +83,7 @@ export function inferCommandName(argv: string[]): string {
   if (!command) return group;
   if (
     (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid", "plan", "degree"].includes(command))
+    || (group === "academic" && command === "snapshot")
     || (group === "bb" && command === "submit")
     || (group === "pms" && (command === "upload" || command === "delete"))
   ) {

@@ -59,6 +59,7 @@ async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {
     try {
       const stats = await lstat(current);
       if (stats.isSymbolicLink()) {
+        if (process.platform === "darwin" && MACOS_SYSTEM_PATH_ALIASES.has(current)) continue;
         throw new CliError(
           `Refusing to write through a symbolic link: ${current}`,
           "UNSAFE_LOCAL_PATH",
@@ -73,3 +74,8 @@ async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {
     }
   }
 }
+
+// macOS ships these root-owned aliases into /private. They are not
+// user-controlled path components and rejecting them makes normal /tmp and
+// os.tmpdir() destinations unusable. All later path components remain guarded.
+const MACOS_SYSTEM_PATH_ALIASES = new Set(["/etc", "/tmp", "/var"]);

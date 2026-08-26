@@ -23,6 +23,8 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("faculty search", "Search public faculty profile fields.", "read", { status: "preview" }),
   capability("faculty render", "Render a public faculty profile as Agent-readable Markdown.", "read", { status: "preview" }),
   capability("context", "Compose a truthful current-date snapshot with per-source availability.", "read", { status: "preview" }),
+  capability("academic snapshot save", "Save versioned TIS state and optional Blackboard deadlines to an explicit guarded local file.", "mutation", { authentication: "sustech-cas", status: "preview" }),
+  capability("academic snapshot diff", "Compare two verified academic snapshots locally without contacting campus services.", "local", { network: false, status: "preview" }),
   capability("resources list", "List the built-in campus resource registry.", "read", { network: false }),
   capability("resources search", "Search the built-in campus resource registry.", "read", { network: false }),
   capability("wifi status", "Read the current macOS Wi-Fi association.", "read", { network: false }),

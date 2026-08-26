@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { academicSnapshotSource, buildAcademicSnapshot } from "../academic/snapshot.js";
 
 const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 
@@ -207,6 +208,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const planInit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan init");
   const planSolve = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan solve");
   const degreeAudit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree audit");
+  const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
+  const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -243,6 +246,11 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(planSolve.authentication, "tis");
   assert.equal(degreeAudit.kind, "plan");
   assert.equal(degreeAudit.authentication, "tis");
+  assert.equal(snapshotSave.kind, "mutation");
+  assert.equal(snapshotSave.authentication, "sustech-cas");
+  assert.equal(snapshotSave.confirmation, "none");
+  assert.equal(snapshotDiff.kind, "local");
+  assert.equal(snapshotDiff.network, false);
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -379,6 +387,40 @@ test("degree-audit validates local requirements format before credential lookup"
     ]);
     assert.equal(result.status, 2);
     assert.equal(JSON.parse(result.stdout).error.code, "DEGREE_REQUIREMENTS_UNSUPPORTED_FORMAT");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("academic snapshot CLI validates save destinations before auth and diffs verified files offline", () => {
+  const missingDestination = runWithoutCredentials(["academic", "snapshot", "save", "--json"]);
+  assert.equal(missingDestination.status, 2);
+  assert.equal(JSON.parse(missingDestination.stdout).command, "academic snapshot save");
+  assert.equal(JSON.parse(missingDestination.stdout).error.code, "USAGE");
+
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-academic-snapshot-cli-"));
+  const beforePath = join(tempDir, "before.json");
+  const afterPath = join(tempDir, "after.json");
+  const before = buildAcademicSnapshot({
+    semester: "2026-2027-1",
+    generatedAt: "2026-08-27T00:00:00.000Z",
+    sources: { schedule: academicSnapshotSource([{ rwh: "R1", room: "一教101" }]) },
+  });
+  const after = buildAcademicSnapshot({
+    semester: "2026-2027-1",
+    generatedAt: "2026-08-28T00:00:00.000Z",
+    sources: { schedule: academicSnapshotSource([{ rwh: "R1", room: "一教102" }]) },
+  });
+
+  try {
+    writeFileSync(beforePath, JSON.stringify(before), "utf8");
+    writeFileSync(afterPath, JSON.stringify(after), "utf8");
+    const result = run(["academic", "snapshot", "diff", beforePath, afterPath, "--json"]);
+    assert.equal(result.status, 0);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.command, "academic snapshot diff");
+    assert.equal(envelope.data.summary.changed, 1);
+    assert.equal(envelope.data.summary.hasChanges, true);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

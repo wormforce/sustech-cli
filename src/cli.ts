@@ -1,5 +1,17 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import {
+  academicSnapshotError,
+  academicSnapshotSource,
+  buildAcademicSnapshot,
+  diffAcademicSnapshots,
+  formatAcademicSnapshot,
+  formatAcademicSnapshotDiff,
+  loadAcademicSnapshot,
+  saveAcademicSnapshot,
+  type AcademicSnapshotFailure,
+  type AcademicSnapshotSource,
+} from "./academic/snapshot.js";
 import { inferCommandName } from "./core/argv.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
 import { CONSEQUENCES, consequenceByOperation, formatConsequences } from "./core/consequences.js";
@@ -25,7 +37,7 @@ import {
   type OutputOptions,
 } from "./core/output.js";
 import { promptHiddenPassword, promptLoginSid, readPasswordFromStdin } from "./core/prompt.js";
-import { parseSemester } from "./core/semester.js";
+import { parseSemester, type Semester } from "./core/semester.js";
 import { CLI_VERSION } from "./core/version.js";
 import { CalendarClient } from "./calendar/client.js";
 import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
@@ -227,6 +239,8 @@ Usage:
   sustech auth check [--profile NAME] [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--json|--jsonl]
   sustech calendar terms [--year YYYY] [--calendar-level undergraduate|graduate]
   sustech calendar day [YYYY-MM-DD|--date YYYY-MM-DD] [--calendar-level undergraduate|graduate]
+  sustech academic snapshot save --destination PATH [--semester YYYY-YYYY-N] [--include-blackboard] [--overwrite]
+  sustech academic snapshot diff BEFORE AFTER
   sustech faculty departments
   sustech faculty list DEPARTMENT [--full] [--limit N]
   sustech faculty get SLUG
@@ -403,6 +417,7 @@ type Values = OutputFlags & {
   "password-stdin"?: boolean;
   path?: string;
   requirements?: string;
+  "include-blackboard"?: boolean;
   help?: boolean;
 };
 
@@ -417,6 +432,8 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   doctor: ["profile", "credentials-file", "service", "live"],
   "calendar terms": ["year", "calendar-level"],
   "calendar day": ["date", "calendar-level"],
+  "academic snapshot save": ["credentials-file", "semester", "destination", "include-blackboard", "overwrite"],
+  "academic snapshot diff": [],
   "faculty list": ["full", "limit"],
   "faculty search": ["department", "limit"],
   context: ["date", "level", "live", "credentials-file"],
@@ -578,6 +595,7 @@ async function main(argv: string[]): Promise<void> {
         "password-stdin": { type: "boolean", default: false },
         path: { type: "string" },
         requirements: { type: "string" },
+        "include-blackboard": { type: "boolean", default: false },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -653,6 +671,10 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "calendar") {
     await runCalendar(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "academic") {
+    await runAcademic(parsed.positionals, values, output);
     return;
   }
   if (group === "faculty") {
@@ -1975,6 +1997,132 @@ async function runFaculty(
     return;
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runAcademic(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const command = positionals[1];
+  const operation = positionals[2];
+
+  if (command === "snapshot" && operation === "save" && positionals.length === 3) {
+    const destination = required(values.destination, "--destination");
+    const semester = parseSemester(values.semester);
+    const client = await tisClient(values);
+    const sources: Partial<Record<"schedule" | "grades" | "exams" | "blackboardDeadlines", AcademicSnapshotSource>> = {
+      schedule: await captureAcademicSource(() => client.schedule(semester)),
+      grades: await captureAcademicSource(() => client.grades(semester)),
+      exams: await captureAcademicExamSource(client, semester),
+    };
+
+    if (values["include-blackboard"]) {
+      try {
+        const report = await listBlackboardDeadlines(await casServiceAdapter(values, "bb"));
+        const failures: AcademicSnapshotFailure[] = report.failures.map((failure) => ({
+          code: failure.code || "BLACKBOARD_DEADLINE_READ_FAILED",
+          message: failure.message,
+        }));
+        sources.blackboardDeadlines = academicSnapshotSource(report.deadlines, {
+          status: failures.length > 0 ? "partial" : "ok",
+          failures,
+        });
+      } catch (error) {
+        sources.blackboardDeadlines = academicSnapshotError(error);
+      }
+    }
+
+    if (Object.values(sources).every((source) => source?.status === "error")) {
+      throw new CliError(
+        "No academic source could be captured; no snapshot was written.",
+        "ACADEMIC_SNAPSHOT_NO_DATA",
+        1,
+        { sources: Object.fromEntries(Object.entries(sources).map(([name, source]) => [name, source?.status])) },
+      );
+    }
+    const snapshot = buildAcademicSnapshot({ semester: semester.value, sources });
+    const path = await saveAcademicSnapshot(destination, snapshot, { overwrite: values.overwrite });
+    const sourceItems = Object.entries(snapshot.sources).map(([name, source]) => ({
+      source: name,
+      status: source?.status,
+      total: source?.items.length ?? 0,
+      failures: source?.failures.length ?? 0,
+    }));
+    writeSuccess({
+      command: "academic snapshot save",
+      data: { path, snapshot, localMutation: true, remoteMutation: false },
+      text: formatAcademicSnapshot(snapshot, path),
+      items: sourceItems,
+      summary: {
+        path,
+        semester: semester.value,
+        digest: snapshot.digest,
+        sources: sourceItems.length,
+        completeSources: sourceItems.filter((source) => source.status === "ok").length,
+        partialSources: sourceItems.filter((source) => source.status === "partial").length,
+        failedSources: sourceItems.filter((source) => source.status === "error").length,
+      },
+    }, output);
+    return;
+  }
+
+  if (command === "snapshot" && operation === "diff" && positionals.length === 5) {
+    const [beforePath, afterPath] = positionals.slice(3);
+    const [before, after] = await Promise.all([
+      loadAcademicSnapshot(required(beforePath, "before snapshot path")),
+      loadAcademicSnapshot(required(afterPath, "after snapshot path")),
+    ]);
+    const diff = diffAcademicSnapshots(before, after);
+    const sourceItems = Object.entries(diff.sources).map(([source, result]) => ({ source, ...result }));
+    writeSuccess({
+      command: "academic snapshot diff",
+      data: diff,
+      text: formatAcademicSnapshotDiff(diff),
+      items: sourceItems,
+      summary: diff.summary,
+    }, output);
+    return;
+  }
+
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function captureAcademicSource(load: () => Promise<readonly unknown[]>): Promise<AcademicSnapshotSource> {
+  try {
+    return academicSnapshotSource(await load());
+  } catch (error) {
+    return academicSnapshotError(error);
+  }
+}
+
+async function captureAcademicExamSource(client: TisClient, semester: Semester): Promise<AcademicSnapshotSource> {
+  try {
+    const exams = await client.exams();
+    const matching = exams.filter((exam) => exam.semester && academicSemesterLabelMatches(exam.semester, semester));
+    const unknownSemesterCount = exams.filter((exam) => !exam.semester).length;
+    const failures: AcademicSnapshotFailure[] = unknownSemesterCount > 0
+      ? [{
+          code: "EXAM_SEMESTER_UNKNOWN",
+          message: `${unknownSemesterCount} exam record(s) were omitted because TIS did not identify their semester.`,
+        }]
+      : [];
+    return academicSnapshotSource(matching, {
+      status: failures.length > 0 ? "partial" : "ok",
+      failures,
+    });
+  } catch (error) {
+    return academicSnapshotError(error);
+  }
+}
+
+function academicSemesterLabelMatches(label: string, semester: Semester): boolean {
+  const season = semester.xq === "1" ? "秋季" : semester.xq === "2" ? "春季" : "夏季";
+  const startYear = semester.xn.slice(0, 4);
+  const endYear = semester.xn.slice(5);
+  return [semester.value, `${semester.xn}${semester.xq}`, `${startYear}${season}`, `${endYear}${season}`]
+    .some((candidate) => label.includes(candidate))
+    || (label.includes(semester.xn) && label.includes(season));
 }
 
 async function runContext(
