@@ -16,6 +16,8 @@ const AUTHCENTER_HOSTS = new Set([
   "auth.sustech.edu.cn",
   "authserver.sustech.edu.cn",
 ]);
+const LEGACY_CAS_SERVICE_PATH = "/ic-web/auth/server";
+const CURRENT_CAS_SERVICE_PATH = /^\/authcenter\/doAuth\/[A-Za-z0-9_-]{16,128}$/;
 const ALLOWED_READ_METHODS = new Set(["GET", "HEAD"]);
 const ALLOWED_READ_PATHS = new Set([
   "/ic-web/auth/userInfo",
@@ -339,7 +341,9 @@ function parseAddressPayload(body: string): { code: number; message: string; dat
 
 function validateAuthcenterUrl(value: string): URL {
   const url = httpsUrl(value, "authcenterUrl");
-  if (!AUTHCENTER_HOSTS.has(url.hostname.toLowerCase()) || url.pathname !== "/authcenter/toLoginPage") {
+  const host = url.hostname.toLowerCase();
+  const expectedHost = host === BOOKING_HOST || AUTHCENTER_HOSTS.has(host);
+  if (!expectedHost || url.pathname !== "/authcenter/toLoginPage") {
     throw new CliError("Library booking auth/address returned an unexpected authcenter URL.", "UNSAFE_REDIRECT", 1, {
       service: "library-booking",
       host: url.hostname,
@@ -365,8 +369,10 @@ function validateCasLoginUrl(value: string): URL {
     });
   }
   const serviceUrl = httpsUrl(service, "casServiceUrl");
-  if (serviceUrl.hostname !== BOOKING_HOST || serviceUrl.pathname !== "/ic-web/auth/server") {
-    throw new CliError("Library booking CAS login URL targeted an unexpected service host.", "UNSAFE_REDIRECT", 1, {
+  const expectedServicePath = serviceUrl.pathname === LEGACY_CAS_SERVICE_PATH
+    || CURRENT_CAS_SERVICE_PATH.test(serviceUrl.pathname);
+  if (serviceUrl.hostname !== BOOKING_HOST || !expectedServicePath) {
+    throw new CliError("Library booking CAS login URL targeted an unexpected service endpoint.", "UNSAFE_REDIRECT", 1, {
       service: "library-booking",
       host: serviceUrl.hostname,
       path: serviceUrl.pathname,

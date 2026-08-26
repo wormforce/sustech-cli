@@ -86,8 +86,8 @@ commands for them.
 - Consequence metadata lives in `src/core/consequences.ts` so agents can inspect
   risks and follow-up checks without scraping prose.
 - New authenticated campus-service wrappers are validated with protocol fixtures
-  and transport guards. They have not yet been live-QA'd against a user account
-  in this repository.
+  and transport guards. Opt-in read-only live smoke tests passed for booking and
+  library-booking on 2026-08-26; PMS remained blocked by its campus-network gate.
 
 ## Current shape
 

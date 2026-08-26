@@ -4,13 +4,14 @@ A standalone TypeScript CLI for SUSTech services, designed for both people and
 agents. It talks to campus services directly and never invokes Python at
 runtime.
 
-> Status: preview v0.4.0. The TypeScript rewrite now covers the core TIS read
+> Status: preview v0.4.1. The TypeScript rewrite now covers the core TIS read
 > surface, guarded enrollment apply, public calendar/faculty/transit data,
 > local Wi-Fi and resource helpers, public papers/NCES queries, CAS-backed
 > Blackboard/WS reads, and authenticated read-only booking, library-booking,
-> and PMS flows. The new authenticated service transports are verified with
-> mock/protocol fixtures only; no user-account live QA has been run for them
-> yet. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
+> and PMS flows. On 2026-08-26, opt-in read-only live smoke tests passed for
+> TIS enrollment reads, Blackboard courses, WS programs, eHall rooms, and
+> library-booking identity/summary/lab/count reads. PMS remained blocked by
+> its campus-network gate. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
 > and [docs/SERVICES.md](docs/SERVICES.md).
 
 ## Output for people and agents

@@ -23,7 +23,7 @@ export const BOOKING_STATUS: ServiceStatus = {
   notes: [
     "The service must be reachable from the campus network or an approved campus access path.",
     "Credentials, cookies, CAS tickets, and the booking token remain in memory and are never returned in command output.",
-    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
+    "The room-list path completed an opt-in read-only live smoke test on 2026-08-26.",
     "Mutating calls such as AddMeeting and CancelMeeting are intentionally excluded.",
   ],
   endpoints: [

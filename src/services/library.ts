@@ -43,11 +43,13 @@ export const LIBRARY_BOOKING_STATUS: ServiceStatus = {
   summary: "The CLI resolves the dynamic authcenter service URL, completes CAS, and exposes read-only IC booking APIs.",
   notes: [
     "The IC booking cookie remains in memory and is never returned in command output.",
-    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
+    "Identity, idle-summary, lab, and reservation-count reads completed an opt-in live smoke test on 2026-08-26.",
     "Reservation creation and cancellation are intentionally excluded here.",
   ],
   endpoints: [
     "/ic-web/auth/address",
+    "/authcenter/toLoginPage",
+    "/authcenter/doAuth/{relayId}",
     "/ic-web/auth/userInfo",
     "/ic-web/home/page/room/idle",
     "/ic-web/lab/devKindLabs",

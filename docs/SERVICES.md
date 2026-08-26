@@ -21,11 +21,11 @@ while the CLI already supplies that transport for a specific command family.
 
 | Service | Availability | Auth | CLI surface today | Notes |
 | --- | --- | --- | --- | --- |
-| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb assignments` | CLI provides a generic CAS-backed adapter; authenticated live QA still pending. |
-| `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings` | CLI performs the login handshake itself and keeps credentials, cookies, CAS tickets, and the booking token in memory only. |
+| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb assignments` | CLI CAS login and courses read passed an opt-in live smoke test on 2026-08-26. |
+| `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings` | CLI login and room-list read passed an opt-in live smoke test on 2026-08-26. |
 | `library-catalog` | `unavailable` | browser session | `library search-url` | The rewrite only offers a Primo handoff URL builder. It does not fabricate catalog results. |
-| `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations` | CLI resolves the authcenter bootstrap, completes CAS, and keeps the resulting `ic-cookie` in memory only. |
-| `ws` | `adapter_required` | CAS cookie session | `ws programs`, `ws detail` | CLI provides a generic CAS-backed adapter; authenticated live QA still pending. |
+| `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations` | Login plus identity, summary, labs, and count reads passed an opt-in live smoke test on 2026-08-26. |
+| `ws` | `adapter_required` | CAS cookie session | `ws programs`, `ws detail` | CLI CAS login and program-list read passed an opt-in live smoke test on 2026-08-26. |
 | `pms` | `implemented` | PMS auth token, RSA login, OSESSIONID cookie, campus reachability | `pms check`, `pms server-groups`, `pms stations`, `pms jobs`, `pms scan-jobs`, `pms usage` | CLI performs the PMS auth flow directly, keeps OSESSIONID in memory, and uses transient RSA login material. A first browser-side account link may still be needed on some accounts. |
 | `nces` | `implemented` | none | `nces browse`, `nces search`, `nces course` | Public HTTP API backed by `ncesnext.com`; callers should avoid aggressive polling. |
 | `papers` | `implemented` | none | `papers search` | Uses CrossRef bibliographic relevance plus optional Unpaywall resolution. Metadata and OA links only, no downloads. |
@@ -49,13 +49,16 @@ All write paths for these three services remain unavailable in this repository.
 
 ## Verification boundary
 
-The new authenticated transports are covered by protocol and mock fixtures and
-by request-guard logic. They have not yet been live-QA'd in this repository
-with a user-provided campus account.
+The authenticated transports are covered by protocol/mock fixtures and
+request-guard logic. On 2026-08-26, opt-in read-only live smoke tests passed for
+TIS enrollment reads, Blackboard courses, WS programs, eHall rooms, and
+library-booking identity, summary, labs, and reservation count. No write path
+was exercised.
 
-For PMS specifically, the CLI can perform the documented login flow itself, but
-some accounts may still require a first browser-side link or activation step
-before CLI authentication succeeds.
+PMS returned its campus-network gate before login in the same test environment.
+The CLI can perform the documented login flow itself, but a campus access path
+is required and some accounts may still need a first browser-side link or
+activation step.
 
 ## Why Blackboard and WS still show `adapter_required`
 

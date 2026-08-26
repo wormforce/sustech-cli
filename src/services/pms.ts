@@ -21,7 +21,7 @@ export const PMS_STATUS: ServiceStatus = {
   summary: "The CLI performs the PMS token, public-key, RSA login flow and exposes read-only printer and queue APIs.",
   notes: [
     "The OSESSIONID cookie and encrypted login material remain in memory and are never returned in command output.",
-    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
+    "A live smoke attempt on 2026-08-26 reached the campus-network gate before login; the auth flow remains protocol-fixture verified.",
     "This adapter layer only covers read paths.",
     "Upload and delete endpoints are intentionally excluded.",
   ],

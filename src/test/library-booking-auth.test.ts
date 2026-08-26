@@ -12,7 +12,7 @@ const credentials: Credentials = {
 };
 
 test("LibraryBookingSession resolves authcenter, completes CAS, and reuses ic-cookie for whoami", async () => {
-  const dynamicServiceUrl = "https://booking.lib.sustech.edu.cn/ic-web/auth/server?uuid=550e8400-e29b-41d4-a716-446655440000";
+  const dynamicServiceUrl = "https://booking.lib.sustech.edu.cn/authcenter/doAuth/338844332ed94776bf4ae4889dd1b0ba";
   const casLoginUrl = `https://cas.sustech.edu.cn/cas/login?service=${encodeURIComponent(dynamicServiceUrl)}`;
   const seen: Array<{ url: string; method: string; cookie: string; body: string }> = [];
   let authAddressCalls = 0;
@@ -33,10 +33,10 @@ test("LibraryBookingSession resolves authcenter, completes CAS, and reuses ic-co
         return jsonResponse({
           code: 0,
           message: "ok",
-          data: "https://authserver.sustech.edu.cn/authcenter/toLoginPage?uuid=abc",
+          data: "https://booking.lib.sustech.edu.cn/authcenter/toLoginPage?redirectUrl=%2Fic%2Fhome&typeCode=16",
         });
       }
-      if (url === "https://authserver.sustech.edu.cn/authcenter/toLoginPage?uuid=abc") {
+      if (url === "https://booking.lib.sustech.edu.cn/authcenter/toLoginPage?redirectUrl=%2Fic%2Fhome&typeCode=16") {
         return redirectResponse(casLoginUrl);
       }
       if (url === casLoginUrl && (init.method ?? "GET") === "GET") {
@@ -49,9 +49,9 @@ test("LibraryBookingSession resolves authcenter, completes CAS, and reuses ic-co
         assert.match(body, /execution=e1s1/);
         assert.match(body, /_eventId=submit/);
         assert.match(body, /submit=/);
-        return redirectResponse(`${dynamicServiceUrl}&ticket=ST-1`, 302, "TGC=tgc-123; Domain=cas.sustech.edu.cn; Path=/");
+        return redirectResponse(`${dynamicServiceUrl}?ticket=ST-1`, 302, "TGC=tgc-123; Domain=cas.sustech.edu.cn; Path=/");
       }
-      if (url === `${dynamicServiceUrl}&ticket=ST-1`) {
+      if (url === `${dynamicServiceUrl}?ticket=ST-1`) {
         return redirectResponse("https://booking.lib.sustech.edu.cn/ic/home", 302, "ic-cookie=ic-123; Domain=booking.lib.sustech.edu.cn; Path=/");
       }
       if (url === "https://booking.lib.sustech.edu.cn/ic/home") {

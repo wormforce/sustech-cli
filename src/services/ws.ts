@@ -22,6 +22,7 @@ export const WS_STATUS: ServiceStatus = {
   notes: [
     "The adapter must already hold WS cookies.",
     "The menu endpoint is used to derive the per-session userToken and ts parameters.",
+    "The CLI CAS bridge completed an opt-in live program-list read on 2026-08-26.",
   ],
   endpoints: [
     "/Main/GetSmartLeftMenuTData.do",

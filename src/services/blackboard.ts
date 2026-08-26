@@ -22,6 +22,7 @@ export const BLACKBOARD_STATUS: ServiceStatus = {
   summary: "Blackboard read APIs are available with an authenticated CAS cookie session.",
   notes: [
     "The adapter must provide Blackboard cookies for bb.sustech.edu.cn.",
+    "The CLI CAS bridge completed an opt-in live courses read on 2026-08-26.",
     "Assignment submission and downloads are intentionally excluded here.",
   ],
   endpoints: [
