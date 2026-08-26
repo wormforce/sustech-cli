@@ -4,10 +4,12 @@ A standalone TypeScript CLI for SUSTech services, designed for both people and
 agents. It talks to campus services directly and never invokes Python at
 runtime.
 
-> Status: preview. The selection-focused TIS command set and public transit
-> queries are implemented without a Python runtime. Authenticated TIS commands
-> still need fixture-backed live QA before a stable release. Remaining upstream
-> modules are tracked honestly in [docs/MIGRATION.md](docs/MIGRATION.md).
+> Status: preview v0.3.0. The TypeScript rewrite now covers the core TIS read
+> surface, guarded enrollment apply, public calendar/faculty/transit data,
+> local Wi-Fi and resource helpers, public papers/NCES queries, and CAS-backed
+> Blackboard/WS reads. Authenticated live QA is still pending before a stable
+> release. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
+> and [docs/SERVICES.md](docs/SERVICES.md).
 
 ## Output for people and agents
 
@@ -44,19 +46,38 @@ Each capability declares whether it is local/read/plan/mutation, whether it
 uses the network, which authentication it needs, and whether confirmation is
 required.
 
-## Implemented commands
+## Implemented command areas
 
 ```text
 sustech capabilities
+sustech consequences
 sustech auth check
+sustech calendar terms
+sustech calendar day
+sustech faculty departments
+sustech faculty list/get/search/render
+sustech context
+sustech resources list/search
+sustech wifi status/events
+sustech services status
+sustech papers search
+sustech nces browse/search/course
+sustech bb user/courses/content/assignments
+sustech ws programs/detail
+sustech library search-url
 sustech tis courses search [KEYWORD]
 sustech tis courses available [KEYWORD] --round ROUND
 sustech tis enrolled
 sustech tis schedule [--week N|--all]
 sustech tis grades [--semester YYYY-YYYY-N]
 sustech tis exams
+sustech tis classroom rooms/occupancy/free
+sustech tis evals
+sustech tis ical
 sustech tis timetable CODE... [--block MON:1-4] [--max N]
 sustech tis enroll preview ...
+sustech tis selection preview ...
+sustech tis bid plan ...
 sustech tis enroll apply ... --confirm
 sustech transit facilities
 sustech transit find QUERY
@@ -68,6 +89,36 @@ sustech transit live
 
 All list commands support JSONL. `tis timetable` fetches the catalog once and
 solves conflicts locally with week-aware period overlap checks.
+
+`faculty list` and `faculty search --department` take the exact department
+label returned by `sustech faculty departments`.
+
+Only one command currently performs a real mutation:
+
+- `sustech tis enroll apply --confirm`
+
+Everything else in the new selection and service surface is read-only, local
+planning, or browser handoff:
+
+- `tis selection preview` builds enroll/drop/cart/bid payloads locally
+- `tis bid plan` validates bid budgets locally
+- `library search-url` builds a Primo handoff URL without claiming catalog data
+
+## Service status model
+
+`sustech services status` reports the reusable service-adapter layer rather than
+the CLI wrapper alone.
+
+- `implemented`: public HTTP access works directly in this repo
+- `adapter_required`: parsers and endpoints are ported, but the caller must
+  provide an authenticated transport or service-specific headers/cookies
+- `unavailable`: only safe URL builders or types are preserved for now
+
+This distinction matters for Blackboard and WS: the underlying adapters remain
+`adapter_required`, but the CLI already wires generic CAS-backed read commands
+for `bb ...` and `ws ...`. The full matrix is in [docs/SERVICES.md](docs/SERVICES.md).
+`papers search` uses CrossRef bibliographic relevance by default and only
+resolves open-access links when `--resolve-oa` or `--open-access` is requested.
 
 ## Development
 
@@ -106,6 +157,12 @@ symlink. Remove a global install later with:
 npm uninstall --global sustech-cli
 ```
 
+## CI
+
+Cross-platform CI is active at [.github/workflows/ci.yml](.github/workflows/ci.yml).
+It runs `npm ci`, `npm run check`, `npm test`, and `npm pack --dry-run` on
+Ubuntu and macOS with Node.js 20 and 22.
+
 ## Authentication
 
 Inject credentials through the environment when an agent runner owns secret
@@ -115,6 +172,8 @@ management:
 export SUSTECH_SID='12410000'
 export SUSTECH_PASSWORD='your-password'
 sustech auth check
+sustech auth check --service bb
+sustech auth check --service ws
 ```
 
 Alternatively set `SUSTECH_CREDENTIALS_FILE` or pass `--credentials-file` to a

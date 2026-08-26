@@ -1,12 +1,33 @@
 import { CliError } from "./errors.js";
+import { USER_AGENT } from "./version.js";
 
-const USER_AGENT = "sustech-cli/0.2 (+https://github.com/aprylewu/sustech-cli)";
+export interface FetchOptions {
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+}
 
-export async function fetchJson(url: string, options: { timeoutMs?: number } = {}): Promise<unknown> {
+export async function fetchJson(url: string, options: FetchOptions = {}): Promise<unknown> {
+  const response = await fetchResponse(url, options);
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new CliError("The upstream service returned invalid JSON.", "UPSTREAM_PROTOCOL_ERROR", 1, {
+      url: safeUrl(url),
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export async function fetchText(url: string, options: FetchOptions = {}): Promise<string> {
+  const response = await fetchResponse(url, options);
+  return response.text();
+}
+
+async function fetchResponse(url: string, options: FetchOptions): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": USER_AGENT },
+      headers: { "user-agent": USER_AGENT, ...options.headers },
       signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
     });
   } catch (error) {
@@ -21,14 +42,7 @@ export async function fetchJson(url: string, options: { timeoutMs?: number } = {
       status: response.status,
     });
   }
-  try {
-    return await response.json();
-  } catch (error) {
-    throw new CliError("The upstream service returned invalid JSON.", "UPSTREAM_PROTOCOL_ERROR", 1, {
-      url: safeUrl(url),
-      cause: error instanceof Error ? error.message : String(error),
-    });
-  }
+  return response;
 }
 
 function safeUrl(value: string): string {
