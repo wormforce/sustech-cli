@@ -489,7 +489,12 @@ export async function buildLibraryBookingCreatePreview(
         ));
       }
       const capacityClass = classifyLibraryRoomCapacity(room.devName);
-      if (capacityClass === "group") {
+      if (capacityClass === "unknown") {
+        blockers.push(libraryIssue(
+          "ROOM_CAPACITY_POLICY_UNKNOWN",
+          `Room '${room.devName}' uses an unrecognized capacity label, so the required member policy could not be classified safely.`,
+        ));
+      } else if (capacityClass === "group") {
         if (normalisedTarget.memberKind !== 2) {
           blockers.push(libraryIssue("GROUP_MEMBER_KIND_REQUIRED", `Room '${room.devName}' requires --member-kind 2 and explicit member accNo values.`));
         }
@@ -501,6 +506,10 @@ export async function buildLibraryBookingCreatePreview(
       }
     }
   }
+  warnings.push(libraryIssue(
+    "SLOT_AVAILABILITY_UNVERIFIED",
+    "This preview checks room inventory, member rules, and policy constraints only; the upstream service may still reject the reservation if the exact slot is already occupied.",
+  ));
 
   if (normalisedTarget.memberKind === 1) {
     if (members.values.length !== 1 || members.values[0] !== user.accNo) {
@@ -887,9 +896,14 @@ function parseLibraryClockMinutes(value: string): number | undefined {
 }
 
 function classifyLibraryRoomCapacity(devName: string): "solo" | "group" | "unknown" {
-  const range = /（(\d+)-(\d+)人）/.exec(devName);
+  const normalized = devName
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[~～–—]/g, "-")
+    .replace(/\s+/g, " ");
+  const range = /\((\d+)\s*-\s*(\d+)\s*(?:人|位|people|persons?)?\)/.exec(normalized);
   if (range) return Number(range[1]) >= 3 ? "group" : "solo";
-  const plus = /（(\d+)人以上）/.exec(devName);
+  const plus = /\((\d+)\s*(?:人|位|people|persons?)?\s*(?:以上|\+|or more|and above)\)/.exec(normalized);
   if (plus) return Number(plus[1]) >= 3 ? "group" : "solo";
   return "unknown";
 }

@@ -81,6 +81,7 @@ export function formatBookingMeetings(meetings: readonly BookingMeeting[]): stri
 export function formatBookingCreatePreview(preview: BookingCreatePreview, applyCommand?: string): string {
   const lines = [
     "E-Hall booking create preview",
+    "Inventory/policy preflight only; exact slot availability is not verified.",
     `${preview.target.roomId} · ${preview.target.start} to ${preview.target.end}`,
     `Title ${preview.target.title || "(missing)"} · participants ${preview.target.participants}`,
   ];
@@ -193,6 +194,7 @@ export function formatLibraryReservations(items: readonly LibraryReservation[]):
 export function formatLibraryBookingCreatePreview(preview: LibraryBookingCreatePreview, applyCommand?: string): string {
   const lines = [
     "Library booking create preview",
+    "Inventory/policy preflight only; exact slot availability is not verified.",
     `${preview.target.devId} · ${preview.target.start} to ${preview.target.end}`,
     `Title ${preview.target.title || "(missing)"} · memberKind ${preview.target.memberKind} · members ${preview.target.members.join(", ")}`,
   ];

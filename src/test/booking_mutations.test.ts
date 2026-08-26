@@ -3,6 +3,7 @@ import test from "node:test";
 import { CliError } from "../core/errors.js";
 import {
   BOOKING_API,
+  buildBookingCreatePreview,
   applyBookingCancel,
   applyBookingCreate,
   type BookingCreateTarget,
@@ -10,6 +11,7 @@ import {
 } from "../services/booking.js";
 import {
   LIBRARY_BOOKING_BASE,
+  buildLibraryBookingCreatePreview,
   applyLibraryBookingCancel,
   applyLibraryBookingCreate,
   type LibraryBookingCreateTarget,
@@ -72,6 +74,24 @@ test("booking create confirms the exact meeting by read-back after a typed addMe
   assert.equal(fixture.stats.addCalls, 1);
 });
 
+test("booking create preview truthfully warns that exact slot availability is not verified", async () => {
+  const fixture = makeBookingAdapter({
+    rooms: [bookingRoomRaw()],
+    meetings: [],
+  });
+
+  const preview = await buildBookingCreatePreview(fixture.adapter, {
+    roomId: "ZC02",
+    title: "team sync",
+    start: "2026-08-28T10:00:00",
+    end: "2026-08-28T11:00:00",
+    participants: 2,
+  });
+
+  assert.equal(preview.applyAllowed, true);
+  assert.ok(preview.warnings.some((warning) => warning.code === "SLOT_AVAILABILITY_UNVERIFIED"));
+});
+
 test("booking create exits 5 when read-back is ambiguous after a successful write", async () => {
   const target: BookingCreateTarget = {
     roomId: "ZC02",
@@ -117,9 +137,63 @@ test("booking cancel confirms the exact meeting ID is absent after a typed cance
   assert.equal(fixture.stats.cancelCalls, 1);
 });
 
-test("library booking create precheck fails closed for group rooms without enough explicit members", async () => {
+test("booking cancel exits 5 when the meeting still exists after a typed cancelMeeting write", async () => {
+  const fixture = makeBookingAdapter({
+    rooms: [bookingRoomRaw()],
+    meetings: [bookingMeetingRaw({ MeetingID: "M-1" })],
+    onCancel() {
+      return { cancelled: true };
+    },
+  });
+
+  await assert.rejects(
+    () => applyBookingCancel(fixture.adapter, { meetingId: "M-1" }),
+    (error: unknown) => {
+      assert(error instanceof CliError);
+      assert.equal(error.code, "BOOKING_WRITE_UNVERIFIED");
+      assert.equal(error.exitCode, 5);
+      assert.equal(error.details?.warning, "DO_NOT_RETRY_AUTOMATICALLY");
+      return true;
+    },
+  );
+});
+
+test("booking cancel exits 5 when read-back fails after a typed cancelMeeting write", async () => {
+  let cancelled = false;
+  const adapter: BookingMutationAdapter = {
+    name: "booking-fixture",
+    async fetch(input) {
+      const url = String(input);
+      if (url === `${BOOKING_API}/GetMyMeetings`) {
+        if (cancelled) throw new Error("read-back failed");
+        return jsonResponse({ IsSuccess: true, Data: { rows: [bookingMeetingRaw({ MeetingID: "M-1" })] } });
+      }
+      throw new Error(`Unexpected booking URL ${url}`);
+    },
+    async addMeeting() {
+      throw new Error("unexpected add");
+    },
+    async cancelMeeting() {
+      cancelled = true;
+      return { cancelled: true };
+    },
+  };
+
+  await assert.rejects(
+    () => applyBookingCancel(adapter, { meetingId: "M-1" }),
+    (error: unknown) => {
+      assert(error instanceof CliError);
+      assert.equal(error.code, "BOOKING_WRITE_UNVERIFIED");
+      assert.equal(error.exitCode, 5);
+      assert.equal(error.details?.warning, "DO_NOT_RETRY_AUTOMATICALLY");
+      return true;
+    },
+  );
+});
+
+test("library booking create precheck enforces ASCII or English group capacity labels", async () => {
   const fixture = makeLibraryAdapter({
-    rooms: [libraryRoomGroupRaw({ devName: "G104（3-10人）" })],
+    rooms: [libraryRoomGroupRaw({ devName: "G104 (3-10 people)" })],
     reservations: [],
   });
 
@@ -144,6 +218,58 @@ test("library booking create precheck fails closed for group rooms without enoug
     },
   );
   assert.equal(fixture.stats.createCalls, 0);
+});
+
+test("library booking create preview truthfully warns that exact slot availability is not verified", async () => {
+  const fixture = makeLibraryAdapter({
+    rooms: [libraryRoomGroupRaw({ devName: "C105（1-3人）" })],
+    reservations: [],
+  });
+
+  const preview = await buildLibraryBookingCreatePreview(fixture.adapter, {
+    classKind: 1,
+    kindId: 1,
+    labId: 2,
+    devId: 13,
+    title: "study group",
+    start: "2026-08-28T10:00:00",
+    end: "2026-08-28T11:00:00",
+    memberKind: 1,
+    members: [],
+  });
+
+  assert.equal(preview.applyAllowed, true);
+  assert.ok(preview.warnings.some((warning) => warning.code === "SLOT_AVAILABILITY_UNVERIFIED"));
+});
+
+test("library booking create fails closed when room capacity naming cannot be classified safely", async () => {
+  const fixture = makeLibraryAdapter({
+    rooms: [libraryRoomGroupRaw({ devName: "Focus Room 13" })],
+    reservations: [],
+  });
+
+  await assert.rejects(
+    () => applyLibraryBookingCreate(fixture.adapter, {
+      classKind: 1,
+      kindId: 1,
+      labId: 2,
+      devId: 13,
+      title: "study group",
+      start: "2026-08-28T10:00:00",
+      end: "2026-08-28T11:00:00",
+      memberKind: 1,
+      members: [],
+    }),
+    (error: unknown) => {
+      assert(error instanceof CliError);
+      assert.equal(error.code, "LIBRARY_BOOKING_PRECHECK_FAILED");
+      assert.equal(error.exitCode, 4);
+      assert.equal(error.details?.warning, "NO_MUTATION_PERFORMED");
+      assert.ok(Array.isArray(error.details?.blockers));
+      assert.ok(error.details?.blockers.some((blocker: { code?: string }) => blocker.code === "ROOM_CAPACITY_POLICY_UNKNOWN"));
+      return true;
+    },
+  );
 });
 
 test("library booking create confirms the exact reservation by read-back after a typed createReservation write", async () => {
@@ -224,6 +350,65 @@ test("library booking cancel confirms the exact reservation ID is absent after a
   const result = await applyLibraryBookingCancel(fixture.adapter, { reservationId: 9001 });
   assert.equal(result.verification.status, "confirmed");
   assert.equal(fixture.stats.cancelCalls, 1);
+});
+
+test("library booking cancel exits 5 when the reservation still exists after a typed cancelReservation write", async () => {
+  const fixture = makeLibraryAdapter({
+    rooms: [libraryRoomGroupRaw({ devName: "C105（1-3人）" })],
+    reservations: [libraryReservationRaw({ resvId: 9001, uuid: "uuid-9001" })],
+    onCancel() {
+      return { message: "删除成功" };
+    },
+  });
+
+  await assert.rejects(
+    () => applyLibraryBookingCancel(fixture.adapter, { reservationId: 9001 }),
+    (error: unknown) => {
+      assert(error instanceof CliError);
+      assert.equal(error.code, "LIBRARY_BOOKING_WRITE_UNVERIFIED");
+      assert.equal(error.exitCode, 5);
+      assert.equal(error.details?.warning, "DO_NOT_RETRY_AUTOMATICALLY");
+      return true;
+    },
+  );
+});
+
+test("library booking cancel exits 5 when read-back fails after a typed cancelReservation write", async () => {
+  let cancelled = false;
+  const adapter: LibraryBookingMutationAdapter = {
+    name: "library-booking-fixture",
+    async fetch(input) {
+      const url = new URL(String(input));
+      if (url.pathname === "/ic-web/reserve/resvInfo" && url.searchParams.get("resvId") === "9001") {
+        if (cancelled) throw new Error("read-back failed");
+        return jsonResponse({
+          code: 0,
+          message: "ok",
+          count: 1,
+          data: [libraryReservationRaw({ resvId: 9001, uuid: "uuid-9001" })],
+        });
+      }
+      throw new Error(`Unexpected library URL ${url.toString()}`);
+    },
+    async createReservation() {
+      throw new Error("unexpected create");
+    },
+    async cancelReservation() {
+      cancelled = true;
+      return { message: "删除成功" };
+    },
+  };
+
+  await assert.rejects(
+    () => applyLibraryBookingCancel(adapter, { reservationId: 9001 }),
+    (error: unknown) => {
+      assert(error instanceof CliError);
+      assert.equal(error.code, "LIBRARY_BOOKING_WRITE_UNVERIFIED");
+      assert.equal(error.exitCode, 5);
+      assert.equal(error.details?.warning, "DO_NOT_RETRY_AUTOMATICALLY");
+      return true;
+    },
+  );
 });
 
 function makeBookingAdapter(config: {

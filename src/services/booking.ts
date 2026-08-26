@@ -242,6 +242,10 @@ export async function buildBookingCreatePreview(
       ));
     }
   }
+  warnings.push(issue(
+    "SLOT_AVAILABILITY_UNVERIFIED",
+    "This preview checks room inventory and policy constraints only; the upstream service may still reject the reservation if the exact slot is already occupied.",
+  ));
 
   return {
     checkedAt,

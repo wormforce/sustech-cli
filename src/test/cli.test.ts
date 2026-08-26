@@ -7,6 +7,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { academicSnapshotSource, buildAcademicSnapshot } from "../academic/snapshot.js";
+import {
+  buildBookingCreateApplyConfirmation,
+  buildLibraryBookingCreateApplyConfirmation,
+} from "../cli-confirmations.js";
 
 const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 
@@ -87,6 +91,70 @@ test("enrollment preview is a no-network command with an exact apply handoff", (
   ]);
   assert.equal(unsafe.status, 2);
   assert.equal(JSON.parse(unsafe.stdout).error.code, "USAGE");
+});
+
+test("booking and library-booking create handoff commands preserve optional metadata and quote unsafe shell text", () => {
+  const booking = buildBookingCreateApplyConfirmation({
+    roomId: "ZC02",
+    title: "mentor's sync",
+    start: "2026-08-28T10:00:00",
+    end: "2026-08-28T11:00:00",
+    participants: 3,
+    description: "bring slides",
+  }, {
+    credentialsFile: "/tmp/booking creds.txt",
+    profile: "daily ops",
+  });
+  assert.deepEqual(booking.argv, [
+    "sustech",
+    "booking",
+    "create",
+    "apply",
+    "--credentials-file",
+    "/tmp/booking creds.txt",
+    "--profile",
+    "daily ops",
+    "--room-id",
+    "ZC02",
+    "--start",
+    "2026-08-28T10:00:00",
+    "--end",
+    "2026-08-28T11:00:00",
+    "--title",
+    "mentor's sync",
+    "--participants",
+    "3",
+    "--description",
+    "bring slides",
+    "--confirm",
+  ]);
+  assert.match(booking.command, /^sustech booking create apply /);
+  assert.match(booking.command, /--credentials-file '\/tmp\/booking creds\.txt'/);
+  assert.match(booking.command, /--profile 'daily ops'/);
+  assert.match(booking.command, /--title 'mentor'\\''s sync'/);
+  assert.match(booking.command, /--description 'bring slides'/);
+  assert.match(booking.command, /--confirm$/);
+
+  const library = buildLibraryBookingCreateApplyConfirmation({
+    classKind: 1,
+    kindId: 4,
+    labId: 9,
+    devId: 13,
+    title: "AI reading group",
+    start: "2026-08-28T19:00:00",
+    end: "2026-08-28T20:00:00",
+    memberKind: 2,
+    members: [12200000, 12200001, 12200002],
+    memo: "bring poster draft",
+  }, {});
+  assert.ok(!library.argv.includes("--credentials-file"));
+  assert.ok(!library.argv.includes("--profile"));
+  assert.ok(!library.command.includes("--credentials-file"));
+  assert.ok(!library.command.includes("--profile"));
+  assert.match(library.command, /^sustech lib-booking create apply /);
+  assert.match(library.command, /--member 12200000 --member 12200001 --member 12200002/);
+  assert.match(library.command, /--memo 'bring poster draft'/);
+  assert.match(library.command, /--confirm$/);
 });
 
 test("blackboard submission preview now requires Blackboard authentication after local file validation", () => {

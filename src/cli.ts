@@ -12,6 +12,13 @@ import {
   type AcademicSnapshotFailure,
   type AcademicSnapshotSource,
 } from "./academic/snapshot.js";
+import {
+  buildBookingCancelApplyConfirmation,
+  buildBookingCreateApplyConfirmation,
+  buildLibraryBookingCancelApplyConfirmation,
+  buildLibraryBookingCreateApplyConfirmation,
+  shellQuote,
+} from "./cli-confirmations.js";
 import { inferCommandName } from "./core/argv.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
 import { CONSEQUENCES, consequenceByOperation, formatConsequences } from "./core/consequences.js";
@@ -2896,7 +2903,10 @@ async function runBooking(
     const session = await bookingService(values);
     const preview = await buildBookingCreatePreview(session, target);
     const confirmation = preview.applyAllowed
-      ? buildBookingCreateApplyConfirmation(target, values)
+      ? buildBookingCreateApplyConfirmation(target, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      })
       : undefined;
     writeSuccess({
       command: "booking create preview",
@@ -2936,7 +2946,10 @@ async function runBooking(
     const session = await bookingService(values);
     const preview = await buildBookingCancelPreview(session, target);
     const confirmation = preview.applyAllowed
-      ? buildBookingCancelApplyConfirmation(target, values)
+      ? buildBookingCancelApplyConfirmation(target, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      })
       : undefined;
     writeSuccess({
       command: "booking cancel preview",
@@ -3026,7 +3039,10 @@ async function runLibraryBooking(
     const session = await libraryBookingService(values);
     const preview = await buildLibraryBookingCreatePreview(session, target);
     const confirmation = preview.applyAllowed
-      ? buildLibraryBookingCreateApplyConfirmation(target, values)
+      ? buildLibraryBookingCreateApplyConfirmation(target, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      })
       : undefined;
     writeSuccess({
       command: "lib-booking create preview",
@@ -3066,7 +3082,10 @@ async function runLibraryBooking(
     const session = await libraryBookingService(values);
     const preview = await buildLibraryBookingCancelPreview(session, target);
     const confirmation = preview.applyAllowed
-      ? buildLibraryBookingCancelApplyConfirmation(target, values)
+      ? buildLibraryBookingCancelApplyConfirmation(target, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      })
       : undefined;
     writeSuccess({
       command: "lib-booking cancel preview",
@@ -4034,108 +4053,6 @@ function buildBlackboardSubmitApplyConfirmation(
     "--confirm",
   ];
   return { required: true, argv, command: argv.map(shellQuote).join(" ") };
-}
-
-function buildBookingCreateApplyConfirmation(
-  target: ReturnType<typeof bookingCreateTarget>,
-  options: Pick<Values, "credentials-file" | "profile">,
-): { required: true; argv: string[]; command: string } {
-  const argv = [
-    "sustech",
-    "booking",
-    "create",
-    "apply",
-    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
-    ...(options.profile ? ["--profile", options.profile] : []),
-    "--room-id",
-    target.roomId,
-    "--start",
-    target.start,
-    "--end",
-    target.end,
-    "--title",
-    target.title,
-    "--participants",
-    String(target.participants),
-    ...(target.description ? ["--description", target.description] : []),
-    "--confirm",
-  ];
-  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
-}
-
-function buildBookingCancelApplyConfirmation(
-  target: ReturnType<typeof bookingCancelTarget>,
-  options: Pick<Values, "credentials-file" | "profile">,
-): { required: true; argv: string[]; command: string } {
-  const argv = [
-    "sustech",
-    "booking",
-    "cancel",
-    "apply",
-    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
-    ...(options.profile ? ["--profile", options.profile] : []),
-    "--meeting-id",
-    target.meetingId,
-    "--confirm",
-  ];
-  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
-}
-
-function buildLibraryBookingCreateApplyConfirmation(
-  target: ReturnType<typeof libraryBookingCreateTarget>,
-  options: Pick<Values, "credentials-file" | "profile">,
-): { required: true; argv: string[]; command: string } {
-  const argv = [
-    "sustech",
-    "lib-booking",
-    "create",
-    "apply",
-    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
-    ...(options.profile ? ["--profile", options.profile] : []),
-    "--kind-id",
-    String(target.kindId),
-    "--lab-id",
-    String(target.labId),
-    "--dev-id",
-    String(target.devId),
-    "--start",
-    target.start,
-    "--end",
-    target.end,
-    "--title",
-    target.title,
-    "--class-kind",
-    String(target.classKind),
-    "--member-kind",
-    String(target.memberKind),
-    ...target.members.flatMap((value) => ["--member", String(value)]),
-    ...(target.memo ? ["--memo", target.memo] : []),
-    "--confirm",
-  ];
-  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
-}
-
-function buildLibraryBookingCancelApplyConfirmation(
-  target: ReturnType<typeof libraryBookingCancelTarget>,
-  options: Pick<Values, "credentials-file" | "profile">,
-): { required: true; argv: string[]; command: string } {
-  const argv = [
-    "sustech",
-    "lib-booking",
-    "cancel",
-    "apply",
-    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
-    ...(options.profile ? ["--profile", options.profile] : []),
-    "--reservation-id",
-    String(target.reservationId),
-    "--confirm",
-  ];
-  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9._/:=-]+$/.test(value)) return value;
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function validateCommandOptions(command: string, argv: readonly string[]): void {
