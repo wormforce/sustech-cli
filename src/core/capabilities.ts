@@ -29,6 +29,7 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("wifi events", "Read recent macOS SUSTC Wi-Fi events.", "read", { network: false }),
   capability("services status", "Report implemented, adapter-required, and unavailable service layers.", "local"),
   capability("papers search", "Search public CrossRef metadata with optional Unpaywall resolution.", "read"),
+  capability("papers fetch-oa", "Download one Unpaywall-resolved OA PDF to an explicit guarded destination.", "mutation", { status: "preview" }),
   capability("nces browse", "Browse public NCES community course evaluations.", "read", { status: "preview" }),
   capability("nces search", "Search public NCES courses and review samples.", "read", { status: "preview" }),
   capability("nces course", "Read one public NCES course and its reviews.", "read", { status: "preview" }),

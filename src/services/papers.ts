@@ -1,3 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
+import { constants as fileSystemConstants } from "node:fs";
+import { copyFile, link, lstat, open, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
+import { isIP } from "node:net";
+import { CliError } from "../core/errors.js";
 import {
   arrayValue,
   createFetchAdapter,
@@ -20,7 +26,8 @@ export const PAPERS_STATUS: ServiceStatus = {
   browser: false,
   summary: "CrossRef plus Unpaywall provide public paper metadata and open-access resolution.",
   notes: [
-    "This module intentionally stops at metadata and OA links; it does not download files.",
+    "OA PDFs can be downloaded only to an explicit local destination; existing files and symbolic-link targets are refused unless a regular file is explicitly overwritten.",
+    "Authenticated publisher, CNKI, Web of Science, and RSC browser automation remains out of scope.",
   ],
   endpoints: [
     "https://api.crossref.org/works",
@@ -45,6 +52,19 @@ export interface OpenAccessResolution {
   openAccess: boolean;
   pdfUrl?: string;
 }
+
+export interface OpenAccessPdfDownload {
+  doi: string;
+  destination: string;
+  sourceHost: string;
+  size: number;
+  sha256: string;
+  contentType: string;
+  overwritten: boolean;
+}
+
+const DEFAULT_MAX_PDF_BYTES = 200 * 1024 * 1024;
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 const WANTED_TYPES = new Set(["journal-article", "proceedings-article", "posted-content"]);
 const SKIP_TYPES = new Set(["journal-review-article", "book", "book-chapter", "proceedings-review"]);
@@ -107,6 +127,46 @@ export async function resolveOpenAccess(
     openAccess: Boolean(record.is_oa),
     ...(best.url_for_pdf || best.url ? { pdfUrl: stringValue(best.url_for_pdf ?? best.url) } : {}),
   };
+}
+
+export async function downloadOpenAccessPdf(
+  doi: string,
+  destination: string,
+  options: {
+    adapter?: ServiceAdapter;
+    fetchImpl?: typeof fetch;
+    overwrite?: boolean;
+    maxBytes?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<OpenAccessPdfDownload> {
+  const output = await inspectPaperDestination(destination, options.overwrite === true);
+  const resolution = await resolveOpenAccess(doi, { adapter: options.adapter });
+  if (!resolution.openAccess || !resolution.pdfUrl) {
+    throw new CliError("Unpaywall did not expose an open-access PDF for this DOI.", "PAPER_OA_PDF_UNAVAILABLE", 1, { doi });
+  }
+  const initialUrl = safePublicPdfUrl(resolution.pdfUrl);
+  const response = await fetchPaperPdf(initialUrl, options.fetchImpl ?? globalThis.fetch, options.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS);
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_PDF_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new CliError("The OA PDF byte limit must be a positive safe integer.", "PAPER_DOWNLOAD_LIMIT_INVALID", 2);
+  }
+  const tempPath = join(dirname(output.destination), `.${basename(output.destination)}.sustech-${randomUUID()}.tmp`);
+  try {
+    const streamed = await streamPaperPdf(response, tempPath, maxBytes);
+    await finishPaperDownload(tempPath, output.destination, options.overwrite === true);
+    return {
+      doi,
+      destination: output.destination,
+      sourceHost: safePublicPdfUrl(response.url || initialUrl.toString()).hostname,
+      size: streamed.size,
+      sha256: streamed.sha256,
+      contentType: streamed.contentType,
+      overwritten: output.existed,
+    };
+  } finally {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+  }
 }
 
 export function normaliseCrossrefWork(raw: unknown, queryUsed: string): PaperSummary | null {
@@ -197,4 +257,172 @@ function countOccurrences(haystack: string, needle: string): number {
     count += 1;
     index = next + needle.length;
   }
+}
+
+async function fetchPaperPdf(initialUrl: URL, fetchImpl: typeof fetch, timeoutMs: number): Promise<Response> {
+  let current = initialUrl;
+  const signal = AbortSignal.timeout(timeoutMs);
+  for (let redirects = 0; redirects <= 8; redirects += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(current, {
+        method: "GET",
+        headers: { accept: "application/pdf,application/octet-stream;q=0.8" },
+        redirect: "manual",
+        signal,
+      });
+    } catch (error) {
+      throw new CliError(signal.aborted ? "The OA PDF download timed out." : "The OA PDF host could not be reached.", signal.aborted ? "NETWORK_TIMEOUT" : "NETWORK_ERROR", 1, {
+        host: current.hostname,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new CliError("The OA PDF host returned a redirect without a destination.", "PAPER_DOWNLOAD_REDIRECT_INVALID", 1, { host: current.hostname });
+      current = safePublicPdfUrl(new URL(location, current).toString());
+      continue;
+    }
+    if (!response.ok) {
+      throw new CliError("The OA PDF host returned an HTTP error.", "PAPER_DOWNLOAD_HTTP_ERROR", 1, { host: current.hostname, status: response.status });
+    }
+    return response;
+  }
+  throw new CliError("The OA PDF download redirected too many times.", "PAPER_DOWNLOAD_REDIRECT_LIMIT", 1, { host: initialUrl.hostname });
+}
+
+function safePublicPdfUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CliError("Unpaywall returned an invalid PDF URL.", "PAPER_DOWNLOAD_URL_INVALID", 1);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || !url.hostname || url.port) {
+    throw new CliError("OA PDF downloads require a standard credential-free HTTPS URL.", "PAPER_DOWNLOAD_URL_UNSAFE", 1, { host: url.hostname });
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || privateIpLiteral(host)) {
+    throw new CliError("The OA PDF URL points to a non-public host.", "PAPER_DOWNLOAD_URL_UNSAFE", 1, { host });
+  }
+  return url;
+}
+
+function privateIpLiteral(host: string): boolean {
+  const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  if (isIP(literal) === 4) {
+    const [a, b] = literal.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+  }
+  if (isIP(literal) === 6) {
+    const normalized = literal.toLowerCase();
+    return normalized === "::1"
+      || normalized === "::"
+      || normalized.startsWith("fc")
+      || normalized.startsWith("fd")
+      || /^fe[89ab]/.test(normalized)
+      || normalized.startsWith("::ffff:127.")
+      || normalized.startsWith("::ffff:10.")
+      || normalized.startsWith("::ffff:192.168.");
+  }
+  return false;
+}
+
+async function inspectPaperDestination(destination: string, overwrite: boolean): Promise<{ destination: string; existed: boolean }> {
+  const absolute = resolvePath(destination);
+  const parent = dirname(absolute);
+  let parentInfo;
+  try {
+    parentInfo = await stat(parent);
+  } catch (error) {
+    throw paperFileError("The OA PDF destination directory could not be accessed.", parent, error);
+  }
+  if (!parentInfo.isDirectory()) throw new CliError("The OA PDF destination parent must be a directory.", "PAPER_DOWNLOAD_DESTINATION_INVALID", 2, { destination: absolute });
+
+  let existing;
+  try {
+    existing = await lstat(absolute);
+  } catch (error) {
+    if (nodeErrorCode(error) !== "ENOENT") throw paperFileError("The OA PDF destination could not be inspected.", absolute, error);
+  }
+  if (existing && !overwrite) throw new CliError("The OA PDF destination already exists; pass --overwrite to replace it.", "PAPER_DOWNLOAD_DESTINATION_EXISTS", 2, { destination: absolute });
+  if (existing?.isSymbolicLink() || (existing && !existing.isFile())) throw new CliError("The OA PDF destination must be a regular file and must not be a symbolic link.", "PAPER_DOWNLOAD_DESTINATION_INVALID", 2, { destination: absolute });
+  return { destination: absolute, existed: existing !== undefined };
+}
+
+async function streamPaperPdf(response: Response, tempPath: string, maxBytes: number): Promise<{ size: number; sha256: string; contentType: string }> {
+  if (!response.body) throw new CliError("The OA PDF response did not include a body.", "PAPER_DOWNLOAD_EMPTY", 1);
+  const rawLength = response.headers.get("content-length") ?? "";
+  const expectedLength = /^\d+$/.test(rawLength) ? Number(rawLength) : undefined;
+  if (expectedLength !== undefined && expectedLength > maxBytes) throw new CliError("The OA PDF exceeds the configured download limit.", "PAPER_DOWNLOAD_TOO_LARGE", 1, { expectedSize: expectedLength, maxBytes });
+  const reader = response.body.getReader();
+  const hash = createHash("sha256");
+  const signature: number[] = [];
+  let size = 0;
+  let handle;
+  try {
+    handle = await open(tempPath, "wx", 0o600);
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > maxBytes) throw new CliError("The OA PDF exceeds the configured download limit.", "PAPER_DOWNLOAD_TOO_LARGE", 1, { actualSize: size, maxBytes });
+      for (const byte of chunk.value) {
+        if (signature.length >= 1024) break;
+        signature.push(byte);
+      }
+      hash.update(chunk.value);
+      let offset = 0;
+      while (offset < chunk.value.byteLength) {
+        const result = await handle.write(chunk.value, offset, chunk.value.byteLength - offset, null);
+        if (result.bytesWritten <= 0) throw new Error("zero-byte file write");
+        offset += result.bytesWritten;
+      }
+    }
+    await handle.sync();
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    if (error instanceof CliError) throw error;
+    throw paperFileError("The OA PDF could not be written safely.", tempPath, error);
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+  if (!String.fromCharCode(...signature).includes("%PDF-")) throw new CliError("The OA response was not a PDF file.", "PAPER_DOWNLOAD_NOT_PDF", 1, { contentType: response.headers.get("content-type") ?? "" });
+  if (expectedLength !== undefined && !response.headers.get("content-encoding") && size !== expectedLength) throw new CliError("The OA PDF size did not match the server response.", "PAPER_DOWNLOAD_SIZE_MISMATCH", 1, { expectedSize: expectedLength, actualSize: size });
+  return { size, sha256: hash.digest("hex"), contentType: (response.headers.get("content-type") ?? "application/pdf").split(";", 1)[0]!.trim() };
+}
+
+async function finishPaperDownload(tempPath: string, destination: string, overwrite: boolean): Promise<void> {
+  if (overwrite) {
+    try {
+      await rename(tempPath, destination);
+      return;
+    } catch (error) {
+      throw paperFileError("The OA PDF could not be moved into place.", destination, error);
+    }
+  }
+  try {
+    await link(tempPath, destination);
+    return;
+  } catch (error) {
+    if (nodeErrorCode(error) === "EEXIST") throw paperDestinationAppeared(destination);
+  }
+  try {
+    await copyFile(tempPath, destination, fileSystemConstants.COPYFILE_EXCL);
+  } catch (error) {
+    if (nodeErrorCode(error) === "EEXIST") throw paperDestinationAppeared(destination);
+    throw paperFileError("The OA PDF could not be placed safely.", destination, error);
+  }
+}
+
+function paperDestinationAppeared(destination: string): CliError {
+  return new CliError("The OA PDF destination appeared while downloading; no file was overwritten.", "PAPER_DOWNLOAD_DESTINATION_EXISTS", 2, { destination });
+}
+
+function paperFileError(message: string, path: string, error: unknown): CliError {
+  return new CliError(message, "PAPER_DOWNLOAD_FILE_ERROR", 2, { path, cause: error instanceof Error ? error.message : String(error) });
+}
+
+function nodeErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
 }

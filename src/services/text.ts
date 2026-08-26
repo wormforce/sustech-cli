@@ -19,7 +19,7 @@ import type {
   LibraryReservation,
 } from "./library.js";
 import type { NcesCourseDetail, NcesCourseSummary } from "./nces.js";
-import type { PaperSummary } from "./papers.js";
+import type { OpenAccessPdfDownload, PaperSummary } from "./papers.js";
 import type { PmsPrintJob, PmsScanJob, PmsServerGroup, PmsStation, PmsUsageRecord } from "./pms.js";
 import type { WsProgramDetail, WsProgramSummary } from "./ws.js";
 
@@ -152,6 +152,19 @@ export function formatPapers(papers: readonly PaperSummary[], query: string): st
       `   DOI ${paper.doi || "unavailable"} · citations ${paper.citations} · OA ${paper.oa ? "yes" : "no"}`,
       ...(paper.pdfUrl ? [`   ${paper.pdfUrl}`] : []),
     ].join("\n")),
+  ].join("\n");
+}
+
+export function formatPaperDownload(result: OpenAccessPdfDownload): string {
+  return [
+    "Open-access PDF downloaded.",
+    `DOI: ${result.doi}`,
+    `Destination: ${result.destination}`,
+    `Source host: ${result.sourceHost}`,
+    `Size: ${result.size} bytes`,
+    `SHA-256: ${result.sha256}`,
+    `Content type: ${result.contentType}`,
+    `Overwritten: ${result.overwritten}`,
   ].join("\n");
 }
 

@@ -308,6 +308,7 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"], "USAGE"],
     [["auth", "check", "--service", "not-a-service", "--json"], "USAGE"],
     [["doctor", "--service", "tis,not-a-service", "--json"], "USAGE"],
+    [["papers", "fetch-oa", "not-a-doi", "--destination", "/tmp/paper.pdf", "--json"], "USAGE"],
     [["bb", "submit", "apply", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--expected-sha256", "not-a-sha", "--confirm", "--json"], "USAGE"],
   ] as const) {
     const result = runWithoutCredentials([...args]);

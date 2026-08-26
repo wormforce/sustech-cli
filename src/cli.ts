@@ -94,6 +94,7 @@ import {
   browseNces,
   buildPrimoSearchUrl,
   createBlackboardAttempt,
+  downloadOpenAccessPdf,
   downloadBlackboardContentAttachment,
   evaluateBlackboardSubmissionPreflight,
   formatServiceStatuses,
@@ -153,6 +154,7 @@ import {
   formatBlackboardUser,
   formatNcesCourses,
   formatNcesDetail,
+  formatPaperDownload,
   formatPapers,
   formatLibraryBookingUser,
   formatLibraryIdleSummary,
@@ -195,6 +197,7 @@ Usage:
   sustech wifi events [--minutes N]
   sustech services status [SERVICE]
   sustech papers search QUERY [--max N] [--min-year YYYY] [--open-access|--resolve-oa]
+  sustech papers fetch-oa DOI --destination PATH [--overwrite]
   sustech nces browse [--page N] [--page-size N] [--sort rating|reviews|name]
   sustech nces search QUERY
   sustech nces course ID
@@ -350,6 +353,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "resources search": ["category"],
   "wifi events": ["minutes"],
   "papers search": ["max", "min-year", "open-access", "resolve-oa"],
+  "papers fetch-oa": ["destination", "overwrite"],
   "nces browse": ["page", "page-size", "sort"],
   "bb user": ["credentials-file"],
   "bb courses": ["credentials-file"],
@@ -1495,6 +1499,17 @@ async function runPapers(
   values: Values,
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
+  if (positionals[1] === "fetch-oa" && positionals.length === 3) {
+    const doi = doiValue(positionals[2] ?? "");
+    const destination = required(values.destination, "--destination");
+    const downloaded = await downloadOpenAccessPdf(doi, destination, { overwrite: Boolean(values.overwrite) });
+    writeSuccess({
+      command: "papers fetch-oa",
+      data: downloaded,
+      text: formatPaperDownload(downloaded),
+    }, output);
+    return;
+  }
   if (positionals[1] !== "search") throw usageError(`Unknown command: ${positionals.join(" ")}`);
   const query = positionals.slice(2).join(" ").trim();
   if (!query) throw usageError("A paper search query is required.");
@@ -2517,6 +2532,14 @@ function opaqueToken(value: string, option: string): string {
     throw usageError(`${option} contains unsupported characters.`);
   }
   return value;
+}
+
+function doiValue(value: string): string {
+  const doi = value.trim();
+  if (doi.length > 512 || !/^10\.\d{4,9}\/\S+$/.test(doi) || /[\u0000-\u001f\u007f]/.test(doi)) {
+    throw usageError("A DOI must look like 10.1234/example and contain no whitespace or control characters.");
+  }
+  return doi;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number, option: string): number {

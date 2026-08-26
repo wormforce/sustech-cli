@@ -24,6 +24,7 @@ export const CONSEQUENCES: readonly Consequence[] = [
   consequence("library-booking.cancel", "high", true, "Cancels a library reservation.", "The released slot may be taken immediately.", "Read reservations back and confirm the exact reservation is absent.", "unavailable"),
   consequence("pms.upload", "low", false, "Uploads a document to the campus print queue.", "The document enters an account-visible queue, although printing is not triggered.", "Read print jobs back and match filename plus options.", "unavailable"),
   consequence("pms.delete", "high", true, "Deletes a queued print or scan document.", "The remote copy may be unrecoverable if no local source remains.", "Read the corresponding queue back and confirm the exact job is absent.", "unavailable"),
+  consequence("papers.fetch-oa", "low", true, "Writes one public open-access PDF to an explicit local destination.", "With --overwrite, an existing regular file at that exact destination is replaced.", "Use the returned absolute path, byte count, PDF signature validation, and SHA-256 digest.", "implemented"),
 ] as const;
 
 export function consequenceByOperation(operation: string): Consequence | undefined {
