@@ -50,6 +50,16 @@ const VALUE_OPTIONS = new Set([
   "--lab-id",
   "--class-kind",
   "--need-status",
+  "--room-id",
+  "--meeting-id",
+  "--title",
+  "--participants",
+  "--description",
+  "--dev-id",
+  "--member-kind",
+  "--member",
+  "--memo",
+  "--reservation-id",
   "--server-group",
   "--type",
   "--color",
@@ -92,6 +102,8 @@ export function inferCommandName(argv: string[]): string {
     || (group === "academic" && command === "snapshot")
     || (group === "bb" && command === "submit")
     || (group === "pms" && (command === "upload" || command === "delete"))
+    || (group === "booking" && ["create", "cancel"].includes(command))
+    || (group === "lib-booking" && ["create", "cancel"].includes(command))
   ) {
     return positionals.slice(0, 3).join(" ");
   }

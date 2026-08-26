@@ -15,8 +15,19 @@ import type {
   BlackboardUser,
 } from "./blackboard.js";
 import type { BookingUserProfile } from "./booking-auth.js";
-import type { BookingMeeting, BookingRoom } from "./booking.js";
 import type {
+  BookingCancelPreview,
+  BookingCancelSuccess,
+  BookingCreatePreview,
+  BookingCreateSuccess,
+  BookingMeeting,
+  BookingRoom,
+} from "./booking.js";
+import type {
+  LibraryBookingCancelPreview,
+  LibraryBookingCancelSuccess,
+  LibraryBookingCreatePreview,
+  LibraryBookingCreateSuccess,
   LibraryBookingUser,
   LibraryCampusGroup,
   LibraryIdleCategory,
@@ -67,6 +78,70 @@ export function formatBookingMeetings(meetings: readonly BookingMeeting[]): stri
   ].join("\n");
 }
 
+export function formatBookingCreatePreview(preview: BookingCreatePreview, applyCommand?: string): string {
+  const lines = [
+    "E-Hall booking create preview",
+    `${preview.target.roomId} · ${preview.target.start} to ${preview.target.end}`,
+    `Title ${preview.target.title || "(missing)"} · participants ${preview.target.participants}`,
+  ];
+  if (preview.room) {
+    lines.push(`Room ${preview.room.name} · capacity ${preview.room.capacity} · ${preview.room.location || preview.room.department || "location unavailable"}`);
+  }
+  if (preview.blockers.length > 0) {
+    lines.push("Blockers:");
+    lines.push(...preview.blockers.map((item) => `  - ${item.message}`));
+  }
+  if (preview.warnings.length > 0) {
+    lines.push("Warnings:");
+    lines.push(...preview.warnings.map((item) => `  - ${item.message}`));
+  }
+  if (preview.applyAllowed && applyCommand) {
+    lines.push(`Apply: ${applyCommand}`);
+  }
+  if (!preview.applyAllowed) {
+    lines.push("Apply command not generated because the live preflight is blocked.");
+  }
+  return lines.join("\n");
+}
+
+export function formatBookingCancelPreview(preview: BookingCancelPreview, applyCommand?: string): string {
+  const lines = [
+    "E-Hall booking cancel preview",
+    `Meeting ${preview.target.meetingId}`,
+  ];
+  if (preview.meeting) {
+    lines.push(`${preview.meeting.roomName || preview.meeting.roomId} · ${preview.meeting.startAt || "?"} to ${preview.meeting.endAt || "?"}`);
+  }
+  if (preview.blockers.length > 0) {
+    lines.push("Blockers:");
+    lines.push(...preview.blockers.map((item) => `  - ${item.message}`));
+  }
+  if (preview.applyAllowed && applyCommand) {
+    lines.push(`Apply: ${applyCommand}`);
+  }
+  if (!preview.applyAllowed) {
+    lines.push("Apply command not generated because the live preflight is blocked.");
+  }
+  return lines.join("\n");
+}
+
+export function formatBookingCreateSuccess(result: BookingCreateSuccess): string {
+  return [
+    "E-Hall booking created.",
+    `${result.meeting.id} · ${result.meeting.roomName || result.meeting.roomId}`,
+    `${result.meeting.startAt || result.target.start} to ${result.meeting.endAt || result.target.end}`,
+    result.verification.message,
+  ].join("\n");
+}
+
+export function formatBookingCancelSuccess(result: BookingCancelSuccess): string {
+  return [
+    "E-Hall booking cancelled.",
+    `${result.target.meetingId} · ${result.meeting.roomName || result.meeting.roomId}`,
+    result.verification.message,
+  ].join("\n");
+}
+
 export function formatLibraryBookingUser(user: LibraryBookingUser): string {
   return [
     "Library booking user",
@@ -112,6 +187,70 @@ export function formatLibraryReservations(items: readonly LibraryReservation[]):
       `${String(item.reservationId).padEnd(10)} ${item.title || item.roomName} · status ${item.status}`,
       `  ${item.labName} / ${item.roomName} · ${item.beginTime} to ${item.endTime}`,
     ].join("\n")),
+  ].join("\n");
+}
+
+export function formatLibraryBookingCreatePreview(preview: LibraryBookingCreatePreview, applyCommand?: string): string {
+  const lines = [
+    "Library booking create preview",
+    `${preview.target.devId} · ${preview.target.start} to ${preview.target.end}`,
+    `Title ${preview.target.title || "(missing)"} · memberKind ${preview.target.memberKind} · members ${preview.target.members.join(", ")}`,
+  ];
+  if (preview.room) {
+    lines.push(`Room ${preview.room.devName} · minimum ${preview.room.minReservationMinutes} min`);
+  }
+  if (preview.blockers.length > 0) {
+    lines.push("Blockers:");
+    lines.push(...preview.blockers.map((item) => `  - ${item.message}`));
+  }
+  if (preview.warnings.length > 0) {
+    lines.push("Warnings:");
+    lines.push(...preview.warnings.map((item) => `  - ${item.message}`));
+  }
+  if (preview.applyAllowed && applyCommand) {
+    lines.push(`Apply: ${applyCommand}`);
+  }
+  if (!preview.applyAllowed) {
+    lines.push("Apply command not generated because the live preflight is blocked.");
+  }
+  return lines.join("\n");
+}
+
+export function formatLibraryBookingCancelPreview(preview: LibraryBookingCancelPreview, applyCommand?: string): string {
+  const lines = [
+    "Library booking cancel preview",
+    `Reservation ${preview.target.reservationId}`,
+  ];
+  if (preview.reservation) {
+    lines.push(`${preview.reservation.roomName} · ${preview.reservation.beginTime} to ${preview.reservation.endTime}`);
+  }
+  if (preview.blockers.length > 0) {
+    lines.push("Blockers:");
+    lines.push(...preview.blockers.map((item) => `  - ${item.message}`));
+  }
+  if (preview.applyAllowed && applyCommand) {
+    lines.push(`Apply: ${applyCommand}`);
+  }
+  if (!preview.applyAllowed) {
+    lines.push("Apply command not generated because the live preflight is blocked.");
+  }
+  return lines.join("\n");
+}
+
+export function formatLibraryBookingCreateSuccess(result: LibraryBookingCreateSuccess): string {
+  return [
+    "Library booking created.",
+    `${result.reservation.reservationId} · ${result.reservation.roomName}`,
+    `${result.reservation.beginTime} to ${result.reservation.endTime}`,
+    result.verification.message,
+  ].join("\n");
+}
+
+export function formatLibraryBookingCancelSuccess(result: LibraryBookingCancelSuccess): string {
+  return [
+    "Library booking cancelled.",
+    `${result.target.reservationId} · ${result.reservation.roomName}`,
+    result.verification.message,
   ].join("\n");
 }
 

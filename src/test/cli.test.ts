@@ -455,7 +455,7 @@ test("academic snapshot CLI validates save destinations before auth and diffs ve
   }
 });
 
-test("booking, library-booking, and PMS expose authenticated Agent commands", () => {
+test("booking, library-booking, and PMS expose authenticated commands with explicit mutation metadata", () => {
   const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities as Array<{
     command: string;
     kind: string;
@@ -464,13 +464,20 @@ test("booking, library-booking, and PMS expose authenticated Agent commands", ()
   }>;
   for (const [command, authentication] of [
     ["booking rooms", "booking"],
+    ["booking create apply", "booking"],
     ["lib-booking reservations", "lib-booking"],
+    ["lib-booking cancel apply", "lib-booking"],
     ["pms jobs", "pms"],
   ] as const) {
     const capability = capabilities.find((entry) => entry.command === command);
-    assert.equal(capability?.kind, "read");
+    if (command.endsWith("apply")) {
+      assert.equal(capability?.kind, "mutation");
+      assert.equal(capability?.confirmation, "required");
+    } else {
+      assert.equal(capability?.kind, "read");
+      assert.equal(capability?.confirmation, "none");
+    }
     assert.equal(capability?.authentication, authentication);
-    assert.equal(capability?.confirmation, "none");
   }
   assert.equal(capabilities.find((entry) => entry.command === "pms upload preview")?.kind, "plan");
   assert.equal(capabilities.find((entry) => entry.command === "pms upload apply")?.kind, "mutation");
@@ -493,6 +500,43 @@ test("booking, library-booking, and PMS expose authenticated Agent commands", ()
     const result = runWithoutCredentials(args);
     assert.equal(result.status, 2);
     assert.equal(JSON.parse(result.stdout).error.code, "CREDENTIALS_REQUIRED");
+  }
+});
+
+test("booking and library-booking apply commands require confirmation before credentials or network", () => {
+  for (const args of [
+    [
+      "booking", "create", "apply",
+      "--room-id", "ZC02",
+      "--start", "2026-08-27T10:00",
+      "--end", "2026-08-27T11:00",
+      "--title", "team sync",
+      "--json",
+    ],
+    [
+      "booking", "cancel", "apply",
+      "--meeting-id", "M-1",
+      "--json",
+    ],
+    [
+      "lib-booking", "create", "apply",
+      "--kind-id", "1",
+      "--lab-id", "2",
+      "--dev-id", "13",
+      "--start", "2026-08-27T10:00",
+      "--end", "2026-08-27T11:00",
+      "--title", "study group",
+      "--json",
+    ],
+    [
+      "lib-booking", "cancel", "apply",
+      "--reservation-id", "9001",
+      "--json",
+    ],
+  ]) {
+    const result = runWithoutCredentials(args);
+    assert.equal(result.status, 3);
+    assert.equal(JSON.parse(result.stdout).error.code, "CONFIRMATION_REQUIRED");
   }
 });
 

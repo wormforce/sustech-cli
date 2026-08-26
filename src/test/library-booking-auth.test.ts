@@ -256,6 +256,73 @@ test("LibraryBookingSession fails closed when the CAS exchange never yields ic-c
   });
 });
 
+test("LibraryBookingSession exposes typed allowlisted write methods without relaxing generic read-only fetch", async () => {
+  const dynamicServiceUrl = "https://booking.lib.sustech.edu.cn/ic-web/auth/server?uuid=typed-write";
+  const casLoginUrl = `https://cas.sustech.edu.cn/cas/login?service=${encodeURIComponent(dynamicServiceUrl)}`;
+  const seen: Array<{ url: string; method: string; cookie: string; body: Record<string, unknown> }> = [];
+
+  const session = new LibraryBookingSession(credentials, {
+    fetchImpl: async (input, init = {}) => {
+      const url = String(input);
+      const method = (init.method ?? "GET").toUpperCase();
+      if (url.startsWith("https://booking.lib.sustech.edu.cn/ic-web/auth/address?")) {
+        return jsonResponse({
+          code: 0,
+          message: "ok",
+          data: "https://authserver.sustech.edu.cn/authcenter/toLoginPage?uuid=typed-write",
+        });
+      }
+      if (url === "https://authserver.sustech.edu.cn/authcenter/toLoginPage?uuid=typed-write") {
+        return redirectResponse(casLoginUrl);
+      }
+      if (url === casLoginUrl && method === "GET") {
+        return htmlResponse("<form><input name=\"execution\" value=\"e1s1\" /></form>");
+      }
+      if (url === casLoginUrl && method === "POST") {
+        return redirectResponse(`${dynamicServiceUrl}&ticket=ST-1`, 302, "TGC=tgc-123; Domain=cas.sustech.edu.cn; Path=/");
+      }
+      if (url === `${dynamicServiceUrl}&ticket=ST-1`) {
+        return redirectResponse("https://booking.lib.sustech.edu.cn/ic/home", 302, "ic-cookie=ic-123; Domain=booking.lib.sustech.edu.cn; Path=/");
+      }
+      if (url === "https://booking.lib.sustech.edu.cn/ic/home") {
+        return htmlResponse("<html>ok</html>");
+      }
+      if (url === "https://booking.lib.sustech.edu.cn/ic-web/reserve" || url === "https://booking.lib.sustech.edu.cn/ic-web/reserve/delete") {
+        seen.push({
+          url,
+          method,
+          cookie: new Headers(init.headers).get("cookie") ?? "",
+          body: JSON.parse(String(init.body)),
+        });
+        return jsonResponse({ code: 0, message: "ok", data: { ok: true } });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    },
+  });
+
+  await session.createReservation({
+    sysKind: 1,
+    appAccNo: 12200000,
+    memberKind: 1,
+    resvMember: [12200000],
+    resvBeginTime: "2026-08-28 10:00:00",
+    resvEndTime: "2026-08-28 11:00:00",
+    testName: "study group",
+    resvProperty: 0,
+    resvDev: [13],
+    memo: "",
+  });
+  await session.cancelReservation("uuid-9001");
+
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0]?.url, "https://booking.lib.sustech.edu.cn/ic-web/reserve");
+  assert.equal(seen[0]?.method, "POST");
+  assert.match(seen[0]?.cookie ?? "", /ic-cookie=ic-123/);
+  assert.equal((seen[0]?.body.resvDev as number[])[0], 13);
+  assert.equal(seen[1]?.url, "https://booking.lib.sustech.edu.cn/ic-web/reserve/delete");
+  assert.equal(seen[1]?.body.uuid, "uuid-9001");
+});
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     ...init,

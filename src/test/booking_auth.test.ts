@@ -250,6 +250,68 @@ test("BookingSession blocks booking write endpoints even after a successful logi
   assert.equal(requests, 5);
 });
 
+test("BookingSession exposes typed allowlisted write methods without reopening generic POST access", async () => {
+  const seen: Array<{ url: string; auth: string; cookie: string; body: Record<string, unknown> }> = [];
+  const session = new BookingSession(credentials, {
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.startsWith("https://cas.sustech.edu.cn/cas/login?service=") && method === "GET") {
+        return textResponse("<input name=\"execution\" value=\"exec-1\">");
+      }
+      if (url.startsWith("https://cas.sustech.edu.cn/cas/login?service=") && method === "POST") {
+        return textResponse("", 302, { location: "https://booking.sustech.edu.cn/redirect?ticket=ST-BOOKING-4" });
+      }
+      if (url === "https://booking.sustech.edu.cn/redirect?ticket=ST-BOOKING-4") {
+        return textResponse("", 302, {
+          location: "https://booking.sustech.edu.cn/home",
+          "set-cookie": "BOOKINGSESSID=booking-cookie; Domain=booking.sustech.edu.cn; Path=/",
+        });
+      }
+      if (url === "https://booking.sustech.edu.cn/home") {
+        return textResponse("<html>ok</html>", 200, { "content-type": "text/html" });
+      }
+      if (url === "https://booking.sustech.edu.cn/api/SystemApi/GetUserProfile") {
+        return jsonResponse({
+          IsSuccess: true,
+          Data: {
+            Token: "12345678-1234-1234-1234-123456789abc",
+            UserInfoModel: { XM: "Test Student", YHM: credentials.sid },
+          },
+        });
+      }
+      if (url === "https://booking.sustech.edu.cn/api/SystemApi/AddMeeting" || url === "https://booking.sustech.edu.cn/api/SystemApi/CancelMeeting") {
+        const headers = new Headers(init?.headers);
+        seen.push({
+          url,
+          auth: headers.get("authorization") ?? "",
+          cookie: headers.get("cookie") ?? "",
+          body: JSON.parse(String(init?.body)),
+        });
+        return jsonResponse({ IsSuccess: true, Data: { ok: true } });
+      }
+      throw new Error(`Unexpected request ${method} ${url}`);
+    },
+  });
+
+  await session.addMeeting({
+    roomId: "ZC02",
+    title: "team sync",
+    start: "2026-08-28T10:00:00",
+    end: "2026-08-28T11:00:00",
+    participants: 2,
+  });
+  await session.cancelMeeting("M-1");
+
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0]?.url, "https://booking.sustech.edu.cn/api/SystemApi/AddMeeting");
+  assert.equal(seen[0]?.auth, "12345678-1234-1234-1234-123456789abc");
+  assert.match(seen[0]?.cookie ?? "", /BOOKINGSESSID=booking-cookie/);
+  assert.equal((seen[0]?.body.Data as Record<string, unknown>).MeetingRoomID, "ZC02");
+  assert.equal(seen[1]?.url, "https://booking.sustech.edu.cn/api/SystemApi/CancelMeeting");
+  assert.equal((seen[1]?.body.Data as Record<string, unknown>).MeetingID, "M-1");
+});
+
 function textResponse(body: string, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(body, { status, headers: new Headers(headers) });
 }

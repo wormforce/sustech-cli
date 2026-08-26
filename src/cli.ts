@@ -126,6 +126,14 @@ import {
   attachBlackboardAttemptFile,
   browseNces,
   buildPrimoSearchUrl,
+  buildBookingCreatePreview,
+  buildBookingCancelPreview,
+  applyBookingCreate,
+  applyBookingCancel,
+  buildLibraryBookingCreatePreview,
+  buildLibraryBookingCancelPreview,
+  applyLibraryBookingCreate,
+  applyLibraryBookingCancel,
   createBlackboardAttempt,
   downloadOpenAccessPdf,
   downloadBlackboardContentAttachment,
@@ -188,6 +196,10 @@ import {
 } from "./services/index.js";
 import {
   formatBookingMeetings,
+  formatBookingCreatePreview,
+  formatBookingCreateSuccess,
+  formatBookingCancelPreview,
+  formatBookingCancelSuccess,
   formatBookingProfile,
   formatBookingRooms,
   formatBlackboardAssignments,
@@ -207,6 +219,10 @@ import {
   formatPaperDownload,
   formatPapers,
   formatLibraryBookingUser,
+  formatLibraryBookingCreatePreview,
+  formatLibraryBookingCreateSuccess,
+  formatLibraryBookingCancelPreview,
+  formatLibraryBookingCancelSuccess,
   formatLibraryIdleSummary,
   formatLibraryLabs,
   formatLibraryReservations,
@@ -275,12 +291,20 @@ Usage:
   sustech booking whoami
   sustech booking rooms [QUERY] [--available] [--page N] [--page-size N]
   sustech booking my-meetings [--page N] [--page-size N]
+  sustech booking create preview --room-id ROOM_ID --start YYYY-MM-DDTHH:MM --end YYYY-MM-DDTHH:MM --title TEXT [--participants N] [--description TEXT]
+  sustech booking create apply --room-id ROOM_ID --start YYYY-MM-DDTHH:MM --end YYYY-MM-DDTHH:MM --title TEXT [--participants N] [--description TEXT] --confirm
+  sustech booking cancel preview --meeting-id ID
+  sustech booking cancel apply --meeting-id ID --confirm
   sustech lib-booking whoami
   sustech lib-booking home-summary
   sustech lib-booking labs [--class-kind N]
   sustech lib-booking rooms --kind-id N --lab-id N [--class-kind N]
   sustech lib-booking reservation-count
   sustech lib-booking reservations [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--need-status N] [--page N] [--page-size N]
+  sustech lib-booking create preview --kind-id N --lab-id N --dev-id N --start YYYY-MM-DDTHH:MM --end YYYY-MM-DDTHH:MM --title TEXT [--class-kind N] [--member-kind 1|2] [--member ACC_NO ...] [--memo TEXT]
+  sustech lib-booking create apply --kind-id N --lab-id N --dev-id N --start YYYY-MM-DDTHH:MM --end YYYY-MM-DDTHH:MM --title TEXT [--class-kind N] [--member-kind 1|2] [--member ACC_NO ...] [--memo TEXT] --confirm
+  sustech lib-booking cancel preview --reservation-id N
+  sustech lib-booking cancel apply --reservation-id N --confirm
   sustech pms check
   sustech pms server-groups
   sustech pms stations [--server-group N]
@@ -337,7 +361,7 @@ Credentials:
 
 Safety:
   TIS preview commands are local-only. Blackboard submission preview performs authenticated read-only checks.
-  Blackboard/TIS/PMS apply commands change remote state only with --confirm.
+  Blackboard/TIS/booking/lib-booking/PMS apply commands change remote state only with --confirm.
 `;
 
 type Values = OutputFlags & {
@@ -405,6 +429,16 @@ type Values = OutputFlags & {
   "lab-id"?: string;
   "class-kind"?: string;
   "need-status"?: string;
+  "room-id"?: string;
+  "meeting-id"?: string;
+  title?: string;
+  participants?: string;
+  description?: string;
+  "dev-id"?: string;
+  "member-kind"?: string;
+  member?: string[];
+  memo?: string;
+  "reservation-id"?: string;
   "server-group"?: string;
   type?: string;
   color?: string;
@@ -469,12 +503,20 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "booking whoami": ["credentials-file"],
   "booking rooms": ["credentials-file", "available", "page", "page-size"],
   "booking my-meetings": ["credentials-file", "page", "page-size"],
+  "booking create preview": ["credentials-file", "room-id", "start", "end", "title", "participants", "description"],
+  "booking create apply": ["credentials-file", "room-id", "start", "end", "title", "participants", "description", "confirm"],
+  "booking cancel preview": ["credentials-file", "meeting-id"],
+  "booking cancel apply": ["credentials-file", "meeting-id", "confirm"],
   "lib-booking whoami": ["credentials-file"],
   "lib-booking home-summary": ["credentials-file"],
   "lib-booking labs": ["credentials-file", "class-kind"],
   "lib-booking rooms": ["credentials-file", "kind-id", "lab-id", "class-kind"],
   "lib-booking reservation-count": ["credentials-file"],
   "lib-booking reservations": ["credentials-file", "start", "end", "need-status", "page", "page-size"],
+  "lib-booking create preview": ["credentials-file", "kind-id", "lab-id", "dev-id", "start", "end", "title", "class-kind", "member-kind", "member", "memo"],
+  "lib-booking create apply": ["credentials-file", "kind-id", "lab-id", "dev-id", "start", "end", "title", "class-kind", "member-kind", "member", "memo", "confirm"],
+  "lib-booking cancel preview": ["credentials-file", "reservation-id"],
+  "lib-booking cancel apply": ["credentials-file", "reservation-id", "confirm"],
   "pms check": ["credentials-file"],
   "pms server-groups": ["credentials-file"],
   "pms stations": ["credentials-file", "server-group"],
@@ -608,6 +650,16 @@ async function main(argv: string[]): Promise<void> {
         "lab-id": { type: "string" },
         "class-kind": { type: "string" },
         "need-status": { type: "string" },
+        "room-id": { type: "string" },
+        "meeting-id": { type: "string" },
+        title: { type: "string" },
+        participants: { type: "string" },
+        description: { type: "string" },
+        "dev-id": { type: "string" },
+        "member-kind": { type: "string" },
+        member: { type: "string", multiple: true },
+        memo: { type: "string" },
+        "reservation-id": { type: "string" },
         "server-group": { type: "string" },
         type: { type: "string" },
         color: { type: "string" },
@@ -2838,6 +2890,87 @@ async function runBooking(
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
   const command = positionals[1];
+  const operation = positionals[2];
+  if (command === "create" && operation === "preview" && positionals.length === 3) {
+    const target = bookingCreateTarget(values);
+    const session = await bookingService(values);
+    const preview = await buildBookingCreatePreview(session, target);
+    const confirmation = preview.applyAllowed
+      ? buildBookingCreateApplyConfirmation(target, values)
+      : undefined;
+    writeSuccess({
+      command: "booking create preview",
+      data: {
+        mode: "preview",
+        mutation: false,
+        target,
+        preview,
+        confirmation: {
+          required: true,
+          available: Boolean(confirmation),
+          ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+        },
+      },
+      text: formatBookingCreatePreview(preview, confirmation?.command),
+    }, output);
+    return;
+  }
+  if (command === "create" && operation === "apply" && positionals.length === 3) {
+    if (!values.confirm) throw new ConfirmationRequiredError("E-Hall booking create", "E-Hall booking create changes campus room state. Re-run the exact previewed command with --confirm.");
+    const target = bookingCreateTarget(values);
+    const session = await bookingService(values);
+    const result = await applyBookingCreate(session, target);
+    writeSuccess({
+      command: "booking create apply",
+      data: {
+        mode: "apply",
+        mutation: true,
+        ...result,
+      },
+      text: formatBookingCreateSuccess(result),
+    }, output);
+    return;
+  }
+  if (command === "cancel" && operation === "preview" && positionals.length === 3) {
+    const target = bookingCancelTarget(values);
+    const session = await bookingService(values);
+    const preview = await buildBookingCancelPreview(session, target);
+    const confirmation = preview.applyAllowed
+      ? buildBookingCancelApplyConfirmation(target, values)
+      : undefined;
+    writeSuccess({
+      command: "booking cancel preview",
+      data: {
+        mode: "preview",
+        mutation: false,
+        target,
+        preview,
+        confirmation: {
+          required: true,
+          available: Boolean(confirmation),
+          ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+        },
+      },
+      text: formatBookingCancelPreview(preview, confirmation?.command),
+    }, output);
+    return;
+  }
+  if (command === "cancel" && operation === "apply" && positionals.length === 3) {
+    if (!values.confirm) throw new ConfirmationRequiredError("E-Hall booking cancel", "E-Hall booking cancel releases a live room slot. Re-run the exact previewed command with --confirm.");
+    const target = bookingCancelTarget(values);
+    const session = await bookingService(values);
+    const result = await applyBookingCancel(session, target);
+    writeSuccess({
+      command: "booking cancel apply",
+      data: {
+        mode: "apply",
+        mutation: true,
+        ...result,
+      },
+      text: formatBookingCancelSuccess(result),
+    }, output);
+    return;
+  }
   if (command === "whoami" && positionals.length === 2) {
     const session = await bookingService(values);
     await session.login();
@@ -2887,6 +3020,87 @@ async function runLibraryBooking(
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
   const command = positionals[1];
+  const operation = positionals[2];
+  if (command === "create" && operation === "preview" && positionals.length === 3) {
+    const target = libraryBookingCreateTarget(values);
+    const session = await libraryBookingService(values);
+    const preview = await buildLibraryBookingCreatePreview(session, target);
+    const confirmation = preview.applyAllowed
+      ? buildLibraryBookingCreateApplyConfirmation(target, values)
+      : undefined;
+    writeSuccess({
+      command: "lib-booking create preview",
+      data: {
+        mode: "preview",
+        mutation: false,
+        target,
+        preview,
+        confirmation: {
+          required: true,
+          available: Boolean(confirmation),
+          ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+        },
+      },
+      text: formatLibraryBookingCreatePreview(preview, confirmation?.command),
+    }, output);
+    return;
+  }
+  if (command === "create" && operation === "apply" && positionals.length === 3) {
+    if (!values.confirm) throw new ConfirmationRequiredError("Library booking create", "Library booking create changes a live reservation slot. Re-run the exact previewed command with --confirm.");
+    const target = libraryBookingCreateTarget(values);
+    const session = await libraryBookingService(values);
+    const result = await applyLibraryBookingCreate(session, target);
+    writeSuccess({
+      command: "lib-booking create apply",
+      data: {
+        mode: "apply",
+        mutation: true,
+        ...result,
+      },
+      text: formatLibraryBookingCreateSuccess(result),
+    }, output);
+    return;
+  }
+  if (command === "cancel" && operation === "preview" && positionals.length === 3) {
+    const target = libraryBookingCancelTarget(values);
+    const session = await libraryBookingService(values);
+    const preview = await buildLibraryBookingCancelPreview(session, target);
+    const confirmation = preview.applyAllowed
+      ? buildLibraryBookingCancelApplyConfirmation(target, values)
+      : undefined;
+    writeSuccess({
+      command: "lib-booking cancel preview",
+      data: {
+        mode: "preview",
+        mutation: false,
+        target,
+        preview,
+        confirmation: {
+          required: true,
+          available: Boolean(confirmation),
+          ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+        },
+      },
+      text: formatLibraryBookingCancelPreview(preview, confirmation?.command),
+    }, output);
+    return;
+  }
+  if (command === "cancel" && operation === "apply" && positionals.length === 3) {
+    if (!values.confirm) throw new ConfirmationRequiredError("Library booking cancel", "Library booking cancel releases a live reservation slot. Re-run the exact previewed command with --confirm.");
+    const target = libraryBookingCancelTarget(values);
+    const session = await libraryBookingService(values);
+    const result = await applyLibraryBookingCancel(session, target);
+    writeSuccess({
+      command: "lib-booking cancel apply",
+      data: {
+        mode: "apply",
+        mutation: true,
+        ...result,
+      },
+      text: formatLibraryBookingCancelSuccess(result),
+    }, output);
+    return;
+  }
   if (command === "whoami" && positionals.length === 2) {
     const session = await libraryBookingService(values);
     const user = await getLibraryBookingUser(session);
@@ -3822,6 +4036,103 @@ function buildBlackboardSubmitApplyConfirmation(
   return { required: true, argv, command: argv.map(shellQuote).join(" ") };
 }
 
+function buildBookingCreateApplyConfirmation(
+  target: ReturnType<typeof bookingCreateTarget>,
+  options: Pick<Values, "credentials-file" | "profile">,
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "booking",
+    "create",
+    "apply",
+    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--room-id",
+    target.roomId,
+    "--start",
+    target.start,
+    "--end",
+    target.end,
+    "--title",
+    target.title,
+    "--participants",
+    String(target.participants),
+    ...(target.description ? ["--description", target.description] : []),
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+function buildBookingCancelApplyConfirmation(
+  target: ReturnType<typeof bookingCancelTarget>,
+  options: Pick<Values, "credentials-file" | "profile">,
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "booking",
+    "cancel",
+    "apply",
+    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--meeting-id",
+    target.meetingId,
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+function buildLibraryBookingCreateApplyConfirmation(
+  target: ReturnType<typeof libraryBookingCreateTarget>,
+  options: Pick<Values, "credentials-file" | "profile">,
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "lib-booking",
+    "create",
+    "apply",
+    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--kind-id",
+    String(target.kindId),
+    "--lab-id",
+    String(target.labId),
+    "--dev-id",
+    String(target.devId),
+    "--start",
+    target.start,
+    "--end",
+    target.end,
+    "--title",
+    target.title,
+    "--class-kind",
+    String(target.classKind),
+    "--member-kind",
+    String(target.memberKind),
+    ...target.members.flatMap((value) => ["--member", String(value)]),
+    ...(target.memo ? ["--memo", target.memo] : []),
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+function buildLibraryBookingCancelApplyConfirmation(
+  target: ReturnType<typeof libraryBookingCancelTarget>,
+  options: Pick<Values, "credentials-file" | "profile">,
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "lib-booking",
+    "cancel",
+    "apply",
+    ...(options["credentials-file"] ? ["--credentials-file", options["credentials-file"]] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--reservation-id",
+    String(target.reservationId),
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9._/:=-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -3851,11 +4162,121 @@ function suppliedOptionNames(argv: readonly string[]): Set<string> {
   return names;
 }
 
+function bookingCreateTarget(values: Values): {
+  roomId: string;
+  title: string;
+  start: string;
+  end: string;
+  participants: number;
+  description?: string;
+} {
+  return {
+    roomId: opaqueToken(required(values["room-id"], "--room-id"), "--room-id"),
+    title: inlineText(required(values.title, "--title"), "--title", 160),
+    start: localDateTime(required(values.start, "--start"), "--start"),
+    end: localDateTime(required(values.end, "--end"), "--end"),
+    participants: parsePositiveInteger(values.participants, 1, "--participants"),
+    description: optionalInlineText(values.description, "--description", 500),
+  };
+}
+
+function bookingCancelTarget(values: Values): { meetingId: string } {
+  return {
+    meetingId: opaqueToken(required(values["meeting-id"], "--meeting-id"), "--meeting-id"),
+  };
+}
+
+function libraryBookingCreateTarget(values: Values): {
+  classKind: number;
+  kindId: number;
+  labId: number;
+  devId: number;
+  title: string;
+  start: string;
+  end: string;
+  memberKind: 1 | 2;
+  members: number[];
+  memo?: string;
+} {
+  return {
+    classKind: parsePositiveInteger(values["class-kind"], 1, "--class-kind"),
+    kindId: parsePositiveInteger(required(values["kind-id"], "--kind-id"), 1, "--kind-id"),
+    labId: parsePositiveInteger(required(values["lab-id"], "--lab-id"), 1, "--lab-id"),
+    devId: parsePositiveInteger(required(values["dev-id"], "--dev-id"), 1, "--dev-id"),
+    title: inlineText(required(values.title, "--title"), "--title", 160),
+    start: localDateTime(required(values.start, "--start"), "--start"),
+    end: localDateTime(required(values.end, "--end"), "--end"),
+    memberKind: memberKindValue(values["member-kind"]),
+    members: (values.member ?? []).map((value) => parsePositiveInteger(value, 1, "--member")),
+    memo: optionalInlineText(values.memo, "--memo", 500),
+  };
+}
+
+function libraryBookingCancelTarget(values: Values): { reservationId: number } {
+  return {
+    reservationId: parsePositiveInteger(required(values["reservation-id"], "--reservation-id"), 1, "--reservation-id"),
+  };
+}
+
 function opaqueToken(value: string, option: string): string {
   if (!/^[A-Za-z0-9._:-]{1,160}$/.test(value)) {
     throw usageError(`${option} contains unsupported characters.`);
   }
   return value;
+}
+
+function inlineText(value: string, option: string, maxLength: number): string {
+  const text = value.trim();
+  if (!text) throw usageError(`${option} cannot be empty.`);
+  if (text.length > maxLength) throw usageError(`${option} cannot exceed ${maxLength} characters.`);
+  if (/[\u0000-\u001f\u007f]/.test(text)) throw usageError(`${option} cannot contain control characters.`);
+  return text;
+}
+
+function optionalInlineText(value: string | undefined, option: string, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  const text = value.trim();
+  if (!text) return undefined;
+  if (text.length > maxLength) throw usageError(`${option} cannot exceed ${maxLength} characters.`);
+  if (/[\u0000-\u001f\u007f]/.test(text)) throw usageError(`${option} cannot contain control characters.`);
+  return text;
+}
+
+function localDateTime(value: string, option: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+  if (!match) throw usageError(`${option} must be YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS.`);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText ?? "00");
+  const parsed = new Date(`${yearText}-${monthText}-${dayText}T${hourText}:${minuteText}:${String(second).padStart(2, "0")}+08:00`);
+  if (
+    Number.isNaN(parsed.getTime())
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > 31
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    throw usageError(`${option} must be a valid local date-time.`);
+  }
+  const check = new Date(`${yearText}-${monthText}-${dayText}T${hourText}:${minuteText}:${String(second).padStart(2, "0")}Z`);
+  if (
+    check.getUTCFullYear() !== year
+    || check.getUTCMonth() + 1 !== month
+    || check.getUTCDate() !== day
+    || check.getUTCHours() !== hour
+    || check.getUTCMinutes() !== minute
+    || check.getUTCSeconds() !== second
+  ) {
+    throw usageError(`${option} must be a valid local date-time.`);
+  }
+  return `${yearText}-${monthText}-${dayText}T${hourText}:${minuteText}:${String(second).padStart(2, "0")}`;
 }
 
 function doiValue(value: string): string {
@@ -4032,6 +4453,12 @@ function selectionCultivation(value: string | undefined): "1" | "2" {
   if (value === undefined || value === "1") return "1";
   if (value === "2") return "2";
   throw usageError("--cultivation must be 1 or 2.");
+}
+
+function memberKindValue(value: string | undefined): 1 | 2 {
+  if (value === undefined || value === "1") return 1;
+  if (value === "2") return 2;
+  throw usageError("--member-kind must be 1 or 2.");
 }
 
 function parseBidPicks(values: readonly string[]): BidPick[] {

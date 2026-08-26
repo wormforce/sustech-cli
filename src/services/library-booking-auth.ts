@@ -40,6 +40,8 @@ interface Cookie {
   path: string;
 }
 
+type LibraryMutationPath = "/ic-web/reserve" | "/ic-web/reserve/delete";
+
 export interface LibraryBookingSessionOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -147,6 +149,25 @@ export class LibraryBookingSession implements ServiceAdapter {
     return response;
   }
 
+  public async createReservation(payload: {
+    sysKind: number;
+    appAccNo: number;
+    memberKind: number;
+    resvMember: number[];
+    resvBeginTime: string;
+    resvEndTime: string;
+    testName: string;
+    resvProperty: number;
+    resvDev: number[];
+    memo: string;
+  }): Promise<Record<string, unknown>> {
+    return this.invokeMutation("/ic-web/reserve", payload);
+  }
+
+  public async cancelReservation(uuid: string): Promise<Record<string, unknown>> {
+    return this.invokeMutation("/ic-web/reserve/delete", { uuid });
+  }
+
   private async loginOnce(): Promise<void> {
     const casLoginUrl = await this.resolveCasLoginUrl();
     const loginPage = await this.requestRaw(casLoginUrl.toString());
@@ -184,6 +205,64 @@ export class LibraryBookingSession implements ServiceAdapter {
         service: "library-booking",
       });
     }
+  }
+
+  private async invokeMutation(path: LibraryMutationPath, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.login();
+    const response = await this.requestRaw(requestUrl(LIBRARY_BOOKING_BASE, path), {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json;charset=UTF-8",
+      },
+      body: JSON.stringify(payload),
+      redirect: "manual",
+    });
+    if (isRedirect(response.status)) {
+      throw new CliError("Library booking mutation endpoints are not allowed to redirect.", "UNSAFE_REDIRECT", 1, {
+        service: "library-booking",
+        path,
+        status: response.status,
+      });
+    }
+    const body = await response.text();
+    if (looksOffCampus(response, body)) {
+      throw new CliError(
+        "Library booking blocked the mutation request before it could complete. Verify campus-network access before retrying manually.",
+        "CAMPUS_NETWORK_REQUIRED",
+        2,
+        { service: "library-booking", path },
+      );
+    }
+    if (!response.ok) {
+      throw new CliError("Library booking mutation returned an HTTP error.", "SERVICE_HTTP_ERROR", 1, {
+        service: "library-booking",
+        path,
+        status: response.status,
+      });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch (error) {
+      throw new CliError("Library booking mutation returned invalid JSON.", "SERVICE_PROTOCOL_ERROR", 1, {
+        service: "library-booking",
+        path,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const envelope = isRecord(parsed) ? parsed : {};
+    const code = typeof envelope.code === "number" ? envelope.code : Number(envelope.code ?? Number.NaN);
+    const message = typeof envelope.message === "string" ? envelope.message : "";
+    if (code !== 0) {
+      throw new CliError("Library booking mutation was rejected by the upstream service.", "SERVICE_UPSTREAM_ERROR", 1, {
+        service: "library-booking",
+        path,
+        code,
+        message,
+      });
+    }
+    return isRecord(envelope.data) ? envelope.data : {};
   }
 
   private async resolveCasLoginUrl(): Promise<URL> {

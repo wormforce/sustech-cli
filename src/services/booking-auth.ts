@@ -10,6 +10,7 @@ export const BOOKING_SERVICE_URL = `${BOOKING_BASE}/redirect`;
 const GET_USER_PROFILE_PATH = "/api/SystemApi/GetUserProfile";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const OFF_CAMPUS_BODY = "Access forbidden, please contact administrator.";
+type BookingMutationMethod = "AddMeeting" | "CancelMeeting";
 
 export const BOOKING_READ_ONLY_PATHS = new Set<string>([
   GET_USER_PROFILE_PATH,
@@ -179,6 +180,30 @@ export class BookingSession implements ServiceAdapter {
     return response;
   }
 
+  public async addMeeting(input: {
+    roomId: string;
+    title: string;
+    start: string;
+    end: string;
+    participants: number;
+    description?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.invokeMutation("AddMeeting", {
+      MeetingRoomID: input.roomId,
+      MeetingName: input.title,
+      MeetingStart: input.start,
+      MeetingEnd: input.end,
+      NumberOfParticipants: input.participants,
+      MeetingDesc: input.description ?? "",
+    });
+  }
+
+  public async cancelMeeting(meetingId: string): Promise<Record<string, unknown>> {
+    return this.invokeMutation("CancelMeeting", {
+      MeetingID: meetingId,
+    });
+  }
+
   private async exchangeTicket(ticket: string): Promise<string> {
     const response = await this.requestRaw(new URL(GET_USER_PROFILE_PATH, this.baseUrl).toString(), {
       method: "POST",
@@ -246,6 +271,66 @@ export class BookingSession implements ServiceAdapter {
       ),
     };
     return token;
+  }
+
+  private async invokeMutation(method: BookingMutationMethod, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!this.authenticated) await this.login();
+    const url = new URL(`/api/SystemApi/${method}`, this.baseUrl);
+    const response = await this.requestRaw(url.toString(), withAuthorization({
+      method: "POST",
+      headers: {
+        accept: "application/json, text/javascript, */*; q=0.01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        MessageType: 1002,
+        MessageID: randomUUID(),
+        Data: data,
+      }),
+    }, this.token), { followRedirects: false });
+    if (isRedirect(response.status)) {
+      throw new CliError("Booking mutation endpoints are not allowed to redirect.", "UNSAFE_REDIRECT", 1, {
+        service: this.name,
+        operation: method,
+        path: url.pathname,
+        status: response.status,
+      });
+    }
+    const text = await response.text();
+    if (looksOffCampus(response.status, text)) {
+      throw new CliError(
+        "Booking blocked the mutation request before it could complete. Verify campus-network access before retrying manually.",
+        "NETWORK_RESTRICTED",
+        1,
+        { service: this.name, operation: method, status: response.status },
+      );
+    }
+    if (!response.ok) {
+      throw new CliError("Booking mutation returned an HTTP error.", "SERVICE_HTTP_ERROR", 1, {
+        service: this.name,
+        operation: method,
+        status: response.status,
+      });
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = recordValue(JSON.parse(text));
+    } catch (error) {
+      throw new CliError("Booking mutation returned invalid JSON.", "SERVICE_PROTOCOL_ERROR", 1, {
+        service: this.name,
+        operation: method,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (payload.IsSuccess !== true) {
+      throw new CliError("Booking mutation was rejected by the upstream service.", "SERVICE_UPSTREAM_ERROR", 1, {
+        service: this.name,
+        operation: method,
+        errorCode: payload.ErrorCode,
+        message: stringValue(payload.Message) || "unknown error",
+      });
+    }
+    return recordValue(payload.Data);
   }
 
   private async requestRaw(
