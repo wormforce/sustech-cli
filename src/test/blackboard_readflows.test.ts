@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -417,6 +417,34 @@ test("Blackboard sync rejects symbolic-link destinations before any network acce
       syncBlackboardAttachments(adapter, { courseId: "_8537_1", destination: linkDir }),
       (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_SYNC_DESTINATION_INVALID"),
     );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard sync rejects a symbolic-link parent before creating the destination", {
+  skip: process.platform === "win32",
+}, async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-sync-parent-link-"));
+  const realParent = join(tempDir, "real-parent");
+  const linkedParent = join(tempDir, "linked-parent");
+  await mkdir(realParent);
+  await symlink(realParent, linkedParent);
+  let calls = 0;
+  const adapter = routeAdapter((url) => {
+    calls += 1;
+    throw new Error(`Network access should not happen for an invalid destination: ${url}`);
+  });
+
+  try {
+    await assert.rejects(
+      syncBlackboardAttachments(adapter, {
+        courseId: "_8537_1",
+        destination: join(linkedParent, "new-sync-root"),
+      }),
+      (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_SYNC_DESTINATION_INVALID"),
+    );
+    assert.equal(calls, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

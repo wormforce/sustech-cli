@@ -1795,6 +1795,14 @@ function blackboardDaysLeft(now: Date, due: Date): number {
 
 async function ensureBlackboardDirectoryRoot(destination: string): Promise<string> {
   const absolute = resolvePath(destination);
+  await ensureBlackboardSafeDirectoryChain(absolute);
+  return absolute;
+}
+
+async function ensureBlackboardSafeDirectoryChain(path: string): Promise<void> {
+  const absolute = resolvePath(path);
+  const parent = dirname(absolute);
+  if (parent !== absolute) await ensureBlackboardSafeDirectoryChain(parent);
   let info;
   try {
     info = await lstat(absolute);
@@ -1808,18 +1816,23 @@ async function ensureBlackboardDirectoryRoot(destination: string): Promise<strin
       );
     }
     try {
-      await mkdir(absolute, { recursive: true, mode: 0o700 });
+      await mkdir(absolute, { mode: 0o700 });
       info = await lstat(absolute);
     } catch (mkdirError) {
-      throw new CliError(
-        "The Blackboard sync destination directory could not be created.",
-        "BLACKBOARD_SYNC_DESTINATION_INVALID",
-        2,
-        { path: absolute, cause: mkdirError instanceof Error ? mkdirError.message : String(mkdirError) },
-      );
+      if (nodeErrorCode(mkdirError) === "EEXIST") {
+        info = await lstat(absolute);
+      } else {
+        throw new CliError(
+          "The Blackboard sync destination directory could not be created.",
+          "BLACKBOARD_SYNC_DESTINATION_INVALID",
+          2,
+          { path: absolute, cause: mkdirError instanceof Error ? mkdirError.message : String(mkdirError) },
+        );
+      }
     }
   }
   if (info.isSymbolicLink()) {
+    if (process.platform === "darwin" && absolute === "/var") return;
     throw new CliError(
       "The Blackboard sync destination must not use symbolic links.",
       "BLACKBOARD_SYNC_DESTINATION_INVALID",
@@ -1835,7 +1848,6 @@ async function ensureBlackboardDirectoryRoot(destination: string): Promise<strin
       { path: absolute },
     );
   }
-  return absolute;
 }
 
 async function ensureBlackboardDirectoryWithinRoot(root: string, path: string): Promise<void> {
