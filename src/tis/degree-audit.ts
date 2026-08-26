@@ -345,12 +345,13 @@ function parseRequirement(value: unknown, path: string, index: number): DegreeRe
 
 function parseRequirementMatch(value: unknown, path: string, index: number): DegreeRequirementMatch {
   const record = asRecord(value);
-  const codes = stringArray(record.codes);
-  const prefixes = stringArray(record.prefixes);
-  const departments = stringArray(record.departments);
-  const natures = stringArray(record.natures);
-  const nameIncludes = stringArray(record.nameIncludes);
-  const letterGrades = stringArray(record.letterGrades);
+  const codes = strictStringArrayField(record.codes, `${path} requirement ${index + 1} match.codes`);
+  const prefixes = strictStringArrayField(record.prefixes, `${path} requirement ${index + 1} match.prefixes`);
+  const departments = strictStringArrayField(record.departments, `${path} requirement ${index + 1} match.departments`);
+  const natures = strictStringArrayField(record.natures, `${path} requirement ${index + 1} match.natures`);
+  const nameIncludes = strictStringArrayField(record.nameIncludes, `${path} requirement ${index + 1} match.nameIncludes`);
+  const letterGrades = strictStringArrayField(record.letterGrades, `${path} requirement ${index + 1} match.letterGrades`);
+  const minScore = strictNonNegativeNumberField(record.minScore, `${path} requirement ${index + 1} match.minScore`);
   const match: DegreeRequirementMatch = {
     ...(codes?.length ? { codes: upperCaseArray(codes) } : {}),
     ...(prefixes?.length ? { prefixes: upperCaseArray(prefixes) } : {}),
@@ -358,7 +359,7 @@ function parseRequirementMatch(value: unknown, path: string, index: number): Deg
     ...(natures?.length ? { natures } : {}),
     ...(nameIncludes?.length ? { nameIncludes: nameIncludes.map((entry) => entry.toLowerCase()) } : {}),
     ...(letterGrades?.length ? { letterGrades: upperCaseArray(letterGrades) } : {}),
-    ...(numberField(record.minScore) !== undefined ? { minScore: numberField(record.minScore) } : {}),
+    ...(minScore !== undefined ? { minScore } : {}),
   };
   if (Object.keys(match).length === 0) {
     throw new CliError(
@@ -480,20 +481,40 @@ function stringField(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function stringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
-    : undefined;
+function strictStringArrayField(value: unknown, label: string): string[] | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (!Array.isArray(value)) {
+    throw new CliError(`${label} must be an array of non-empty strings.`, "DEGREE_REQUIREMENTS_INVALID", 2, {
+      field: label,
+      received: value,
+    });
+  }
+  const parsed: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new CliError(`${label} must contain only non-empty strings.`, "DEGREE_REQUIREMENTS_INVALID", 2, {
+        field: label,
+        received: entry,
+      });
+    }
+    parsed.push(entry.trim());
+  }
+  return parsed;
 }
 
 function upperCaseArray(values: readonly string[]): string[] {
   return values.map((value) => value.trim().toUpperCase());
 }
 
-function numberField(value: unknown): number | undefined {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return round(parsed, 2);
+function strictNonNegativeNumberField(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new CliError(`${label} must be a non-negative number.`, "DEGREE_REQUIREMENTS_INVALID", 2, {
+      field: label,
+      received: value,
+    });
+  }
+  return round(value, 2);
 }
 
 function positiveNumberField(value: unknown, label: string): number | undefined {

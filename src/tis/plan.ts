@@ -76,12 +76,13 @@ export function addPlanEntries(plan: TisPlanDocument, update: {
   semester?: Semester;
   requestedCodes?: readonly string[];
   blocked?: readonly BlockedTime[];
+  preferences?: TimetablePreferenceInput;
 }): TisPlanDocument {
   return createPlanDocument({
     semester: update.semester ?? (plan.semester ? parseStoredSemester(plan.semester) : undefined),
     requestedCodes: [...plan.requestedCodes, ...(update.requestedCodes ?? [])],
     blocked: [...plan.blocked, ...(update.blocked ?? [])],
-    preferences: plan.preferences,
+    preferences: mergePreferences(plan.preferences, update.preferences),
   });
 }
 
@@ -130,7 +131,7 @@ function parsePlanDocument(value: unknown, path: string): TisPlanDocument {
     ...(semester ? { semester: parseStoredSemester(semester) } : {}),
     requestedCodes,
     blocked,
-    preferences: asPreferences(record.preferences),
+    preferences: parsePlanPreferences(record.preferences, path),
   });
 }
 
@@ -158,17 +159,46 @@ function parseBlockedRecord(value: unknown, path: string): BlockedTime {
   return parseBlockedTime(`${day}:${periodStart}-${periodEnd}`);
 }
 
-function asPreferences(value: unknown): TimetablePreferenceInput {
-  const record = asRecord(value);
+function parsePlanPreferences(value: unknown, path: string): TimetablePreferenceInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  const record = strictRecord(value, `${path} preferences`);
+  assertAllowedKeys(record, ["earlyPeriodThreshold", "weights"], `${path} preferences`);
+  const weightsRecord = record.weights === undefined ? undefined : strictRecord(record.weights, `${path} preferences.weights`);
+  if (weightsRecord) {
+    assertAllowedKeys(
+      weightsRecord,
+      ["earlySession", "gapSegment", "gapPeriod", "distinctWeekday", "activeDay", "campusSwitch"],
+      `${path} preferences.weights`,
+    );
+  }
+  const distinctWeekday = strictIntegerOrUndefined(
+    weightsRecord?.distinctWeekday,
+    `${path} preferences.weights.distinctWeekday`,
+    0,
+    100,
+  );
+  const activeDay = strictIntegerOrUndefined(
+    weightsRecord?.activeDay,
+    `${path} preferences.weights.activeDay`,
+    0,
+    100,
+  );
+  if (distinctWeekday !== undefined && activeDay !== undefined && distinctWeekday !== activeDay) {
+    throw new CliError(
+      `TIS plan preferences contain conflicting weekday weights: ${path}`,
+      "TIS_PLAN_INVALID",
+      2,
+      { path, distinctWeekday, activeDay },
+    );
+  }
   return {
-    earlyPeriodThreshold: numberOrUndefined(record.earlyPeriodThreshold),
+    earlyPeriodThreshold: strictIntegerOrUndefined(record.earlyPeriodThreshold, `${path} preferences.earlyPeriodThreshold`, 1, 13),
     weights: {
-      earlySession: numberOrUndefined(asRecord(record.weights).earlySession),
-      gapSegment: numberOrUndefined(asRecord(record.weights).gapSegment),
-      gapPeriod: numberOrUndefined(asRecord(record.weights).gapPeriod),
-      distinctWeekday: numberOrUndefined(asRecord(record.weights).distinctWeekday)
-        ?? numberOrUndefined(asRecord(record.weights).activeDay),
-      campusSwitch: numberOrUndefined(asRecord(record.weights).campusSwitch),
+      earlySession: strictIntegerOrUndefined(weightsRecord?.earlySession, `${path} preferences.weights.earlySession`, 0, 100),
+      gapSegment: strictIntegerOrUndefined(weightsRecord?.gapSegment, `${path} preferences.weights.gapSegment`, 0, 100),
+      gapPeriod: strictIntegerOrUndefined(weightsRecord?.gapPeriod, `${path} preferences.weights.gapPeriod`, 0, 100),
+      distinctWeekday: distinctWeekday ?? activeDay,
+      campusSwitch: strictIntegerOrUndefined(weightsRecord?.campusSwitch, `${path} preferences.weights.campusSwitch`, 0, 100),
     },
   };
 }
@@ -198,6 +228,23 @@ function normaliseBlocked(values: readonly BlockedTime[]): BlockedTime[] {
   return output.sort((left, right) => left.day - right.day || left.periodStart - right.periodStart || left.periodEnd - right.periodEnd);
 }
 
+function mergePreferences(
+  current: TimetablePreferences,
+  update: TimetablePreferenceInput | undefined,
+): TimetablePreferenceInput {
+  if (!update) return current;
+  return {
+    earlyPeriodThreshold: update.earlyPeriodThreshold ?? current.earlyPeriodThreshold,
+    weights: {
+      earlySession: update.weights?.earlySession ?? current.weights.earlySession,
+      gapSegment: update.weights?.gapSegment ?? current.weights.gapSegment,
+      gapPeriod: update.weights?.gapPeriod ?? current.weights.gapPeriod,
+      distinctWeekday: update.weights?.distinctWeekday ?? current.weights.distinctWeekday,
+      campusSwitch: update.weights?.campusSwitch ?? current.weights.campusSwitch,
+    },
+  };
+}
+
 function blockedIdentity(value: BlockedTime): string {
   return `${value.day}:${value.periodStart}-${value.periodEnd}`;
 }
@@ -206,9 +253,33 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function numberOrUndefined(value: unknown): number | undefined {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+function strictRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  throw new CliError(`${label} must be an object.`, "TIS_PLAN_INVALID", 2, { field: label, received: value });
+}
+
+function assertAllowedKeys(record: Record<string, unknown>, allowedKeys: readonly string[], label: string): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(record)) {
+    if (allowed.has(key)) continue;
+    throw new CliError(`${label} contains an unknown field: ${key}`, "TIS_PLAN_INVALID", 2, {
+      field: label,
+      key,
+    });
+  }
+}
+
+function strictIntegerOrUndefined(value: unknown, label: string, minimum: number, maximum: number): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new CliError(`${label} must be an integer between ${minimum} and ${maximum}.`, "TIS_PLAN_INVALID", 2, {
+      field: label,
+      received: value,
+      minimum,
+      maximum,
+    });
+  }
+  return value;
 }
 
 function stringField(value: unknown): string {

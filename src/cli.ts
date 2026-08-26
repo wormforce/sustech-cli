@@ -299,8 +299,10 @@ Usage:
   sustech tis exams
   sustech tis timetable CODE... [--semester YYYY-YYYY-N] [--block MON:1-4] [--max N] [--refresh]
   sustech tis plan init [CODE...] [--semester YYYY-YYYY-N] [--block MON:1-4] [--path PATH]
+    [--early-period-threshold N] [--weight-early-session N] [--weight-gap-segment N] [--weight-gap-period N] [--weight-distinct-weekday N] [--weight-campus-switch N]
   sustech tis plan show [--path PATH]
   sustech tis plan add [CODE...] [--block MON:1-4] [--path PATH]
+    [--early-period-threshold N] [--weight-early-session N] [--weight-gap-segment N] [--weight-gap-period N] [--weight-distinct-weekday N] [--weight-campus-switch N]
   sustech tis plan remove [CODE...] [--block MON:1-4] [--path PATH]
   sustech tis plan solve [--path PATH] [--semester YYYY-YYYY-N] [--max N] [--refresh]
   sustech tis classroom rooms [KEYWORD] [--semester YYYY-YYYY-N] [--refresh]
@@ -418,6 +420,12 @@ type Values = OutputFlags & {
   path?: string;
   requirements?: string;
   "include-blackboard"?: boolean;
+  "early-period-threshold"?: string;
+  "weight-early-session"?: string;
+  "weight-gap-segment"?: string;
+  "weight-gap-period"?: string;
+  "weight-distinct-weekday"?: string;
+  "weight-campus-switch"?: string;
   help?: boolean;
 };
 
@@ -483,9 +491,28 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis schedule": ["credentials-file", "semester", "week", "all"],
   "tis grades": ["credentials-file", "semester"],
   "tis exams": ["credentials-file"],
-  "tis plan init": ["semester", "block", "path"],
+  "tis plan init": [
+    "semester",
+    "block",
+    "path",
+    "early-period-threshold",
+    "weight-early-session",
+    "weight-gap-segment",
+    "weight-gap-period",
+    "weight-distinct-weekday",
+    "weight-campus-switch",
+  ],
   "tis plan show": ["path"],
-  "tis plan add": ["block", "path"],
+  "tis plan add": [
+    "block",
+    "path",
+    "early-period-threshold",
+    "weight-early-session",
+    "weight-gap-segment",
+    "weight-gap-period",
+    "weight-distinct-weekday",
+    "weight-campus-switch",
+  ],
   "tis plan remove": ["block", "path"],
   "tis plan solve": ["credentials-file", "semester", "refresh", "max", "path"],
   "tis classroom rooms": ["credentials-file", "semester", "refresh"],
@@ -596,6 +623,12 @@ async function main(argv: string[]): Promise<void> {
         path: { type: "string" },
         requirements: { type: "string" },
         "include-blackboard": { type: "boolean", default: false },
+        "early-period-threshold": { type: "string" },
+        "weight-early-session": { type: "string" },
+        "weight-gap-segment": { type: "string" },
+        "weight-gap-period": { type: "string" },
+        "weight-distinct-weekday": { type: "string" },
+        "weight-campus-switch": { type: "string" },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -831,10 +864,12 @@ async function main(argv: string[]): Promise<void> {
   }
   if (command === "plan" && operation === "init") {
     const semester = values.semester ? parseSemester(values.semester) : undefined;
+    const preferences = parsePlanPreferenceFlags(values);
     const view = await savePlan(values.path, createPlanDocument({
       ...(semester ? { semester } : {}),
       requestedCodes: parsed.positionals.slice(3),
       blocked: (values.block ?? []).map(parseBlockedTime),
+      ...(preferences ? { preferences } : {}),
     }));
     writeSuccess({
       command: "tis plan init",
@@ -854,9 +889,11 @@ async function main(argv: string[]): Promise<void> {
   }
   if (command === "plan" && operation === "add") {
     const existing = await loadPlan(values.path);
+    const preferences = parsePlanPreferenceFlags(values);
     const next = addPlanEntries(existing.plan, {
       requestedCodes: parsed.positionals.slice(3),
       blocked: (values.block ?? []).map(parseBlockedTime),
+      ...(preferences ? { preferences } : {}),
     });
     const view = await savePlan(existing.path, next);
     writeSuccess({
@@ -3834,6 +3871,41 @@ function parsePositiveInteger(value: string | undefined, fallback: number, optio
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) throw usageError(`${option} must be a positive integer.`);
   return parsed;
+}
+
+function parseIntegerInRange(value: string | undefined, option: string, minimum: number, maximum: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw usageError(`${option} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return parsed;
+}
+
+function parsePlanPreferenceFlags(values: Values): {
+  earlyPeriodThreshold?: number;
+  weights?: {
+    earlySession?: number;
+    gapSegment?: number;
+    gapPeriod?: number;
+    distinctWeekday?: number;
+    campusSwitch?: number;
+  };
+} | undefined {
+  const earlyPeriodThreshold = parseIntegerInRange(values["early-period-threshold"], "--early-period-threshold", 1, 13);
+  const weights = {
+    earlySession: parseIntegerInRange(values["weight-early-session"], "--weight-early-session", 0, 100),
+    gapSegment: parseIntegerInRange(values["weight-gap-segment"], "--weight-gap-segment", 0, 100),
+    gapPeriod: parseIntegerInRange(values["weight-gap-period"], "--weight-gap-period", 0, 100),
+    distinctWeekday: parseIntegerInRange(values["weight-distinct-weekday"], "--weight-distinct-weekday", 0, 100),
+    campusSwitch: parseIntegerInRange(values["weight-campus-switch"], "--weight-campus-switch", 0, 100),
+  };
+  const hasWeights = Object.values(weights).some((value) => value !== undefined);
+  if (earlyPeriodThreshold === undefined && !hasWeights) return undefined;
+  return {
+    ...(earlyPeriodThreshold !== undefined ? { earlyPeriodThreshold } : {}),
+    ...(hasWeights ? { weights } : {}),
+  };
 }
 
 function parseNonNegativeInteger(value: string | undefined, fallback: number, option: string): number {

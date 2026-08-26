@@ -63,6 +63,12 @@ const VALUE_OPTIONS = new Set([
   "--sid",
   "--path",
   "--requirements",
+  "--early-period-threshold",
+  "--weight-early-session",
+  "--weight-gap-segment",
+  "--weight-gap-period",
+  "--weight-distinct-weekday",
+  "--weight-campus-switch",
 ]);
 
 export function inferCommandName(argv: string[]): string {

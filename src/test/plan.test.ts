@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { CliError } from "../core/errors.js";
@@ -42,6 +42,48 @@ test("persistent TIS plans keep schema/version and normalize local state", async
     });
     assert.deepEqual(removed.requestedCodes, ["CS101", "EE101"]);
     assert.deepEqual(removed.blocked.map((entry) => `${entry.day}:${entry.periodStart}-${entry.periodEnd}`), ["3:3-4"]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("persistent TIS plans reject invalid stored preferences instead of silently defaulting", async () => {
+  const tempDir = mkdtempSync(join(process.cwd(), ".tmp-sustech-cli-plan-invalid-"));
+  const badThresholdPath = join(tempDir, "bad-threshold.json");
+  const badWeightPath = join(tempDir, "bad-weight.json");
+
+  try {
+    writeFileSync(badThresholdPath, JSON.stringify({
+      schemaVersion: "1",
+      kind: "tis-plan",
+      savedAt: "2026-08-26T00:00:00.000Z",
+      requestedCodes: ["CS101"],
+      blocked: [],
+      preferences: {
+        earlyPeriodThreshold: "oops",
+      },
+    }), "utf8");
+    writeFileSync(badWeightPath, JSON.stringify({
+      schemaVersion: "1",
+      kind: "tis-plan",
+      savedAt: "2026-08-26T00:00:00.000Z",
+      requestedCodes: ["CS101"],
+      blocked: [],
+      preferences: {
+        weights: {
+          gapSegment: -1,
+        },
+      },
+    }), "utf8");
+
+    await assert.rejects(
+      () => loadPlan(badThresholdPath),
+      (error: unknown) => error instanceof CliError && error.code === "TIS_PLAN_INVALID",
+    );
+    await assert.rejects(
+      () => loadPlan(badWeightPath),
+      (error: unknown) => error instanceof CliError && error.code === "TIS_PLAN_INVALID",
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

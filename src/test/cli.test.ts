@@ -338,15 +338,21 @@ test("TIS plan subcommands persist local planning state without network", () => 
       "tis", "plan", "init", "CS101",
       "--semester", "2025-2026-1",
       "--block", "MON:1-2",
+      "--early-period-threshold", "3",
+      "--weight-gap-segment", "7",
       "--path", planPath,
       "--json",
     ]);
     assert.equal(init.status, 0);
-    assert.deepEqual(JSON.parse(init.stdout).data.plan.requestedCodes, ["CS101"]);
+    const initialized = JSON.parse(init.stdout).data.plan;
+    assert.deepEqual(initialized.requestedCodes, ["CS101"]);
+    assert.equal(initialized.preferences.earlyPeriodThreshold, 3);
+    assert.equal(initialized.preferences.weights.gapSegment, 7);
 
     const add = run([
       "tis", "plan", "add", "MA101",
       "--block", "WED:3-4",
+      "--weight-campus-switch", "9",
       "--path", planPath,
       "--json",
     ]);
@@ -354,6 +360,9 @@ test("TIS plan subcommands persist local planning state without network", () => 
     const added = JSON.parse(add.stdout).data.plan;
     assert.deepEqual(added.requestedCodes, ["CS101", "MA101"]);
     assert.equal(added.blocked.length, 2);
+    assert.equal(added.preferences.earlyPeriodThreshold, 3);
+    assert.equal(added.preferences.weights.gapSegment, 7);
+    assert.equal(added.preferences.weights.campusSwitch, 9);
 
     const remove = run([
       "tis", "plan", "remove", "CS101",
@@ -368,7 +377,27 @@ test("TIS plan subcommands persist local planning state without network", () => 
 
     const show = run(["tis", "plan", "show", "--path", planPath, "--json"]);
     assert.equal(show.status, 0);
-    assert.equal(JSON.parse(show.stdout).data.path, planPath);
+    const shown = JSON.parse(show.stdout).data;
+    assert.equal(shown.path, planPath);
+    assert.equal(shown.plan.preferences.weights.campusSwitch, 9);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("TIS plan preference flags reject invalid ranges before local writes", () => {
+  const tempDir = mkdtempSync(join(process.cwd(), ".tmp-sustech-cli-plan-cli-invalid-"));
+  const planPath = join(tempDir, "plan.json");
+
+  try {
+    const result = run([
+      "tis", "plan", "init", "CS101",
+      "--weight-gap-segment", "101",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).error.code, "USAGE");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

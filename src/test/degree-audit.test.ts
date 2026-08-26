@@ -159,6 +159,52 @@ test("degree audit rejects requirements without a positive target", async () => 
   }
 });
 
+test("degree audit fails closed on invalid selector field types and elements", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-degree-selector-invalid-"));
+  const baseRequirement = {
+    schemaVersion: "1",
+    kind: "tis-degree-requirements",
+    requirements: [
+      {
+        id: "bad-selector",
+        title: "Bad Selector",
+        minCourses: 1,
+        match: {},
+      },
+    ],
+  };
+  const cases: Array<{ suffix: string; match: Record<string, unknown> }> = [
+    { suffix: "codes-type", match: { codes: "CS101" } },
+    { suffix: "prefixes-element", match: { prefixes: ["CS", 101] } },
+    { suffix: "departments-element", match: { departments: ["CS", { id: 1 }] } },
+    { suffix: "natures-type", match: { natures: 3 } },
+    { suffix: "nameIncludes-empty", match: { nameIncludes: [""] } },
+    { suffix: "letterGrades-element", match: { letterGrades: ["A", null] } },
+    { suffix: "minScore-type", match: { codes: ["CS101"], minScore: "oops" } },
+  ];
+
+  try {
+    for (const entry of cases) {
+      const jsonPath = join(tempDir, `${entry.suffix}.json`);
+      writeFileSync(jsonPath, JSON.stringify({
+        ...baseRequirement,
+        requirements: [
+          {
+            ...baseRequirement.requirements[0],
+            match: entry.match,
+          },
+        ],
+      }), "utf8");
+      await assert.rejects(
+        () => loadDegreeRequirements(jsonPath),
+        (error: unknown) => error instanceof CliError && error.code === "DEGREE_REQUIREMENTS_INVALID",
+      );
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("degree audit rejects YAML requirement files in this build", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-degree-"));
   const yamlPath = join(tempDir, "requirements.yaml");
