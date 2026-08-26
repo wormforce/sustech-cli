@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -90,6 +90,61 @@ test("OA paper download refuses unsafe redirect targets and symbolic-link destin
       }),
       hasCode("PAPER_DOWNLOAD_URL_UNSAFE"),
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("OA paper download rejects a symbolic-link parent before network access", {
+  skip: process.platform === "win32",
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sustech-paper-parent-link-"));
+  const realParent = join(directory, "real-parent");
+  const linkedParent = join(directory, "linked-parent");
+  await mkdir(realParent);
+  await symlink(realParent, linkedParent);
+  let networkCalls = 0;
+  try {
+    await assert.rejects(
+      downloadOpenAccessPdf(DOI, join(linkedParent, "paper.pdf"), {
+        adapter: {
+          name: "must-not-run",
+          async fetch(): Promise<Response> {
+            networkCalls += 1;
+            throw new Error("network must not run");
+          },
+        },
+      }),
+      hasCode("UNSAFE_LOCAL_PATH"),
+    );
+    assert.equal(networkCalls, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("OA paper download rejects private IPv4 ranges embedded in IPv6 literals", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sustech-paper-mapped-ip-"));
+  let downloads = 0;
+  try {
+    for (const [index, url] of [
+      "https://[::ffff:127.0.0.1]/paper.pdf",
+      "https://[::ffff:169.254.1.1]/paper.pdf",
+      "https://[::ffff:172.16.0.1]/paper.pdf",
+      "https://[::ffff:192.168.1.1]/paper.pdf",
+    ].entries()) {
+      await assert.rejects(
+        downloadOpenAccessPdf(DOI, join(directory, `paper-${index}.pdf`), {
+          adapter: unpaywall(url),
+          fetchImpl: async () => {
+            downloads += 1;
+            throw new Error("network must not run");
+          },
+        }),
+        hasCode("PAPER_DOWNLOAD_URL_UNSAFE"),
+      );
+    }
+    assert.equal(downloads, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

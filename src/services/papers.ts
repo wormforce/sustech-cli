@@ -4,6 +4,7 @@ import { copyFile, link, lstat, open, rename, rm, stat } from "node:fs/promises"
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { isIP } from "node:net";
 import { CliError } from "../core/errors.js";
+import { assertPathAndParentsAreNotSymlinks } from "../core/local-store.js";
 import {
   arrayValue,
   createFetchAdapter,
@@ -311,26 +312,41 @@ function safePublicPdfUrl(value: string): URL {
 function privateIpLiteral(host: string): boolean {
   const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   if (isIP(literal) === 4) {
-    const [a, b] = literal.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+    return privateIpv4Address(literal);
   }
   if (isIP(literal) === 6) {
     const normalized = literal.toLowerCase();
+    const mappedIpv4 = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);
+    if (mappedIpv4) {
+      const upper = Number.parseInt(mappedIpv4[1]!, 16);
+      const lower = Number.parseInt(mappedIpv4[2]!, 16);
+      const dotted = `${upper >>> 8}.${upper & 0xff}.${lower >>> 8}.${lower & 0xff}`;
+      if (privateIpv4Address(dotted)) return true;
+    }
     return normalized === "::1"
       || normalized === "::"
       || normalized.startsWith("fc")
       || normalized.startsWith("fd")
-      || /^fe[89ab]/.test(normalized)
-      || normalized.startsWith("::ffff:127.")
-      || normalized.startsWith("::ffff:10.")
-      || normalized.startsWith("::ffff:192.168.");
+      || /^fe[89ab]/.test(normalized);
   }
   return false;
+}
+
+function privateIpv4Address(literal: string): boolean {
+  const [a, b] = literal.split(".").map(Number);
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || a >= 224;
 }
 
 async function inspectPaperDestination(destination: string, overwrite: boolean): Promise<{ destination: string; existed: boolean }> {
   const absolute = resolvePath(destination);
   const parent = dirname(absolute);
+  await assertPathAndParentsAreNotSymlinks(parent);
   let parentInfo;
   try {
     parentInfo = await stat(parent);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -153,6 +153,37 @@ test("Blackboard attachment downloads never overwrite symbolic-link destinations
       hasCode("BLACKBOARD_DOWNLOAD_DESTINATION_INVALID"),
     );
     assert.equal(await readFile(target, "utf8"), "keep me");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard attachment downloads reject a symbolic-link parent before network access", {
+  skip: process.platform === "win32",
+}, async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-parent-link-"));
+  const realParent = join(tempDir, "real-parent");
+  const linkedParent = join(tempDir, "linked-parent");
+  await mkdir(realParent);
+  await symlink(realParent, linkedParent);
+  let calls = 0;
+  const adapter = routeAdapter((url) => {
+    calls += 1;
+    throw new Error(`Network access should not occur for a symbolic-link parent: ${url}`);
+  });
+
+  try {
+    await assert.rejects(
+      downloadBlackboardContentAttachment(
+        adapter,
+        "10",
+        "20",
+        "30",
+        join(linkedParent, "assignment.pdf"),
+      ),
+      hasCode("UNSAFE_LOCAL_PATH"),
+    );
+    assert.equal(calls, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

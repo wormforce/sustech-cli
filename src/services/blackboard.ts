@@ -3,6 +3,7 @@ import { constants as fileSystemConstants } from "node:fs";
 import { copyFile, link, lstat, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { CliError } from "../core/errors.js";
+import { assertPathAndParentsAreNotSymlinks } from "../core/local-store.js";
 import {
   arrayValue,
   booleanValue,
@@ -1492,6 +1493,7 @@ async function inspectBlackboardDownloadDestination(
 ): Promise<{ destination: string; existed: boolean }> {
   const absolute = resolvePath(destination);
   const parent = dirname(absolute);
+  await assertPathAndParentsAreNotSymlinks(parent);
   let parentInfo;
   try {
     parentInfo = await stat(parent);
