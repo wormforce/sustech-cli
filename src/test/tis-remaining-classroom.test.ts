@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Semester } from "../core/semester.js";
 import {
   buildClassroomDirectory,
+  classroomLiveEntryOutput,
   fetchLiveRoomCatalog,
   fetchLiveRoomSchedule,
   normaliseRoomName,
@@ -95,6 +96,10 @@ test("live classroom rows are parsed into borrowings and can be filtered by acti
 
   const entries = await fetchLiveRoomSchedule(session, SEMESTER, "ROOM-101");
   assert.equal(entries.length, 2);
+  const output = classroomLiveEntryOutput(entries[0]);
+  assert.equal("phone" in output, false);
+  assert.equal("rawText" in output, false);
+  assert.equal("source" in output, false);
   assert.deepEqual(
     summariseLiveOccupancy(entries, { week: 2, day: 1, periodStart: 3, periodEnd: 3 }).map((entry) => entry.kind),
     ["borrowing"],

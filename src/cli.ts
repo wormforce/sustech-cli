@@ -63,6 +63,8 @@ import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
 import {
   fetchLiveRoomCatalog,
   fetchLiveRoomSchedule,
+  classroomLiveEntryOutput,
+  classroomLiveRoomOutput,
   buildClassroomDirectory,
   buildScheduleIcs,
   buildSelectionPreview,
@@ -799,12 +801,14 @@ async function main(argv: string[]): Promise<void> {
     const room = resolution.room;
     if (!room) throw new CliError("Resolved live classroom room is missing.", "TIS_PROTOCOL_ERROR", 1, { room: roomQuery });
     const entries = await fetchLiveRoomSchedule(session, semester, room.roomCode);
+    const outputRoom = classroomLiveRoomOutput(room);
+    const outputEntries = entries.map(classroomLiveEntryOutput);
     writeSuccess({
       command: "tis classroom live",
-      data: { semester, query: roomQuery, room, entries, total: entries.length },
+      data: { semester, query: roomQuery, room: outputRoom, entries: outputEntries, total: outputEntries.length },
       text: formatClassroomLive(room, entries, { title: `Live classroom schedule · ${semester.value}` }),
-      items: entries,
-      summary: { semester: semester.value, room: room.roomLabel, roomCode: room.roomCode, total: entries.length },
+      items: outputEntries,
+      summary: { semester: semester.value, room: room.roomLabel, roomCode: room.roomCode, total: outputEntries.length },
     }, output);
     return;
   }
@@ -841,18 +845,20 @@ async function main(argv: string[]): Promise<void> {
           periodEnd: window.periodEnd,
         })
       : [];
+    const outputRoom = classroomLiveRoomOutput(room);
+    const outputEntries = active.map(classroomLiveEntryOutput);
     writeSuccess({
       command: "tis classroom now",
       data: {
         semester,
         query: roomQuery,
-        room,
+        room: outputRoom,
         now: {
           week,
           ...(window ?? fallbackNow),
         },
-        entries: active,
-        total: active.length,
+        entries: outputEntries,
+        total: outputEntries.length,
       },
       text: formatClassroomNow(room, active, {
         date: window?.date ?? fallbackNow.date,
@@ -861,14 +867,14 @@ async function main(argv: string[]): Promise<void> {
         weekday: window?.weekday ?? fallbackNow.weekday,
         ...(window ? { periodLabel: window.periodLabel } : {}),
       }),
-      items: active,
+      items: outputEntries,
       summary: {
         semester: semester.value,
         room: room.roomLabel,
         roomCode: room.roomCode,
         week,
         weekday: window?.weekday ?? fallbackNow.weekday,
-        total: active.length,
+        total: outputEntries.length,
       },
     }, output);
     return;

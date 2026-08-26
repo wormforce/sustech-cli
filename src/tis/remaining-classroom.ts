@@ -64,6 +64,9 @@ export interface ClassroomLiveRoomResolution {
   room?: ClassroomLiveRoom;
 }
 
+export type ClassroomLiveEntryOutput = Omit<ClassroomLiveEntry, "phone" | "rawText" | "source">;
+export type ClassroomLiveRoomOutput = Omit<ClassroomLiveRoom, "source">;
+
 interface ParsedLiveScheduleText {
   periodStart?: number;
   periodEnd?: number;
@@ -337,6 +340,30 @@ export function resolveLiveRoom(
   }
 
   return { status: "missing", query: trimmed, matches: [] };
+}
+
+export function classroomLiveEntryOutput(entry: ClassroomLiveEntry): ClassroomLiveEntryOutput {
+  return {
+    roomCode: entry.roomCode,
+    weekday: entry.weekday,
+    periodStart: entry.periodStart,
+    periodEnd: entry.periodEnd,
+    weeks: [...entry.weeks],
+    kind: entry.kind,
+    ...(entry.borrower ? { borrower: entry.borrower } : {}),
+    ...(entry.courseCode ? { courseCode: entry.courseCode } : {}),
+    ...(entry.courseName ? { courseName: entry.courseName } : {}),
+    ...(entry.purpose ? { purpose: entry.purpose } : {}),
+  };
+}
+
+export function classroomLiveRoomOutput(room: ClassroomLiveRoom): ClassroomLiveRoomOutput {
+  return {
+    roomCode: room.roomCode,
+    roomLabel: room.roomLabel,
+    canonicalLabel: room.canonicalLabel,
+    ...(room.declaredCapacity !== undefined ? { declaredCapacity: room.declaredCapacity } : {}),
+  };
 }
 
 export function summariseLiveOccupancy(

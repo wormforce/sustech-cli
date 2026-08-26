@@ -161,11 +161,15 @@ export function formatBidApplySuccess(
 }
 
 function formatLiveEntry(entry: ClassroomLiveEntry): string {
+  const safeRawText = entry.rawText
+    .replace(/(?:联系电话|contact(?: phone)?)[：:]?\s*[0-9+()\-\s]+/gi, "")
+    .replace(/\n+/g, " ")
+    .trim();
   const label = entry.kind === "borrowing"
-    ? `borrow ${entry.borrower ?? entry.purpose ?? entry.rawText}`
-    : `${entry.courseCode ?? "-"} ${entry.courseName ?? entry.rawText}`;
+    ? `borrow ${(entry.borrower ?? entry.purpose ?? safeRawText) || "occupied"}`
+    : `${entry.courseCode ?? "-"} ${(entry.courseName ?? safeRawText) || "occupied"}`;
   const weeks = entry.weeks.length > 0 ? `[${entry.weeks.join(",")}]` : "[?]";
-  const extra = entry.phone ? ` · ${entry.phone}` : entry.purpose ? ` · ${entry.purpose}` : "";
+  const extra = entry.purpose && entry.purpose !== label ? ` · ${entry.purpose}` : "";
   return `${entry.weekday} P${entry.periodStart}-${entry.periodEnd} ${weeks} ${label}${extra}`;
 }
 
