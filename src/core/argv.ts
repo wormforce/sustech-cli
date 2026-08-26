@@ -19,6 +19,7 @@ const VALUE_OPTIONS = new Set([
   "--week-one-monday",
   "--teaching-start",
   "--calendar-name",
+  "--include",
   "--where",
   "--pick",
   "--bid-limit",

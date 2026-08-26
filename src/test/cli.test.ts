@@ -278,6 +278,7 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const degreeAudit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree audit");
   const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
   const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
+  const tisIcal = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis ical");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -319,6 +320,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(snapshotSave.confirmation, "none");
   assert.equal(snapshotDiff.kind, "local");
   assert.equal(snapshotDiff.network, false);
+  assert.equal(tisIcal.kind, "mutation");
+  assert.equal(tisIcal.authentication, "selected-service");
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -623,6 +626,7 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["bb", "search", "hw", "--kind", "bad", "--json"], "USAGE"],
     [["bb", "search", "hw", "--page-size", "0", "--json"], "USAGE"],
     [["bb", "deadlines", "--days", "0", "--json"], "USAGE"],
+    [["tis", "ical", "--include", "bad", "--json"], "USAGE"],
   ] as const) {
     const result = runWithoutCredentials([...args]);
     assert.equal(result.status, 2);
@@ -654,6 +658,10 @@ test("context live degrades gracefully when Blackboard credentials are unavailab
   assert.equal(result.status, 0);
   const envelope = JSON.parse(result.stdout);
   assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
+  assert.equal(envelope.data.sourceStatus.schedule, "missing");
+  assert.equal(envelope.data.sourceStatus.nextExam, "missing");
+  assert.equal(envelope.data.liveSources.tisSchedule.state, "credentials-missing");
+  assert.equal(envelope.data.liveSources.tisExams.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
 });
 

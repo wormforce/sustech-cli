@@ -46,7 +46,7 @@ import {
 import { promptHiddenPassword, promptLoginSid, readPasswordFromStdin } from "./core/prompt.js";
 import { parseSemester, type Semester } from "./core/semester.js";
 import { CLI_VERSION } from "./core/version.js";
-import { CalendarClient } from "./calendar/client.js";
+import { AcademicCalendar, CalendarClient } from "./calendar/client.js";
 import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
 import type { CalendarLevel } from "./calendar/types.js";
 import { ContextService } from "./context/service.js";
@@ -89,20 +89,28 @@ import {
   classroomLiveEntryOutput,
   classroomLiveRoomOutput,
   buildClassroomDirectory,
-  buildScheduleIcs,
+  buildIcsContent,
   buildSelectionPreview,
   ensureSelectionVerified,
   EvaluationStatusClient,
   inferWeekOneMonday,
+  holidayToIcsEvent,
+  nearestUpcomingExam,
+  parseIsoDateTimeToUtcStamp,
+  parseShenzhenExamTimeRange,
   planBidUpdates,
   projectBidTotal,
   revalidateSelectionWrite,
   resolveLiveRoom,
-  scheduleOccurrences,
+  scheduleIcsEvents,
   summariseEvaluationStatuses,
+  summariseCurrentOrNextClass,
   summariseLiveOccupancy,
   teachingPeriodAtShenzhenTime,
   verifySelectionWrite,
+  writeIcsFile,
+  type IcsAnchor,
+  type IcsEvent,
   type BidPick,
   type EvaluationStatusFilter,
   type SelectionApplyTarget,
@@ -196,6 +204,7 @@ import {
   verifyPmsPrintUpload,
   type BlackboardAttempt,
   type BlackboardAttemptFile,
+  type BlackboardDeadline,
   type BlackboardSubmissionFile,
   type BlackboardSubmissionPreflight as BlackboardSubmissionAssessment,
   type PmsPrintUploadOptions,
@@ -246,6 +255,7 @@ import {
   formatWsDetail,
   formatWsPrograms,
 } from "./services/text.js";
+import type { ExamRecord, PersonalScheduleEntry } from "./tis/types.js";
 
 const VERSION = CLI_VERSION;
 
@@ -342,7 +352,7 @@ Usage:
   sustech tis classroom live ROOM [--semester YYYY-YYYY-N]
   sustech tis classroom now ROOM [--semester YYYY-YYYY-N]
   sustech tis evals [--semester YYYY-YYYY-N] [--status all|pending|draft|submitted]
-  sustech tis ical [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-name NAME]
+  sustech tis ical [--include schedule|exams|deadlines|holidays ...] [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--calendar-name NAME] [--destination PATH [--overwrite]]
   sustech tis degree audit --requirements FILE [--semester YYYY-YYYY-N]
   sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
   sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
@@ -407,6 +417,7 @@ type Values = OutputFlags & {
   "week-one-monday"?: string;
   "teaching-start"?: string;
   "calendar-name"?: string;
+  include?: string[];
   where?: string;
   pick?: string[];
   "bid-limit"?: string;
@@ -570,7 +581,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis classroom live": ["credentials-file", "semester"],
   "tis classroom now": ["credentials-file", "semester"],
   "tis evals": ["credentials-file", "semester", "status"],
-  "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-name"],
+  "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-level", "calendar-name", "include", "destination", "overwrite"],
   "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
   "tis degree audit": ["credentials-file", "semester", "requirements"],
   "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
@@ -628,6 +639,7 @@ async function main(argv: string[]): Promise<void> {
         "week-one-monday": { type: "string" },
         "teaching-start": { type: "string" },
         "calendar-name": { type: "string" },
+        include: { type: "string", multiple: true },
         where: { type: "string" },
         pick: { type: "string", multiple: true },
         "bid-limit": { type: "string" },
@@ -1180,23 +1192,237 @@ async function main(argv: string[]): Promise<void> {
   }
   if (command === "ical" && operation === undefined) {
     const semester = parseSemester(values.semester);
-    const client = await tisClient(values);
-    const entries = await client.schedule(semester);
-    const anchor = values["week-one-monday"]
-      ? { weekOneMonday: isoDate(values["week-one-monday"], "--week-one-monday") }
-      : values["teaching-start"]
-        ? { teachingStartDate: isoDate(values["teaching-start"], "--teaching-start") }
-        : values.semester
-          ? (() => { throw usageError("An explicit --semester requires --week-one-monday or --teaching-start for ICS export."); })()
-          : { weekOneMonday: inferWeekOneMonday(todayInShenzhen(), await client.currentWeek()) };
-    const events = scheduleOccurrences(entries, anchor);
-    const content = buildScheduleIcs(entries, anchor, { calendarName: values["calendar-name"] });
+    const includes = tisIcalIncludes(values.include);
+    const level = calendarLevel(values["calendar-level"]);
+    const sourceStatuses = initTisIcalSourceStatuses(includes);
+    const omissions: TisIcalOmission[] = [];
+    const events: IcsEvent[] = [];
+    const calendarName = defaultTisIcalCalendarName(values["calendar-name"], semester, includes);
+
+    let calendar: AcademicCalendar | undefined;
+    let term = undefined;
+    let calendarFailure: string | undefined;
+    const needsCalendar = includes.includes("holidays")
+      || (includes.includes("schedule") && values["week-one-monday"] === undefined && values["teaching-start"] === undefined);
+    if (needsCalendar) {
+      try {
+        calendar = await new CalendarClient().loadYear(calendarYearForSemester(semester), level);
+        term = calendarTermForSemester(calendar, semester);
+      } catch (error) {
+        calendarFailure = errorMessage(error);
+      }
+    }
+
+    let tis: TisClient | undefined;
+    if (includes.includes("schedule") || includes.includes("exams")) {
+      try {
+        tis = await tisClient(values);
+      } catch (error) {
+        const message = errorMessage(error);
+        const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
+        if (includes.includes("schedule")) {
+          sourceStatuses.schedule = { requested: true, state, eventCount: 0, omissionCount: 1, message };
+          omissions.push({ source: "schedule", code: state, message });
+        }
+        if (includes.includes("exams")) {
+          sourceStatuses.exams = { requested: true, state, eventCount: 0, omissionCount: 1, message };
+          omissions.push({ source: "exams", code: state, message });
+        }
+      }
+    }
+
+    if (includes.includes("schedule") && tis) {
+      try {
+        const entries = await tis.schedule(semester);
+        const anchor = await resolveTisIcalAnchor(values, semester, tis, term);
+        const scheduleEvents = scheduleIcsEvents(entries, anchor);
+        events.push(...scheduleEvents);
+        sourceStatuses.schedule = {
+          requested: true,
+          state: scheduleEvents.length > 0 ? "included" : "omitted",
+          eventCount: scheduleEvents.length,
+          omissionCount: scheduleEvents.length > 0 ? 0 : 1,
+          ...(scheduleEvents.length > 0 ? {} : { message: "No scheduled classes were available for the selected semester." }),
+        };
+        if (scheduleEvents.length === 0) {
+          omissions.push({
+            source: "schedule",
+            code: "NO_SCHEDULE_EVENTS",
+            message: "No scheduled classes were available for the selected semester.",
+          });
+        }
+      } catch (error) {
+        const message = errorMessage(error);
+        sourceStatuses.schedule = {
+          requested: true,
+          state: "error",
+          eventCount: 0,
+          omissionCount: 1,
+          message,
+        };
+        omissions.push({ source: "schedule", code: error instanceof CliError ? error.code : "SCHEDULE_EXPORT_ERROR", message });
+      }
+    }
+
+    if (includes.includes("exams") && tis) {
+      try {
+        const exams = await tis.exams();
+        const examEvents: IcsEvent[] = [];
+        for (const exam of exams) {
+          const examOmissions = examToIcsOmissions(exam, semester);
+          if (examOmissions.length > 0) {
+            omissions.push(...examOmissions);
+            continue;
+          }
+          examEvents.push(examToIcsEvent(exam)!);
+        }
+        events.push(...examEvents);
+        const omissionCount = omissions.filter((entry) => entry.source === "exams").length;
+        sourceStatuses.exams = {
+          requested: true,
+          state: omissionCount > 0
+            ? (examEvents.length > 0 ? "partial" : "omitted")
+            : examEvents.length > 0 ? "included" : "omitted",
+          eventCount: examEvents.length,
+          omissionCount,
+          ...(examEvents.length > 0 || omissionCount === 0 ? {} : { message: "No exam entries had exact parseable date and time ranges." }),
+        };
+      } catch (error) {
+        const message = errorMessage(error);
+        sourceStatuses.exams = {
+          requested: true,
+          state: "error",
+          eventCount: 0,
+          omissionCount: 1,
+          message,
+        };
+        omissions.push({ source: "exams", code: error instanceof CliError ? error.code : "EXAMS_EXPORT_ERROR", message });
+      }
+    }
+
+    if (includes.includes("deadlines")) {
+      try {
+        const adapter = await casServiceAdapter(values, "bb");
+        const report = await listBlackboardDeadlines(adapter);
+        const deadlineEvents: IcsEvent[] = [];
+        for (const deadline of report.deadlines) {
+          const event = blackboardDeadlineToIcsEvent(deadline);
+          if (!event) {
+            omissions.push({
+              source: "deadlines",
+              code: deadline.columnId || deadline.contentId || deadline.title,
+              message: `Skipped Blackboard deadline "${deadline.title}": dueAt was not an exact ISO date-time with timezone.`,
+            });
+            continue;
+          }
+          deadlineEvents.push(event);
+        }
+        events.push(...deadlineEvents);
+        omissions.push(...report.failures.map((failure, index) => ({
+          source: "deadlines" as const,
+          code: failure.code || failure.contentId || failure.courseCode || `failure-${index + 1}`,
+          message: failure.message,
+        })));
+        const deadlineOmissions = omissions.filter((entry) => entry.source === "deadlines").length;
+        sourceStatuses.deadlines = {
+          requested: true,
+          state: deadlineOmissions > 0
+            ? (deadlineEvents.length > 0 ? "partial" : "omitted")
+            : deadlineEvents.length > 0 ? "included" : "omitted",
+          eventCount: deadlineEvents.length,
+          omissionCount: deadlineOmissions,
+          ...(report.failures[0]?.message ? { message: report.failures[0].message } : {}),
+        };
+      } catch (error) {
+        const message = errorMessage(error);
+        const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
+        sourceStatuses.deadlines = {
+          requested: true,
+          state,
+          eventCount: 0,
+          omissionCount: 1,
+          message,
+        };
+        omissions.push({ source: "deadlines", code: error instanceof CliError ? error.code : "DEADLINES_EXPORT_ERROR", message });
+      }
+    }
+
+    if (includes.includes("holidays")) {
+      if (calendarFailure) {
+        sourceStatuses.holidays = {
+          requested: true,
+          state: "error",
+          eventCount: 0,
+          omissionCount: 1,
+          message: calendarFailure,
+        };
+        omissions.push({ source: "holidays", code: "CALENDAR_LOAD_FAILED", message: calendarFailure });
+      } else if (!calendar || !term) {
+        const message = `Academic calendar did not expose a term window for semester ${semester.value}.`;
+        sourceStatuses.holidays = {
+          requested: true,
+          state: "omitted",
+          eventCount: 0,
+          omissionCount: 1,
+          message,
+        };
+        omissions.push({ source: "holidays", code: "TERM_NOT_FOUND", message });
+      } else {
+        const holidays = calendarHolidaysForTerm(calendar, term.snapshot.start, term.snapshot.end).map(holidayToIcsEvent);
+        events.push(...holidays);
+        sourceStatuses.holidays = {
+          requested: true,
+          state: holidays.length > 0 ? "included" : "omitted",
+          eventCount: holidays.length,
+          omissionCount: holidays.length > 0 ? 0 : 1,
+          ...(holidays.length > 0 ? {} : { message: `No academic-calendar holidays overlapped ${semester.value}.` }),
+        };
+        if (holidays.length === 0) {
+          omissions.push({
+            source: "holidays",
+            code: "NO_TERM_HOLIDAYS",
+            message: `No academic-calendar holidays overlapped ${semester.value}.`,
+          });
+        }
+      }
+    }
+
+    const content = buildIcsContent(events, { calendarName });
+    const file = values.destination
+      ? await writeIcsFile(content, values.destination, { overwrite: values.overwrite === true })
+      : undefined;
+    const text = file || events.length === 0
+      ? formatTisIcalResult({
+          semester: semester.value,
+          includes,
+          total: events.length,
+          sourceStatuses,
+          omissions,
+          ...(file ? { file } : {}),
+        })
+      : content;
     writeSuccess({
       command: "tis ical",
-      data: { semester, anchor, events, eventCount: events.length, content },
-      text: content,
+      data: {
+        semester,
+        includes,
+        calendarLevel: level,
+        sourceStatuses,
+        omissions,
+        events,
+        eventCount: events.length,
+        content,
+        ...(file ? { file } : {}),
+      },
+      text,
       items: events,
-      summary: { semester: semester.value, anchor, total: events.length },
+      summary: {
+        semester: semester.value,
+        includes,
+        total: events.length,
+        ...(file ? { destination: file.destination, overwritten: file.overwritten } : {}),
+      },
+      meta: { sourceStatuses, omissions },
     }, output);
     return;
   }
@@ -2232,11 +2458,14 @@ async function runContext(
   const calendar = await new CalendarClient().loadYear(year, calendarLevel(values["calendar-level"]));
   const level = contextLevel(values.level);
   const service = new ContextService();
-  const live = values.live ? await loadLiveContext(date, values) : undefined;
+  const now = contextReferenceTime(date, values.live);
+  const live = values.live ? await loadLiveContext(date, now, calendar, values) : undefined;
   const snapshot = service.build({
-    now: `${date}T12:00:00+08:00`,
+    now,
     calendar,
+    ...(live?.schedule ? { schedule: live.schedule } : {}),
     ...(live?.nextDeadline ? { nextDeadline: live.nextDeadline } : {}),
+    ...(live?.nextExam ? { nextExam: live.nextExam } : {}),
   }, level);
   const liveText = live ? formatContextLiveSources(live.liveSources) : [];
   writeSuccess({
@@ -2256,49 +2485,137 @@ interface ContextLiveSourceStatus {
   state: ContextLiveSourceState;
   generatedAt?: string;
   failureCount?: number;
+  omissionCount?: number;
   message?: string;
 }
 
 async function loadLiveContext(
   date: string,
+  now: Date,
+  calendar: AcademicCalendar,
   values: Values,
-): Promise<{ nextDeadline?: DeadlineSummary; liveSources: { blackboardDeadlines: ContextLiveSourceStatus } }> {
-  const now = new Date(`${date}T12:00:00+08:00`);
+): Promise<{
+  schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
+  nextDeadline?: DeadlineSummary;
+  nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
+  liveSources: {
+    tisSchedule: ContextLiveSourceStatus;
+    tisExams: ContextLiveSourceStatus;
+    blackboardDeadlines: ContextLiveSourceStatus;
+  };
+}> {
+  const liveSources: {
+    tisSchedule: ContextLiveSourceStatus;
+    tisExams: ContextLiveSourceStatus;
+    blackboardDeadlines: ContextLiveSourceStatus;
+  } = {
+    tisSchedule: { state: "missing" },
+    tisExams: { state: "missing" },
+    blackboardDeadlines: { state: "missing" },
+  };
+
+  const result: {
+    schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
+    nextDeadline?: DeadlineSummary;
+    nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
+    liveSources: {
+      tisSchedule: ContextLiveSourceStatus;
+      tisExams: ContextLiveSourceStatus;
+      blackboardDeadlines: ContextLiveSourceStatus;
+    };
+  } = { liveSources };
+
+  const calendarDay = calendar.day(date);
+  const termSemester = calendarDay.semester;
+  const semester = termSemester
+    ? parseSemester(termSemester.semester.value)
+    : parseSemester(undefined);
+  const currentWeek = calendarDay.week;
+
+  let tis: TisClient | undefined;
+  try {
+    tis = await tisClient(values);
+  } catch (error) {
+    const message = errorMessage(error);
+    const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
+    liveSources.tisSchedule = { state, message };
+    liveSources.tisExams = { state, message };
+  }
+
+  if (tis) {
+    const [scheduleResult, examsResult] = await Promise.allSettled([
+      currentWeek > 0 ? tis.schedule(semester) : Promise.resolve([] as PersonalScheduleEntry[]),
+      tis.exams(),
+    ]);
+
+    if (scheduleResult.status === "fulfilled") {
+      if (currentWeek > 0) {
+        const schedule = summariseCurrentOrNextClass(scheduleResult.value, { currentWeek, now });
+        result.schedule = schedule;
+        liveSources.tisSchedule = {
+          state: schedule.now || schedule.next || schedule.tomorrowMorning ? "provided" : "missing",
+        };
+      } else {
+        liveSources.tisSchedule = {
+          state: "missing",
+          message: `Date ${date} is outside the loaded academic teaching weeks.`,
+        };
+      }
+    } else {
+      liveSources.tisSchedule = {
+        state: "error",
+        message: errorMessage(scheduleResult.reason),
+      };
+    }
+
+    if (examsResult.status === "fulfilled") {
+      const semesterOmissions = examsResult.value
+        .filter((exam) => !matchesSemesterLabel(exam.semester, semester))
+        .map((exam) => ({
+          code: exam.code || exam.name || "exam",
+          message: exam.semester
+            ? `Skipped ${exam.code || exam.name || "exam"}: exam semester "${exam.semester}" did not match ${semester.value}.`
+            : `Skipped ${exam.code || exam.name || "exam"}: exam semester was missing.`,
+        }));
+      const selection = nearestUpcomingExam(
+        examsResult.value.filter((exam) => matchesSemesterLabel(exam.semester, semester)),
+        { now },
+      );
+      if (selection.exam) result.nextExam = contextExamSummary(selection.exam);
+      const omissionCount = selection.omissions.length + semesterOmissions.length;
+      liveSources.tisExams = {
+        state: omissionCount > 0 ? "partial" : selection.exam ? "provided" : "missing",
+        omissionCount,
+        ...((selection.omissions[0] ?? semesterOmissions[0]) ? { message: (selection.omissions[0] ?? semesterOmissions[0])?.message } : {}),
+      };
+    } else {
+      liveSources.tisExams = {
+        state: "error",
+        message: errorMessage(examsResult.reason),
+      };
+    }
+  }
+
   try {
     const adapter = await casServiceAdapter(values, "bb");
     const report = await listBlackboardDeadlines(adapter, { now });
     const deadline = nextBlackboardDeadline(report);
-    return {
-      ...(deadline ? { nextDeadline: contextDeadlineSummary(deadline) } : {}),
-      liveSources: {
-        blackboardDeadlines: {
-          state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "missing",
-          generatedAt: report.generatedAt,
-          ...(report.failures.length > 0 ? { failureCount: report.failures.length, message: report.failures[0]?.message } : {}),
-        },
-      },
+    if (deadline) result.nextDeadline = contextDeadlineSummary(deadline);
+    liveSources.blackboardDeadlines = {
+      state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "missing",
+      generatedAt: report.generatedAt,
+      failureCount: report.failures.length,
+      ...(report.failures[0]?.message ? { message: report.failures[0].message } : {}),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (error instanceof CliError && error.code === "CREDENTIALS_REQUIRED") {
-      return {
-        liveSources: {
-          blackboardDeadlines: {
-            state: "credentials-missing",
-            message,
-          },
-        },
-      };
-    }
-    return {
-      liveSources: {
-        blackboardDeadlines: {
-          state: "error",
-          message,
-        },
-      },
+    const message = errorMessage(error);
+    liveSources.blackboardDeadlines = {
+      state: error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error",
+      message,
     };
   }
+
+  return result;
 }
 
 function contextDeadlineSummary(input: {
@@ -2316,13 +2633,269 @@ function contextDeadlineSummary(input: {
   };
 }
 
-function formatContextLiveSources(sources: { blackboardDeadlines: ContextLiveSourceStatus }): string[] {
-  const details = [
-    `Blackboard deadlines: ${sources.blackboardDeadlines.state}`,
-    ...(sources.blackboardDeadlines.failureCount ? [`${sources.blackboardDeadlines.failureCount} failure(s)`] : []),
-    ...(sources.blackboardDeadlines.message ? [sources.blackboardDeadlines.message] : []),
-  ].join(" · ");
-  return [`Live sources: ${details}`];
+function formatContextLiveSources(sources: {
+  tisSchedule: ContextLiveSourceStatus;
+  tisExams: ContextLiveSourceStatus;
+  blackboardDeadlines: ContextLiveSourceStatus;
+}): string[] {
+  return [
+    `Live sources: ${
+      [
+        formatContextLiveSource("TIS schedule", sources.tisSchedule),
+        formatContextLiveSource("TIS exams", sources.tisExams),
+        formatContextLiveSource("Blackboard deadlines", sources.blackboardDeadlines),
+      ].join(" | ")
+    }`,
+  ];
+}
+
+type TisIcalInclude = "schedule" | "exams" | "deadlines" | "holidays";
+type TisIcalSourceState = "included" | "partial" | "omitted" | "not-requested" | "credentials-missing" | "error";
+
+interface TisIcalSourceStatus {
+  requested: boolean;
+  state: TisIcalSourceState;
+  eventCount: number;
+  omissionCount: number;
+  message?: string;
+}
+
+type TisIcalSourceStatuses = Record<TisIcalInclude, TisIcalSourceStatus>;
+
+interface TisIcalOmission {
+  source: TisIcalInclude;
+  code: string;
+  message: string;
+}
+
+function tisIcalIncludes(values: readonly string[] | undefined): TisIcalInclude[] {
+  if (!values || values.length === 0) return ["schedule"];
+  const includes: TisIcalInclude[] = [];
+  for (const value of values) {
+    if (value === "schedule" || value === "exams" || value === "deadlines" || value === "holidays") {
+      if (!includes.includes(value)) includes.push(value);
+      continue;
+    }
+    throw usageError("--include must be schedule, exams, deadlines, or holidays.");
+  }
+  return includes;
+}
+
+function initTisIcalSourceStatuses(includes: readonly TisIcalInclude[]): TisIcalSourceStatuses {
+  const requested = new Set(includes);
+  const make = (source: TisIcalInclude): TisIcalSourceStatus => ({
+    requested: requested.has(source),
+    state: requested.has(source) ? "omitted" : "not-requested",
+    eventCount: 0,
+    omissionCount: 0,
+  });
+  return {
+    schedule: make("schedule"),
+    exams: make("exams"),
+    deadlines: make("deadlines"),
+    holidays: make("holidays"),
+  };
+}
+
+function defaultTisIcalCalendarName(
+  explicit: string | undefined,
+  semester: Semester,
+  includes: readonly TisIcalInclude[],
+): string {
+  if (explicit?.trim()) return explicit.trim();
+  if (includes.length === 1 && includes[0] === "schedule") return "SUSTech Schedule";
+  return `SUSTech ${semester.value} academic calendar`;
+}
+
+function calendarYearForSemester(semester: Semester): number {
+  return Number(semester.xq === "1" ? semester.xn.slice(0, 4) : semester.xn.slice(5));
+}
+
+function calendarTermForSemester(calendar: AcademicCalendar, semester: Semester) {
+  return calendar.terms().find((term) => term.snapshot.semester.value === semester.value);
+}
+
+async function resolveTisIcalAnchor(
+  values: Values,
+  semester: Semester,
+  tis: TisClient,
+  term: ReturnType<typeof calendarTermForSemester> | undefined,
+): Promise<IcsAnchor> {
+  if (values["week-one-monday"]) return { weekOneMonday: isoDate(values["week-one-monday"], "--week-one-monday") };
+  if (values["teaching-start"]) return { teachingStartDate: isoDate(values["teaching-start"], "--teaching-start") };
+  if (term) return { teachingStartDate: term.snapshot.teachingStart };
+  if (values.semester) {
+    throw new CliError(
+      "An explicit --semester requires either --week-one-monday, --teaching-start, or a matching academic-calendar term.",
+      "ICS_ANCHOR_REQUIRED",
+      2,
+      { semester: semester.value },
+    );
+  }
+  return { weekOneMonday: inferWeekOneMonday(todayInShenzhen(), await tis.currentWeek()) };
+}
+
+function examToIcsEvent(exam: ExamRecord): IcsEvent | undefined {
+  if (!exactIsoDate(exam.date)) return undefined;
+  const range = parseShenzhenExamTimeRange(exam.date, exam.time);
+  if (!range) return undefined;
+  const location = [exam.building, exam.room, exam.campus].filter(Boolean).join(" ").trim();
+  return {
+    uid: `exam-${sanitizeIcsId(exam.code || exam.name || "exam")}-${exam.date}-${sanitizeIcsId(exam.time || "time")}@sustech-cli`,
+    summary: `Exam · ${[exam.code, exam.name].filter(Boolean).join(" ").trim() || "SUSTech exam"}`,
+    description: [
+      exam.name ? `Course: ${exam.name}` : "",
+      exam.type ? `Type: ${exam.type}` : "",
+      exam.semester ? `Semester: ${exam.semester}` : "",
+    ].filter(Boolean).join(" | "),
+    ...(location ? { location } : {}),
+    startUtc: range.startUtc,
+    endUtc: range.endUtc,
+  };
+}
+
+function examToIcsOmissions(exam: ExamRecord, semester?: Semester): TisIcalOmission[] {
+  const code = exam.code || exam.name || "exam";
+  if (semester) {
+    if (!exam.semester) {
+      return [{ source: "exams", code, message: `Skipped ${code}: exam semester was missing.` }];
+    }
+    if (!matchesSemesterLabel(exam.semester, semester)) {
+      return [{ source: "exams", code, message: `Skipped ${code}: exam semester "${exam.semester}" did not match ${semester.value}.` }];
+    }
+  }
+  if (!exactIsoDate(exam.date)) {
+    return [{ source: "exams", code, message: `Skipped ${code}: exam date was not an exact YYYY-MM-DD value.` }];
+  }
+  if (!parseShenzhenExamTimeRange(exam.date, exam.time)) {
+    return [{ source: "exams", code, message: `Skipped ${code}: exam time was not an exact HH:MM-HH:MM Shenzhen range.` }];
+  }
+  return [];
+}
+
+function blackboardDeadlineToIcsEvent(deadline: BlackboardDeadline): IcsEvent | undefined {
+  const startUtc = parseIsoDateTimeToUtcStamp(deadline.dueAt);
+  if (!startUtc) return undefined;
+  return {
+    uid: `bb-deadline-${sanitizeIcsId(deadline.courseId)}-${sanitizeIcsId(deadline.columnId)}@sustech-cli`,
+    summary: `Deadline · ${deadline.courseCode} ${deadline.title}`,
+    description: [
+      deadline.courseName ? `Course: ${deadline.courseName}` : "",
+      deadline.scorePossible !== undefined ? `Score possible: ${deadline.scorePossible}` : "",
+      deadline.attemptsAllowed !== undefined ? `Attempts allowed: ${deadline.attemptsAllowed}` : "",
+    ].filter(Boolean).join(" | "),
+    startUtc,
+  };
+}
+
+function calendarHolidaysForTerm(calendar: AcademicCalendar, start: string, end: string) {
+  const seen = new Set<string>();
+  const holidays: Array<{ name: string; start: string; end: string }> = [];
+  for (let cursor = start; cursor <= end; cursor = addIsoDays(cursor, 1)) {
+    const holiday = calendar.day(cursor).holiday;
+    if (!holiday) continue;
+    const key = `${holiday.name}|${holiday.start}|${holiday.end}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    holidays.push(holiday);
+  }
+  return holidays.sort((left, right) =>
+    left.start.localeCompare(right.start)
+    || left.end.localeCompare(right.end)
+    || left.name.localeCompare(right.name),
+  );
+}
+
+function formatTisIcalResult(input: {
+  semester: string;
+  includes: readonly TisIcalInclude[];
+  total: number;
+  sourceStatuses: TisIcalSourceStatuses;
+  omissions: readonly TisIcalOmission[];
+  file?: { destination: string; size: number; sha256: string; overwritten: boolean };
+}): string {
+  const lines = [
+    `TIS iCalendar export · ${input.semester}`,
+    `Included sources: ${input.includes.join(", ")}`,
+    `Events: ${input.total}`,
+    `Schedule: ${formatTisIcalSourceStatus(input.sourceStatuses.schedule)}`,
+    `Exams: ${formatTisIcalSourceStatus(input.sourceStatuses.exams)}`,
+    `Blackboard deadlines: ${formatTisIcalSourceStatus(input.sourceStatuses.deadlines)}`,
+    `Holidays: ${formatTisIcalSourceStatus(input.sourceStatuses.holidays)}`,
+    ...(input.file ? [
+      `Destination: ${input.file.destination}`,
+      `Size: ${input.file.size} bytes`,
+      `SHA-256: ${input.file.sha256}`,
+      `Overwritten: ${input.file.overwritten ? "yes" : "no"}`,
+    ] : []),
+  ];
+  if (input.omissions[0]) lines.push(`First omission: ${input.omissions[0].message}`);
+  return lines.join("\n");
+}
+
+function formatTisIcalSourceStatus(status: TisIcalSourceStatus): string {
+  const extras = [
+    `events=${status.eventCount}`,
+    status.omissionCount > 0 ? `omissions=${status.omissionCount}` : "",
+    status.message ?? "",
+  ].filter(Boolean).join(" · ");
+  return `${status.state}${extras ? ` (${extras})` : ""}`;
+}
+
+function contextReferenceTime(date: string, live: boolean | undefined): Date {
+  if (live && date === todayInShenzhen()) return new Date();
+  return new Date(`${date}T12:00:00+08:00`);
+}
+
+function contextExamSummary(exam: ExamRecord): {
+  name: string;
+  code: string;
+  date: string;
+  time?: string;
+  building?: string;
+  room?: string;
+  campus?: string;
+} {
+  return {
+    name: exam.name,
+    code: exam.code,
+    date: exam.date,
+    ...(exam.time ? { time: exam.time } : {}),
+    ...(exam.building ? { building: exam.building } : {}),
+    ...(exam.room ? { room: exam.room } : {}),
+    ...(exam.campus ? { campus: exam.campus } : {}),
+  };
+}
+
+function formatContextLiveSource(label: string, status: ContextLiveSourceStatus): string {
+  const extras = [
+    status.failureCount ? `${status.failureCount} failure(s)` : "",
+    status.omissionCount ? `${status.omissionCount} omission(s)` : "",
+    status.message ?? "",
+  ].filter(Boolean).join(" · ");
+  return `${label}: ${status.state}${extras ? ` · ${extras}` : ""}`;
+}
+
+function matchesSemesterLabel(label: string, semester: Semester): boolean {
+  if (!label.trim()) return false;
+  const season = semester.xq === "1" ? "秋季" : semester.xq === "2" ? "春季" : "夏季";
+  const startYear = semester.xn.slice(0, 4);
+  const endYear = semester.xn.slice(5);
+  return [semester.value, `${semester.xn}${semester.xq}`, `${startYear}${season}`, `${endYear}${season}`]
+    .some((candidate) => label.includes(candidate))
+    || (label.includes(semester.xn) && label.includes(season));
+}
+
+function exactIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function sanitizeIcsId(value: string): string {
+  return value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "item";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function runResources(
