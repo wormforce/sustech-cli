@@ -33,7 +33,7 @@ jobs:
       - run: npm ci
       - name: Verify Linux Secret Service client loads
         if: runner.os == 'Linux'
-        run: secret-tool --help
+        run: command -v secret-tool
       - run: npm run check
       - run: npm test
       - name: Exercise native credential storage

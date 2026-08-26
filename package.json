@@ -50,7 +50,7 @@
     "check": "tsc --noEmit --project tsconfig.json",
     "prepare": "npm run build",
     "start": "node dist/cli.js",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "test": "npm run build && node scripts/run-tests.mjs",
     "prepack": "npm run check && npm test"
   },
   "packageManager": "npm@10.9.3",
