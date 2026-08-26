@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { basename, resolve as resolvePath } from "node:path";
 import { CliError } from "../core/errors.js";
 import {
   arrayValue,
@@ -18,12 +21,14 @@ export const PMS_STATUS: ServiceStatus = {
   auth: "cookie-session",
   campusNetwork: true,
   browser: false,
-  summary: "The CLI performs the PMS token, public-key, RSA login flow and exposes read-only printer and queue APIs.",
+  summary: "The CLI performs the PMS token, public-key, RSA login flow, reads printer and queue state, and applies guarded print-queue upload/delete mutations.",
   notes: [
     "The OSESSIONID cookie and encrypted login material remain in memory and are never returned in command output.",
     "A live smoke attempt on 2026-08-26 reached the campus-network gate before login; the auth flow remains protocol-fixture verified.",
-    "This adapter layer only covers read paths.",
-    "Upload and delete endpoints are intentionally excluded.",
+    "Generic PMS fetch access remains fail-closed and read-only; write endpoints are exposed only through typed allowlisted methods.",
+    "Cloud-print upload uses preview/apply, requires --confirm, and binds apply to the previewed SHA-256 digest.",
+    "Print-job deletion uses preview/apply with exact job-id revalidation before the write.",
+    "Scan-job download is not implemented because the current source evidence does not expose a documented download endpoint.",
   ],
   endpoints: [
     "/api/client/Auth/GetAuthToken",
@@ -32,11 +37,26 @@ export const PMS_STATUS: ServiceStatus = {
     "/api/client/Auth/Check",
     "/api/client/Station/GetSrvList",
     "/api/client/Station/GetList",
+    "/api/client/CloudPrint/Upload",
     "/api/client/PrintJob/Get",
+    "/api/client/PrintJob/Del",
     "/api/client/Scan/Get",
     "/api/client/Report/DetailPage",
   ],
 };
+
+export const PMS_COLOR_BW = 1;
+export const PMS_COLOR_COLOR = 2;
+export const PMS_PAPER_UNSPECIFIED = -1;
+export const PMS_PAPER_A3 = 8;
+export const PMS_PAPER_A4 = 9;
+export const PMS_DUPLEX_SINGLE = 1;
+export const PMS_DUPLEX_SHORT_EDGE = 2;
+export const PMS_DUPLEX_LONG_EDGE = 3;
+
+export type PmsPrintColor = "bw" | "color";
+export type PmsPaper = "unspecified" | "A3" | "A4";
+export type PmsDuplex = "single" | "short" | "long";
 
 export interface PmsServerGroup {
   serverGroup: number;
@@ -84,6 +104,65 @@ export interface PmsUsageRecord {
   memo: string;
 }
 
+export interface PmsUploadFile {
+  path: string;
+  absolutePath: string;
+  name: string;
+  size: number;
+  sha256: string;
+}
+
+export interface PmsPrintUploadOptions {
+  color: PmsPrintColor;
+  colorCode: typeof PMS_COLOR_BW | typeof PMS_COLOR_COLOR;
+  paper: PmsPaper;
+  paperCode: typeof PMS_PAPER_UNSPECIFIED | typeof PMS_PAPER_A3 | typeof PMS_PAPER_A4;
+  duplex: PmsDuplex;
+  duplexCode: typeof PMS_DUPLEX_SINGLE | typeof PMS_DUPLEX_SHORT_EDGE | typeof PMS_DUPLEX_LONG_EDGE;
+  pageFrom: number;
+  pageTo: number;
+  copies: number;
+}
+
+export interface PmsMutationWarning {
+  code: string;
+  message: string;
+}
+
+export interface PmsMutationVerification {
+  status: "confirmed" | "not_observed" | "unavailable" | "ambiguous";
+  message: string;
+  observedJobIds: number[];
+}
+
+export interface PmsPrintUploadPreview {
+  checkedAt: string;
+  existingJobs: readonly Pick<PmsPrintJob, "jobId" | "fileName" | "createdAt">[];
+  file: PmsUploadFile;
+  options: PmsPrintUploadOptions;
+  warnings: readonly PmsMutationWarning[];
+  applyAllowed: boolean;
+  confirmation: {
+    required: true;
+    available: boolean;
+    expectedSha256: string;
+    argv?: string[];
+    command?: string;
+  };
+}
+
+export interface PmsPrintDeletePreview {
+  checkedAt: string;
+  totalJobs: number;
+  job: PmsPrintJob;
+  confirmation: {
+    required: true;
+    available: boolean;
+    argv?: string[];
+    command?: string;
+  };
+}
+
 export async function listPmsServerGroups(adapter: ServiceAdapter): Promise<PmsServerGroup[]> {
   const data = unwrapPms(await fetchJson<unknown>(adapter, requestUrl(PMS_BASE, "/api/client/Station/GetSrvList")));
   return arrayValue(data).map((item) => normalisePmsServerGroup(item));
@@ -127,6 +206,152 @@ export async function listPmsUsageHistory(
   return {
     records: arrayValue(record.result).map((item) => normalisePmsUsageRecord(item)),
     totalPages: numberValue(record.dwTotalPage, 1),
+  };
+}
+
+export async function inspectPmsUploadFile(path: string): Promise<PmsUploadFile> {
+  return (await readPmsUploadPayload(path)).file;
+}
+
+export async function readPmsUploadPayload(path: string): Promise<{ file: PmsUploadFile; bytes: Uint8Array }> {
+  const absolutePath = resolvePath(path);
+  let info;
+  let buffer: Buffer;
+  try {
+    info = await stat(absolutePath);
+    buffer = await readFile(absolutePath);
+  } catch (error) {
+    throw new CliError(
+      "The PMS upload file could not be read.",
+      "PMS_UPLOAD_FILE_NOT_READABLE",
+      2,
+      {
+        file: absolutePath,
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+  if (!info.isFile()) {
+    throw new CliError(
+      "The PMS upload target must be a regular file.",
+      "PMS_UPLOAD_FILE_NOT_REGULAR",
+      2,
+      { file: absolutePath },
+    );
+  }
+  if (buffer.byteLength === 0) {
+    throw new CliError(
+      "The PMS upload file is empty.",
+      "PMS_UPLOAD_FILE_EMPTY",
+      2,
+      { file: absolutePath },
+    );
+  }
+  return {
+    file: {
+      path,
+      absolutePath,
+      name: basename(absolutePath),
+      size: buffer.byteLength,
+      sha256: createHash("sha256").update(buffer).digest("hex"),
+    },
+    bytes: buffer,
+  };
+}
+
+export function buildPmsPrintUploadPreview(
+  jobs: readonly PmsPrintJob[],
+  file: PmsUploadFile,
+  options: PmsPrintUploadOptions,
+  confirmation: PmsPrintUploadPreview["confirmation"],
+  now: Date = new Date(),
+): PmsPrintUploadPreview {
+  const warnings: PmsMutationWarning[] = [];
+  const duplicateNames = jobs.filter((job) => job.fileName === file.name);
+  if (duplicateNames.length > 0) {
+    warnings.push({
+      code: "DUPLICATE_FILENAME",
+      message: `The current queue already contains ${duplicateNames.length} job(s) named ${file.name}; verify the intended file before adding another copy.`,
+    });
+  }
+  return {
+    checkedAt: now.toISOString(),
+    existingJobs: jobs.map((job) => ({
+      jobId: job.jobId,
+      fileName: job.fileName,
+      createdAt: job.createdAt,
+    })),
+    file,
+    options,
+    warnings,
+    applyAllowed: true,
+    confirmation,
+  };
+}
+
+export function findPmsPrintJob(jobs: readonly PmsPrintJob[], jobId: number): PmsPrintJob | undefined {
+  return jobs.find((job) => job.jobId === jobId);
+}
+
+export function buildPmsPrintDeletePreview(
+  jobs: readonly PmsPrintJob[],
+  job: PmsPrintJob,
+  confirmation: PmsPrintDeletePreview["confirmation"],
+  now: Date = new Date(),
+): PmsPrintDeletePreview {
+  return {
+    checkedAt: now.toISOString(),
+    totalJobs: jobs.length,
+    job,
+    confirmation,
+  };
+}
+
+export function verifyPmsPrintUpload(
+  previousJobs: readonly PmsPrintJob[],
+  currentJobs: readonly PmsPrintJob[],
+  file: Pick<PmsUploadFile, "name">,
+  options: PmsPrintUploadOptions,
+): PmsMutationVerification {
+  const previousIds = new Set(previousJobs.map((job) => job.jobId));
+  const candidates = currentJobs.filter((job) => !previousIds.has(job.jobId) && matchesUploadedPrintJob(job, file.name, options));
+  if (candidates.length === 1) {
+    return {
+      status: "confirmed",
+      message: "A new print-queue entry with the expected filename and options was read back from PMS.",
+      observedJobIds: [candidates[0].jobId],
+    };
+  }
+  if (candidates.length > 1) {
+    return {
+      status: "ambiguous",
+      message: "Multiple new print-queue entries matched the requested file/options, so the upload could not be confirmed uniquely.",
+      observedJobIds: candidates.map((job) => job.jobId),
+    };
+  }
+  return {
+    status: "not_observed",
+    message: "PMS accepted the upload request, but no uniquely matching new print job was observed in the read-back queue state.",
+    observedJobIds: [],
+  };
+}
+
+export function verifyPmsPrintDeletion(
+  currentJobs: readonly PmsPrintJob[],
+  deletedJobId: number,
+): PmsMutationVerification {
+  const stillPresent = currentJobs.some((job) => job.jobId === deletedJobId);
+  if (!stillPresent) {
+    return {
+      status: "confirmed",
+      message: "The exact print job was absent from the read-back queue state.",
+      observedJobIds: [],
+    };
+  }
+  return {
+    status: "not_observed",
+    message: "The exact print job still appeared in the read-back queue state.",
+    observedJobIds: [deletedJobId],
   };
 }
 
@@ -206,7 +431,7 @@ function unwrapPms(raw: unknown): unknown {
   return record.result;
 }
 
-function pmsUpstreamError(record: Record<string, unknown>): CliError {
+export function pmsUpstreamError(record: Record<string, unknown>): CliError {
   return new CliError("PMS returned an application error.", "SERVICE_UPSTREAM_ERROR", 1, {
     service: "pms",
     code: numberValue(record.code, -1),
@@ -224,10 +449,16 @@ function parsePmsPaperDetail(raw: unknown): unknown[] {
   }
 }
 
-function paperName(code: number): string {
-  if (code === 9) return "A4";
-  if (code === 8) return "A3";
+export function pmsPaperName(code: number): string {
+  if (code === PMS_PAPER_A4) return "A4";
+  if (code === PMS_PAPER_A3) return "A3";
   return "";
+}
+
+export function pmsDuplexLabel(code: number): string {
+  if (code === PMS_DUPLEX_LONG_EDGE) return "双面长边";
+  if (code === PMS_DUPLEX_SHORT_EDGE) return "双面短边";
+  return "单面";
 }
 
 function derivePmsState(status: number): PmsStation["state"] {
@@ -253,4 +484,21 @@ function combinePmsDateTime(rawDate: number, rawTime: number): string {
 
 function normalisePmsDate(value: string): string {
   return value.replaceAll("-", "").replaceAll(".", "");
+}
+
+function paperName(code: number): string {
+  return pmsPaperName(code);
+}
+
+function matchesUploadedPrintJob(
+  job: PmsPrintJob,
+  expectedFileName: string,
+  options: PmsPrintUploadOptions,
+): boolean {
+  if (job.fileName !== expectedFileName) return false;
+  if (job.copies !== options.copies) return false;
+  if (job.color !== (options.colorCode === PMS_COLOR_COLOR)) return false;
+  if (job.duplexLabel !== pmsDuplexLabel(options.duplexCode)) return false;
+  if (options.paperCode !== PMS_PAPER_UNSPECIFIED && job.paper !== pmsPaperName(options.paperCode)) return false;
+  return true;
 }

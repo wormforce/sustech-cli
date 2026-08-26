@@ -384,7 +384,7 @@ test("degree-audit validates local requirements format before credential lookup"
   }
 });
 
-test("booking, library-booking, and PMS expose read-only Agent commands", () => {
+test("booking, library-booking, and PMS expose authenticated Agent commands", () => {
   const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities as Array<{
     command: string;
     kind: string;
@@ -401,6 +401,11 @@ test("booking, library-booking, and PMS expose read-only Agent commands", () => 
     assert.equal(capability?.authentication, authentication);
     assert.equal(capability?.confirmation, "none");
   }
+  assert.equal(capabilities.find((entry) => entry.command === "pms upload preview")?.kind, "plan");
+  assert.equal(capabilities.find((entry) => entry.command === "pms upload apply")?.kind, "mutation");
+  assert.equal(capabilities.find((entry) => entry.command === "pms upload apply")?.confirmation, "required");
+  assert.equal(capabilities.find((entry) => entry.command === "pms delete apply")?.kind, "mutation");
+  assert.equal(capabilities.find((entry) => entry.command === "pms delete apply")?.confirmation, "required");
 
   for (const service of ["booking", "library-booking", "pms"]) {
     const status = run(["services", "status", service, "--json"]);
@@ -426,6 +431,7 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["lib-booking", "rooms", "--kind-id", "0", "--lab-id", "1", "--json"], "USAGE"],
     [["lib-booking", "reservations", "--start", "2026-02-30", "--json"], "USAGE"],
     [["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"], "USAGE"],
+    [["pms", "delete", "preview", "0", "--json"], "USAGE"],
     [["auth", "check", "--service", "not-a-service", "--json"], "USAGE"],
     [["doctor", "--service", "tis,not-a-service", "--json"], "USAGE"],
     [["papers", "fetch-oa", "not-a-doi", "--destination", "/tmp/paper.pdf", "--json"], "USAGE"],
@@ -466,6 +472,68 @@ test("context live degrades gracefully when Blackboard credentials are unavailab
   const envelope = JSON.parse(result.stdout);
   assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
+});
+
+test("PMS upload preview validates the local file before requiring credentials", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-pms-upload-"));
+  const filePath = join(tempDir, "report final.pdf");
+  writeFileSync(filePath, "%PDF-1.7\nmock", "utf8");
+
+  try {
+    const result = runWithoutCredentials([
+      "pms", "upload", "preview",
+      "--file", filePath,
+      "--color", "color",
+      "--paper", "A4",
+      "--duplex", "long",
+      "--page-from", "2",
+      "--page-to", "4",
+      "--copies", "3",
+      "--json",
+    ]);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).error.code, "CREDENTIALS_REQUIRED");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("PMS upload apply requires both the preview hash and explicit confirmation before authentication", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-pms-upload-apply-"));
+  const filePath = join(tempDir, "answer.txt");
+  const contents = "reviewed print payload";
+  writeFileSync(filePath, contents, "utf8");
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const baseArgs = [
+    "pms", "upload", "apply",
+    "--file", filePath,
+    "--color", "bw",
+    "--paper", "unspecified",
+    "--duplex", "single",
+  ];
+
+  try {
+    const unconfirmed = runWithoutCredentials([...baseArgs, "--expected-sha256", sha256, "--json"]);
+    assert.equal(unconfirmed.status, 3);
+    assert.equal(JSON.parse(unconfirmed.stdout).error.code, "CONFIRMATION_REQUIRED");
+
+    const mismatched = runWithoutCredentials([
+      ...baseArgs,
+      "--expected-sha256", "0".repeat(64),
+      "--confirm",
+      "--json",
+    ]);
+    assert.equal(mismatched.status, 2);
+    assert.equal(JSON.parse(mismatched.stdout).error.code, "PMS_UPLOAD_FILE_HASH_MISMATCH");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("PMS delete apply requires explicit confirmation before authentication", () => {
+  const result = runWithoutCredentials(["pms", "delete", "apply", "12345", "--json"]);
+  assert.equal(result.status, 3);
+  assert.equal(JSON.parse(result.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
 function run(args: string[]): { status: number | null; stdout: string; stderr: string } {

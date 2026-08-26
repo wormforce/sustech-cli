@@ -52,6 +52,12 @@ const VALUE_OPTIONS = new Set([
   "--need-status",
   "--server-group",
   "--type",
+  "--color",
+  "--paper",
+  "--duplex",
+  "--copies",
+  "--page-from",
+  "--page-to",
   "--service",
   "--profile",
   "--sid",
@@ -78,6 +84,7 @@ export function inferCommandName(argv: string[]): string {
   if (
     (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid", "plan", "degree"].includes(command))
     || (group === "bb" && command === "submit")
+    || (group === "pms" && (command === "upload" || command === "delete"))
   ) {
     return positionals.slice(0, 3).join(" ");
   }

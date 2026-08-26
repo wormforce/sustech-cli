@@ -23,8 +23,8 @@ export const CONSEQUENCES: readonly Consequence[] = [
   consequence("booking.cancel", "high", true, "Cancels an existing room reservation.", "The released slot may be taken and cannot be guaranteed to return.", "Read the user's meetings back and confirm the exact meeting is absent.", "unavailable"),
   consequence("library-booking.create", "medium", false, "Creates a library room reservation.", "It uses reservation quota and may block a scarce room.", "Read reservations back and match the exact room plus period.", "unavailable"),
   consequence("library-booking.cancel", "high", true, "Cancels a library reservation.", "The released slot may be taken immediately.", "Read reservations back and confirm the exact reservation is absent.", "unavailable"),
-  consequence("pms.upload", "low", false, "Uploads a document to the campus print queue.", "The document enters an account-visible queue, although printing is not triggered.", "Read print jobs back and match filename plus options.", "unavailable"),
-  consequence("pms.delete", "high", true, "Deletes a queued print or scan document.", "The remote copy may be unrecoverable if no local source remains.", "Read the corresponding queue back and confirm the exact job is absent.", "unavailable"),
+  consequence("pms.upload", "low", false, "Uploads one local document to the campus print queue without printing it.", "A wrong file or option set can add an unintended document to the remote queue.", "Read print jobs back and match the exact filename plus options.", "implemented"),
+  consequence("pms.delete", "high", true, "Deletes one exact queued PMS print document.", "The remote queued copy may be unrecoverable if no local source remains.", "Read the print queue back and confirm the exact job ID is absent.", "implemented"),
   consequence("papers.fetch-oa", "low", true, "Writes one public open-access PDF to an explicit local destination.", "With --overwrite, an existing regular file at that exact destination is replaced.", "Use the returned absolute path, byte count, PDF signature validation, and SHA-256 digest.", "implemented"),
 ] as const;
 

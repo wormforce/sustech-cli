@@ -143,6 +143,10 @@ import {
   listLibraryReservationsPage,
   listLibraryRooms,
   listMyBookingMeetings,
+  buildPmsPrintDeletePreview,
+  buildPmsPrintUploadPreview,
+  findPmsPrintJob,
+  inspectPmsUploadFile,
   listPmsPrintJobs,
   listPmsScanJobs,
   listPmsServerGroups,
@@ -150,7 +154,10 @@ import {
   listPmsUsageHistory,
   listWsPrograms,
   inspectBlackboardSubmissionFile,
+  pmsDuplexLabel,
+  pmsPaperName,
   readBlackboardSubmissionPayload,
+  readPmsUploadPayload,
   selectBlackboardAssignment,
   searchCrossref,
   searchNces,
@@ -158,10 +165,13 @@ import {
   syncBlackboardAttachments,
   updateBlackboardAttempt,
   uploadBlackboardTemporaryFile,
+  verifyPmsPrintDeletion,
+  verifyPmsPrintUpload,
   type BlackboardAttempt,
   type BlackboardAttemptFile,
   type BlackboardSubmissionFile,
   type BlackboardSubmissionPreflight as BlackboardSubmissionAssessment,
+  type PmsPrintUploadOptions,
   type ServiceAdapter,
 } from "./services/index.js";
 import {
@@ -189,10 +199,14 @@ import {
   formatLibraryLabs,
   formatLibraryReservations,
   formatLibraryRooms,
+  formatPmsDeletePreview,
+  formatPmsDeleteSuccess,
   formatPmsPrintJobs,
   formatPmsScanJobs,
   formatPmsServerGroups,
   formatPmsStations,
+  formatPmsUploadPreview,
+  formatPmsUploadSuccess,
   formatPmsUsage,
   formatWsDetail,
   formatWsPrograms,
@@ -259,6 +273,10 @@ Usage:
   sustech pms jobs
   sustech pms scan-jobs
   sustech pms usage --begin YYYY-MM-DD --end YYYY-MM-DD [--type N] [--page N] [--page-size N]
+  sustech pms upload preview --file PATH [--color bw|color] [--paper unspecified|A4|A3] [--duplex single|short|long] [--page-from N [--page-to N]] [--copies N]
+  sustech pms upload apply --file PATH --expected-sha256 HEX [--color bw|color] [--paper unspecified|A4|A3] [--duplex single|short|long] [--page-from N [--page-to N]] [--copies N] --confirm
+  sustech pms delete preview JOB_ID
+  sustech pms delete apply JOB_ID --confirm
   sustech tis courses search [KEYWORD] [--semester YYYY-YYYY-N] [--limit N] [--refresh]
   sustech tis courses available [KEYWORD] --round ROUND [--semester YYYY-YYYY-N] [--limit N]
   sustech tis enrolled [--semester YYYY-YYYY-N]
@@ -303,7 +321,7 @@ Credentials:
 
 Safety:
   TIS preview commands are local-only. Blackboard submission preview performs authenticated read-only checks.
-  Blackboard/TIS apply commands change remote state only with --confirm.
+  Blackboard/TIS/PMS apply commands change remote state only with --confirm.
 `;
 
 type Values = OutputFlags & {
@@ -373,6 +391,12 @@ type Values = OutputFlags & {
   "need-status"?: string;
   "server-group"?: string;
   type?: string;
+  color?: string;
+  paper?: string;
+  duplex?: string;
+  copies?: string;
+  "page-from"?: string;
+  "page-to"?: string;
   service?: string;
   profile?: string;
   sid?: string;
@@ -432,6 +456,10 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "pms jobs": ["credentials-file"],
   "pms scan-jobs": ["credentials-file"],
   "pms usage": ["credentials-file", "begin", "end", "type", "page", "page-size"],
+  "pms upload preview": ["credentials-file", "file", "color", "paper", "duplex", "page-from", "page-to", "copies"],
+  "pms upload apply": ["credentials-file", "file", "expected-sha256", "color", "paper", "duplex", "page-from", "page-to", "copies", "confirm"],
+  "pms delete preview": ["credentials-file"],
+  "pms delete apply": ["credentials-file", "confirm"],
   "tis courses search": ["credentials-file", "semester", "limit", "refresh"],
   "tis courses available": ["credentials-file", "semester", "limit", "round"],
   "tis enrolled": ["credentials-file", "semester"],
@@ -538,6 +566,12 @@ async function main(argv: string[]): Promise<void> {
         "need-status": { type: "string" },
         "server-group": { type: "string" },
         type: { type: "string" },
+        color: { type: "string" },
+        paper: { type: "string" },
+        duplex: { type: "string" },
+        copies: { type: "string" },
+        "page-from": { type: "string" },
+        "page-to": { type: "string" },
         service: { type: "string" },
         profile: { type: "string" },
         sid: { type: "string" },
@@ -2830,7 +2864,388 @@ async function runPms(
     }, output);
     return;
   }
+  if (command === "upload" && positionals[2] === "preview" && positionals.length === 3) {
+    const file = await inspectPmsUploadFile(required(values.file, "--file"));
+    const options = pmsUploadOptions(values);
+    const session = await pmsService(values);
+    const jobs = await listPmsPrintJobs(session);
+    const preview = buildPmsPrintUploadPreview(
+      jobs,
+      file,
+      options,
+      buildPmsUploadApplyConfirmation(file.absolutePath, file.sha256, options, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      }),
+    );
+    writeSuccess({
+      command: "pms upload preview",
+      data: { mode: "preview", mutation: false, ...preview },
+      text: formatPmsUploadPreview(preview),
+    }, output);
+    return;
+  }
+  if (command === "upload" && positionals[2] === "apply" && positionals.length === 3) {
+    const filePath = required(values.file, "--file");
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "PMS print upload",
+        "PMS print upload adds a remote queue entry. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
+    const payload = await readPmsUploadPayload(filePath);
+    const file = payload.file;
+    if (file.sha256 !== expectedSha256) {
+      throw new CliError(
+        "The selected file no longer matches the reviewed preview hash. Re-run preview before uploading.",
+        "PMS_UPLOAD_FILE_HASH_MISMATCH",
+        2,
+        {
+          file: file.absolutePath,
+          expectedSha256,
+          actualSha256: file.sha256,
+        },
+      );
+    }
+    const options = pmsUploadOptions(values);
+    const session = await pmsService(values);
+    const previousJobs = await listPmsPrintJobs(session);
+    const preflight = buildPmsPrintUploadPreview(
+      previousJobs,
+      file,
+      options,
+      buildPmsUploadApplyConfirmation(file.absolutePath, file.sha256, options, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      }),
+    );
+    try {
+      const mutation = await session.uploadPrintJob({ name: file.name, bytes: payload.bytes }, options);
+      const readBackJobs = await bestEffortPmsPrintJobs(session);
+      const verification = readBackJobs
+        ? verifyPmsPrintUpload(previousJobs, readBackJobs, file, options)
+        : { status: "unavailable" as const, message: "The print queue could not be read back after the upload request.", observedJobIds: [] };
+      const observedJob = readBackJobs?.find((job) => verification.observedJobIds[0] === job.jobId);
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "PMS accepted the upload request, but the read-back verification was inconclusive.",
+          "PMS_UPLOAD_NOT_CONFIRMED",
+          5,
+          {
+            file: file.absolutePath,
+            options,
+            uploadMessage: mutation.message,
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeSuccess({
+        command: "pms upload apply",
+        data: {
+          mode: "apply",
+          mutation: true,
+          file,
+          options,
+          preflight: {
+            checkedAt: preflight.checkedAt,
+            queueSize: previousJobs.length,
+          },
+          ...(observedJob ? { job: observedJob } : {}),
+          verification,
+          uploadMessage: mutation.message,
+        },
+        text: formatPmsUploadSuccess({ job: observedJob, verification }),
+      }, output);
+      return;
+    } catch (error) {
+      const readBackJobs = await bestEffortPmsPrintJobs(session);
+      const verification = readBackJobs
+        ? verifyPmsPrintUpload(previousJobs, readBackJobs, file, options)
+        : { status: "unavailable" as const, message: "The print queue could not be read back after the upload request failed.", observedJobIds: [] };
+      const observedJob = readBackJobs?.find((job) => verification.observedJobIds[0] === job.jobId);
+      if (verification.status === "confirmed") {
+        writeSuccess({
+          command: "pms upload apply",
+          data: {
+            mode: "apply",
+            mutation: true,
+            file,
+            options,
+            ...(observedJob ? { job: observedJob } : {}),
+            verification,
+            recoveredAfterError: true,
+          },
+          text: formatPmsUploadSuccess({ job: observedJob, verification }),
+          meta: { recoveredAfterError: true },
+        }, output);
+        return;
+      }
+      if (isPmsMutationOutcomeUncertain(error)) {
+        throw new CliError(
+          "PMS print upload outcome is uncertain. Do not retry automatically.",
+          "PMS_UPLOAD_OUTCOME_UNKNOWN",
+          5,
+          {
+            file: file.absolutePath,
+            options,
+            verification,
+            cause: error instanceof Error ? error.message : String(error),
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      throw error;
+    }
+  }
+  if (command === "delete" && positionals[2] === "preview" && positionals.length === 4) {
+    const jobId = pmsJobId(positionals[3]);
+    const session = await pmsService(values);
+    const jobs = await listPmsPrintJobs(session);
+    const job = requirePmsPrintJob(jobs, jobId);
+    const preview = buildPmsPrintDeletePreview(
+      jobs,
+      job,
+      buildPmsDeleteApplyConfirmation(jobId, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+      }),
+    );
+    writeSuccess({
+      command: "pms delete preview",
+      data: { mode: "preview", mutation: false, ...preview },
+      text: formatPmsDeletePreview(preview),
+    }, output);
+    return;
+  }
+  if (command === "delete" && positionals[2] === "apply" && positionals.length === 4) {
+    const jobId = pmsJobId(positionals[3]);
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "PMS print-job deletion",
+        "PMS print-job deletion removes a queued remote document. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const session = await pmsService(values);
+    const previousJobs = await listPmsPrintJobs(session);
+    const job = requirePmsPrintJob(previousJobs, jobId);
+    try {
+      const mutation = await session.deletePrintJob(jobId);
+      const readBackJobs = await bestEffortPmsPrintJobs(session);
+      const verification = readBackJobs
+        ? verifyPmsPrintDeletion(readBackJobs, jobId)
+        : { status: "unavailable" as const, message: "The print queue could not be read back after the delete request.", observedJobIds: [] };
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "PMS accepted the delete request, but the read-back verification was inconclusive.",
+          "PMS_DELETE_NOT_CONFIRMED",
+          5,
+          {
+            jobId,
+            deleteMessage: mutation.message,
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeSuccess({
+        command: "pms delete apply",
+        data: {
+          mode: "apply",
+          mutation: true,
+          job,
+          verification,
+          deleteMessage: mutation.message,
+        },
+        text: formatPmsDeleteSuccess({ job, verification }),
+      }, output);
+      return;
+    } catch (error) {
+      const readBackJobs = await bestEffortPmsPrintJobs(session);
+      const verification = readBackJobs
+        ? verifyPmsPrintDeletion(readBackJobs, jobId)
+        : { status: "unavailable" as const, message: "The print queue could not be read back after the delete request failed.", observedJobIds: [] };
+      if (verification.status === "confirmed") {
+        writeSuccess({
+          command: "pms delete apply",
+          data: {
+            mode: "apply",
+            mutation: true,
+            job,
+            verification,
+            recoveredAfterError: true,
+          },
+          text: formatPmsDeleteSuccess({ job, verification }),
+          meta: { recoveredAfterError: true },
+        }, output);
+        return;
+      }
+      if (isPmsMutationOutcomeUncertain(error)) {
+        throw new CliError(
+          "PMS print-job deletion outcome is uncertain. Do not retry automatically.",
+          "PMS_DELETE_OUTCOME_UNKNOWN",
+          5,
+          {
+            jobId,
+            verification,
+            cause: error instanceof Error ? error.message : String(error),
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      throw error;
+    }
+  }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+function pmsUploadOptions(values: Values): PmsPrintUploadOptions {
+  const color = pmsColorValue(values.color);
+  const paper = pmsPaperValue(values.paper);
+  const duplex = pmsDuplexValue(values.duplex);
+  const copies = parsePositiveInteger(values.copies, 1, "--copies");
+  const pageFrom = parseNonNegativeInteger(values["page-from"], 0, "--page-from");
+  if (pageFrom === 0 && values["page-to"] !== undefined) {
+    throw usageError("--page-to requires --page-from.");
+  }
+  const pageTo = pageFrom === 0 ? 0 : parsePositiveInteger(values["page-to"], pageFrom, "--page-to");
+  if (pageFrom > 0 && pageTo < pageFrom) throw usageError("--page-to must be greater than or equal to --page-from.");
+  return {
+    ...color,
+    ...paper,
+    ...duplex,
+    copies,
+    pageFrom,
+    pageTo,
+  };
+}
+
+function pmsColorValue(value: string | undefined): Pick<PmsPrintUploadOptions, "color" | "colorCode"> {
+  const normalized = (value ?? "bw").trim().toLowerCase();
+  if (normalized === "bw" || normalized === "blackwhite" || normalized === "black-white" || normalized === "1" || normalized === "黑白") {
+    return { color: "bw", colorCode: 1 };
+  }
+  if (normalized === "color" || normalized === "2" || normalized === "彩色") {
+    return { color: "color", colorCode: 2 };
+  }
+  throw usageError("--color must be bw or color.");
+}
+
+function pmsPaperValue(value: string | undefined): Pick<PmsPrintUploadOptions, "paper" | "paperCode"> {
+  const normalized = (value ?? "unspecified").trim().toLowerCase();
+  if (normalized === "unspecified" || normalized === "" || normalized === "-1" || normalized === "不指定") {
+    return { paper: "unspecified", paperCode: -1 };
+  }
+  if (normalized === "a4" || normalized === "9") return { paper: "A4", paperCode: 9 };
+  if (normalized === "a3" || normalized === "8") return { paper: "A3", paperCode: 8 };
+  throw usageError("--paper must be unspecified, A4, or A3.");
+}
+
+function pmsDuplexValue(value: string | undefined): Pick<PmsPrintUploadOptions, "duplex" | "duplexCode"> {
+  const normalized = (value ?? "single").trim().toLowerCase();
+  if (normalized === "single" || normalized === "1" || normalized === "单面") return { duplex: "single", duplexCode: 1 };
+  if (normalized === "short" || normalized === "short-edge" || normalized === "2" || normalized === "双面短边") {
+    return { duplex: "short", duplexCode: 2 };
+  }
+  if (normalized === "long" || normalized === "long-edge" || normalized === "3" || normalized === "双面长边") {
+    return { duplex: "long", duplexCode: 3 };
+  }
+  throw usageError("--duplex must be single, short, or long.");
+}
+
+function buildPmsUploadApplyConfirmation(
+  absolutePath: string,
+  expectedSha256: string,
+  options: PmsPrintUploadOptions,
+  metadata: { credentialsFile?: string; profile?: string } = {},
+): { required: true; available: true; expectedSha256: string; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "pms",
+    "upload",
+    "apply",
+    ...(metadata.credentialsFile ? ["--credentials-file", metadata.credentialsFile] : []),
+    ...(metadata.profile ? ["--profile", metadata.profile] : []),
+    "--file",
+    absolutePath,
+    "--expected-sha256",
+    expectedSha256,
+    "--color",
+    options.color,
+    "--paper",
+    options.paper,
+    "--duplex",
+    options.duplex,
+    ...(options.pageFrom > 0 ? ["--page-from", String(options.pageFrom), "--page-to", String(options.pageTo)] : []),
+    "--copies",
+    String(options.copies),
+    "--confirm",
+  ];
+  return {
+    required: true,
+    available: true,
+    expectedSha256,
+    argv,
+    command: argv.map(shellQuote).join(" "),
+  };
+}
+
+function buildPmsDeleteApplyConfirmation(
+  jobId: number,
+  metadata: { credentialsFile?: string; profile?: string } = {},
+): { required: true; available: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "pms",
+    "delete",
+    "apply",
+    ...(metadata.credentialsFile ? ["--credentials-file", metadata.credentialsFile] : []),
+    ...(metadata.profile ? ["--profile", metadata.profile] : []),
+    String(jobId),
+    "--confirm",
+  ];
+  return {
+    required: true,
+    available: true,
+    argv,
+    command: argv.map(shellQuote).join(" "),
+  };
+}
+
+async function bestEffortPmsPrintJobs(session: PmsSession): Promise<Awaited<ReturnType<typeof listPmsPrintJobs>> | undefined> {
+  try {
+    return await listPmsPrintJobs(session);
+  } catch {
+    return undefined;
+  }
+}
+
+function pmsJobId(value: string | undefined): number {
+  return parsePositiveInteger(value, 1, "PMS job ID");
+}
+
+function requirePmsPrintJob(jobs: readonly Awaited<ReturnType<typeof listPmsPrintJobs>>[number][], jobId: number) {
+  const job = findPmsPrintJob(jobs, jobId);
+  if (job) return job;
+  throw new CliError(
+    "The requested PMS print job was not found in the current queue.",
+    "PMS_PRINT_JOB_NOT_FOUND",
+    4,
+    {
+      jobId,
+      warning: "NO_MUTATION_PERFORMED",
+      availableJobIds: jobs.map((entry) => entry.jobId),
+    },
+  );
+}
+
+function isPmsMutationOutcomeUncertain(error: unknown): boolean {
+  if (!(error instanceof CliError)) return false;
+  return error.code === "NETWORK_ERROR"
+    || error.code === "NETWORK_TIMEOUT"
+    || error.code === "TOO_MANY_REDIRECTS"
+    || (error.code === "SERVICE_HTTP_ERROR" && Number(error.details?.status) >= 500);
 }
 
 function enrollTarget(values: Values, semester: ReturnType<typeof parseSemester>) {

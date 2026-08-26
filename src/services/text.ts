@@ -25,7 +25,15 @@ import type {
 } from "./library.js";
 import type { NcesCourseDetail, NcesCourseSummary } from "./nces.js";
 import type { OpenAccessPdfDownload, PaperSummary } from "./papers.js";
-import type { PmsPrintJob, PmsScanJob, PmsServerGroup, PmsStation, PmsUsageRecord } from "./pms.js";
+import type {
+  PmsPrintDeletePreview,
+  PmsPrintJob,
+  PmsPrintUploadPreview,
+  PmsScanJob,
+  PmsServerGroup,
+  PmsStation,
+  PmsUsageRecord,
+} from "./pms.js";
 import type { WsProgramDetail, WsProgramSummary } from "./ws.js";
 
 export function formatBookingProfile(profile: BookingUserProfile): string {
@@ -144,6 +152,70 @@ export function formatPmsUsage(records: readonly PmsUsageRecord[]): string {
   return [
     `PMS usage history · ${records.length}`,
     ...records.map((record) => `${String(record.id).padEnd(10)} ${record.occurredAt} · ${record.pages} ${record.paper} pages · ¥${record.totalCost.toFixed(2)} · device ${record.deviceSn}`),
+  ].join("\n");
+}
+
+export function formatPmsUploadPreview(input: PmsPrintUploadPreview): string {
+  return [
+    "PMS print upload preview — authenticated read-only checks completed; no mutation was performed.",
+    "",
+    `Checked: ${input.checkedAt}`,
+    `File: ${input.file.absolutePath}`,
+    `Filename: ${input.file.name}`,
+    `Size: ${input.file.size} bytes`,
+    `SHA-256: ${input.file.sha256}`,
+    `Options: ${input.options.color} · ${input.options.paper} · ${input.options.duplex} · ${input.options.pageFrom === 0 ? "all pages" : `pages ${input.options.pageFrom}-${input.options.pageTo}`} · ${input.options.copies} copy/copies`,
+    `Current queue: ${input.existingJobs.length} job(s)`,
+    ...(input.warnings.length > 0 ? ["", "Warnings:", ...input.warnings.map((warning) => `- [${warning.code}] ${warning.message}`)] : []),
+    "",
+    ...(input.confirmation.available && input.confirmation.command
+      ? ["Apply command after reviewing the exact file hash and queue state:", input.confirmation.command]
+      : ["No apply command was generated."]),
+  ].join("\n");
+}
+
+export function formatPmsDeletePreview(input: PmsPrintDeletePreview): string {
+  return [
+    "PMS print-job deletion preview — authenticated read-only checks completed; no mutation was performed.",
+    "",
+    `Checked: ${input.checkedAt}`,
+    `Queue size: ${input.totalJobs} job(s)`,
+    `Job: ${input.job.jobId}`,
+    `Filename: ${input.job.fileName}`,
+    `Created: ${input.job.createdAt || "unknown"}`,
+    `Options: ${input.job.paper || "paper unavailable"} · ${input.job.duplexLabel} · ${input.job.copies} copy/copies`,
+    "",
+    ...(input.confirmation.available && input.confirmation.command
+      ? ["Apply command after reviewing the exact job ID:", input.confirmation.command]
+      : ["No apply command was generated."]),
+  ].join("\n");
+}
+
+export function formatPmsUploadSuccess(input: {
+  job?: PmsPrintJob;
+  verification: { status: "confirmed" | "not_observed" | "unavailable" | "ambiguous"; message: string };
+}): string {
+  return [
+    input.verification.status === "confirmed"
+      ? "PMS print upload confirmed by read-back."
+      : "PMS print upload request accepted, but verification is incomplete.",
+    ...(input.job ? [`Job: ${input.job.jobId} · ${input.job.fileName}`] : []),
+    `Verification: ${input.verification.status} — ${input.verification.message}`,
+    ...(input.verification.status === "confirmed" ? [] : ["Do not retry automatically; inspect the PMS queue before another write."]),
+  ].join("\n");
+}
+
+export function formatPmsDeleteSuccess(input: {
+  job: PmsPrintJob;
+  verification: { status: "confirmed" | "not_observed" | "unavailable" | "ambiguous"; message: string };
+}): string {
+  return [
+    input.verification.status === "confirmed"
+      ? "PMS print-job deletion confirmed by read-back."
+      : "PMS print-job deletion request accepted, but verification is incomplete.",
+    `Job: ${input.job.jobId} · ${input.job.fileName}`,
+    `Verification: ${input.verification.status} — ${input.verification.message}`,
+    ...(input.verification.status === "confirmed" ? [] : ["Do not retry automatically; inspect the PMS queue before another write."]),
   ].join("\n");
 }
 

@@ -8,6 +8,8 @@ test("consequence registry has stable unique operation IDs", () => {
   assert.equal(consequenceByOperation("blackboard.download")?.availability, "implemented");
   assert.equal(consequenceByOperation("blackboard.sync")?.availability, "implemented");
   assert.equal(consequenceByOperation("blackboard.submit")?.availability, "implemented");
+  assert.equal(consequenceByOperation("pms.upload")?.availability, "implemented");
+  assert.equal(consequenceByOperation("pms.delete")?.availability, "implemented");
 });
 
 test("implemented mutations declare a read-back verification rule", () => {

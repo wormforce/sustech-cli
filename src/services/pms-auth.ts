@@ -2,8 +2,9 @@ import { constants, createPublicKey, publicEncrypt } from "node:crypto";
 import { CliError } from "../core/errors.js";
 import { USER_AGENT } from "../core/version.js";
 import { numberValue, recordValue, stringValue } from "./base.js";
-import { PMS_API, PMS_BASE } from "./pms.js";
+import { PMS_API, PMS_BASE, pmsUpstreamError } from "./pms.js";
 import type { ServiceAdapter } from "./base.js";
+import type { PmsPrintUploadOptions } from "./pms.js";
 
 const PMS_HOST = new URL(PMS_BASE).hostname;
 const PMS_SERVICE = new URL("/client/new/cprintPc/", PMS_BASE).toString();
@@ -15,6 +16,10 @@ const PMS_READONLY_PATHS = new Map<string, ReadonlySet<string>>([
   ["/api/client/PrintJob/Get", new Set(["GET", "HEAD"])],
   ["/api/client/Scan/Get", new Set(["GET", "HEAD"])],
   ["/api/client/Report/DetailPage", new Set(["POST"])],
+]);
+const PMS_MUTATION_PATHS = new Map<string, ReadonlySet<string>>([
+  ["/api/client/CloudPrint/Upload", new Set(["POST"])],
+  ["/api/client/PrintJob/Del", new Set(["POST"])],
 ]);
 
 interface Cookie {
@@ -44,6 +49,11 @@ export interface PmsLoginResult {
 export interface PmsCheckResult {
   authenticated: boolean;
   displayName?: string;
+  message: string;
+}
+
+export interface PmsMutationResult {
+  code: number;
   message: string;
 }
 
@@ -185,6 +195,55 @@ export class PmsSession implements ServiceAdapter {
     return response;
   }
 
+  public async uploadPrintJob(
+    file: { name: string; bytes: Uint8Array },
+    options: PmsPrintUploadOptions,
+  ): Promise<PmsMutationResult> {
+    const url = resolveMutationUrl("/client/CloudPrint/Upload", "POST");
+    if (!this.authenticated) await this.login();
+    const form = new FormData();
+    form.set("dwColor", String(options.colorCode));
+    form.set("dwPaperId", String(options.paperCode));
+    form.set("dwDuplex", String(options.duplexCode));
+    form.set("dwFrom", String(options.pageFrom));
+    form.set("dwTo", String(options.pageTo));
+    form.set("dwCopies", String(options.copies));
+    form.set("BackURL", "result.html");
+    form.set("szPath", new Blob([file.bytes]), file.name);
+    const response = await this.requestRaw(url, { method: "POST", body: form });
+    if (response.status === 413) {
+      throw new CliError("PMS rejected the upload as too large.", "PMS_UPLOAD_TOO_LARGE", 1, {
+        service: "pms",
+        path: new URL(url).pathname,
+        status: response.status,
+      });
+    }
+    const record = recordValue(await this.parseJsonResponse(response, url));
+    if (numberValue(record.code, -1) !== 0) throw pmsUpstreamError(record);
+    return {
+      code: numberValue(record.code, 0),
+      message: stringValue(record.message),
+    };
+  }
+
+  public async deletePrintJob(jobId: number): Promise<PmsMutationResult> {
+    const url = resolveMutationUrl("/client/PrintJob/Del", "POST");
+    if (!this.authenticated) await this.login();
+    const record = recordValue(await this.requestJson(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        dwJobId: jobId,
+        dwOldJobId: jobId,
+      }),
+    }));
+    if (numberValue(record.code, -1) !== 0) throw pmsUpstreamError(record);
+    return {
+      code: numberValue(record.code, 0),
+      message: stringValue(record.message),
+    };
+  }
+
   private async getAuthToken(): Promise<string> {
     const response = await this.requestJson(apiUrl("/client/Auth/GetAuthToken"), { method: "POST" });
     const record = recordValue(response);
@@ -221,6 +280,10 @@ export class PmsSession implements ServiceAdapter {
 
   private async requestJson(url: string, init: RequestInit = {}): Promise<unknown> {
     const response = await this.requestRaw(url, init);
+    return this.parseJsonResponse(response, url);
+  }
+
+  private async parseJsonResponse(response: Response, url: string): Promise<unknown> {
     const text = await response.text();
     if (response.status === 403 && text.includes(OFF_CAMPUS_BODY)) {
       throw new CliError(
@@ -355,6 +418,20 @@ function resolveServiceUrl(input: string, baseUrl: URL, method?: string): URL {
     });
   }
   return safeUrl;
+}
+
+function resolveMutationUrl(path: string, method: string): string {
+  const url = pmsUrl(apiUrl(path), "serviceUrl");
+  const normalizedMethod = method.toUpperCase();
+  const allowedMethods = PMS_MUTATION_PATHS.get(url.pathname);
+  if (!allowedMethods || !allowedMethods.has(normalizedMethod)) {
+    throw new CliError("PMS adapter only allows documented typed mutation endpoints.", "UNSAFE_SERVICE_URL", 1, {
+      service: "pms",
+      path: url.pathname,
+      method: normalizedMethod,
+    });
+  }
+  return url.toString();
 }
 
 function pmsAuthFailure(step: string, record: Record<string, unknown>): CliError {

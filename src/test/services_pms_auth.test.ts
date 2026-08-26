@@ -260,6 +260,92 @@ test("PmsSession auth errors do not leak password, token, nonce, or cookies", as
   );
 });
 
+test("PmsSession exposes typed allowlisted upload/delete mutations while keeping cookies in memory", async () => {
+  const { publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 1024,
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  });
+  const rawPublicKey = publicKey.replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").replace(/\s+/g, "");
+  let uploadedBodySeen = false;
+  let deletedBodySeen = false;
+
+  const session = new PmsSession(
+    { username: "12210000", password: "super-secret" },
+    {
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url === "https://pms.sustech.edu.cn/api/client/Auth/GetAuthToken") {
+          return jsonResponse({ code: 0, szToken: "TOKEN-123" });
+        }
+        if (url === "https://pms.sustech.edu.cn/api/client/Auth/PublicKey") {
+          return jsonResponse({
+            code: 0,
+            result: {
+              publicKey: rawPublicKey,
+              nonceStr: "NONCE-XYZ",
+            },
+          });
+        }
+        if (url === "https://pms.sustech.edu.cn/api/client/Auth/Login") {
+          return jsonResponse({ code: 0, result: { szTrueName: "测试同学" } }, 200, {
+            "set-cookie": "OSESSIONID=session-123; Path=/; Secure; HttpOnly",
+          });
+        }
+        if (url === "https://pms.sustech.edu.cn/api/client/CloudPrint/Upload") {
+          const headers = new Headers(init?.headers);
+          assert.match(String(headers.get("cookie")), /OSESSIONID=session-123/);
+          const request = new Request(url, { method: "POST", headers, body: init?.body as RequestInit["body"] });
+          const form = await request.formData();
+          assert.equal(form.get("dwColor"), "2");
+          assert.equal(form.get("dwPaperId"), "9");
+          assert.equal(form.get("dwDuplex"), "3");
+          assert.equal(form.get("dwFrom"), "2");
+          assert.equal(form.get("dwTo"), "4");
+          assert.equal(form.get("dwCopies"), "3");
+          assert.equal(form.get("BackURL"), "result.html");
+          const file = form.get("szPath");
+          assert.equal(file instanceof File, true);
+          assert.equal((file as File).name, "report.pdf");
+          assert.equal(await (file as File).text(), "print payload");
+          uploadedBodySeen = true;
+          return jsonResponse({ code: 0, message: "queued" });
+        }
+        if (url === "https://pms.sustech.edu.cn/api/client/PrintJob/Del") {
+          const headers = new Headers(init?.headers);
+          assert.match(String(headers.get("cookie")), /OSESSIONID=session-123/);
+          assert.equal(headers.get("content-type"), "application/json");
+          assert.deepEqual(JSON.parse(String(init?.body)), { dwJobId: 77, dwOldJobId: 77 });
+          deletedBodySeen = true;
+          return jsonResponse({ code: 0, message: "deleted" });
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    },
+  );
+
+  const uploaded = await session.uploadPrintJob(
+    { name: "report.pdf", bytes: new TextEncoder().encode("print payload") },
+    {
+      color: "color",
+      colorCode: 2,
+      paper: "A4",
+      paperCode: 9,
+      duplex: "long",
+      duplexCode: 3,
+      pageFrom: 2,
+      pageTo: 4,
+      copies: 3,
+    },
+  );
+  assert.deepEqual(uploaded, { code: 0, message: "queued" });
+
+  const deleted = await session.deletePrintJob(77);
+  assert.deepEqual(deleted, { code: 0, message: "deleted" });
+  assert.equal(uploadedBodySeen, true);
+  assert.equal(deletedBodySeen, true);
+});
+
 function jsonResponse(value: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(value), {
     status,
