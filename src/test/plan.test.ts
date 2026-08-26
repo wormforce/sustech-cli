@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { CliError } from "../core/errors.js";
@@ -21,6 +21,7 @@ test("persistent TIS plans keep schema/version and normalize local state", async
     const written = JSON.parse(readFileSync(planPath, "utf8")) as { schemaVersion: string; kind: string };
     assert.equal(written.schemaVersion, "1");
     assert.equal(written.kind, "tis-plan");
+    assert.equal(statSync(planPath).mode & 0o777, 0o600);
 
     const loaded = await loadPlan(planPath);
     assert.deepEqual(loaded.plan.requestedCodes, ["CS101", "MA101"]);

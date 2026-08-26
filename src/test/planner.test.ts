@@ -64,6 +64,8 @@ test("timetable solver ranks later and more compact combinations ahead of earlie
       ["EARLY", "LOOSE"],
     ],
   );
+  assert.equal(result.solutions[0].score.metricUnit, "average-per-active-week");
+  assert.equal(result.solutions[0].score.activeWeeks, 2);
   assert.equal(result.solutions[0].score.metrics.earlySessions, 0);
   assert.equal(result.solutions[0].score.metrics.gapPeriods, 0);
   assert.ok(result.solutions[0].score.total > result.solutions[3].score.total);
@@ -84,7 +86,8 @@ test("timetable scoring penalizes weekly campus switches and surfaces truthful s
 
   const full = solveTimetables([base, sameCampus, switchCampus], ["CS101", "MA101"], { maxResults: 2 });
   assert.equal(full.solutions[0].sections[1].classGroup, "SAME");
-  assert.equal(full.solutions[1].score.metrics.campusSwitches, 2);
+  assert.equal(full.solutions[1].score.metrics.campusSwitches, 1);
+  assert.equal(full.solutions[1].score.metrics.distinctWeekdays, 1);
 });
 
 function slot(weeks: number[], day: number, periodStart: number, periodEnd: number): ScheduleSlot {

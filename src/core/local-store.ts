@@ -1,4 +1,5 @@
-import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { CliError } from "./errors.js";
@@ -30,9 +31,22 @@ export async function readJsonFile(path: string, notFoundCode: string, invalidCo
 export async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
   await assertPathAndParentsAreNotSymlinks(path);
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2), "utf8");
-  await rename(temporary, path);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let wroteTemporary = false;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporary, "wx", 0o600);
+    wroteTemporary = true;
+    await handle.writeFile(JSON.stringify(value, null, 2), "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, path);
+  } catch (error) {
+    if (handle) await handle.close().catch(() => undefined);
+    if (wroteTemporary) await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {

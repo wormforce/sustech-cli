@@ -156,7 +156,7 @@ export function formatTimetables(result: TimetableResult): string {
     });
     const score = [
       `score ${solution.score.total}`,
-      `early ${solution.score.metrics.earlySessions}`,
+      `avg/week early ${solution.score.metrics.earlySessions}`,
       `gaps ${solution.score.metrics.gapSegments}/${solution.score.metrics.gapPeriods}`,
       `weekdays ${solution.score.metrics.distinctWeekdays}`,
       `switches ${solution.score.metrics.campusSwitches}`,
@@ -169,6 +169,7 @@ export function formatTimetables(result: TimetableResult): string {
     result.searchTruncated
       ? `Ranking scope: partial top-${result.solutions.length}; evaluated ${result.evaluatedCount} complete timetable(s) before the search cap ${result.searchLimit}.`
       : `Ranking scope: complete; evaluated ${result.evaluatedCount} complete timetable(s).`,
+    `Score unit: ${result.solutions[0]?.score.metricUnit ?? "average-per-active-week"}${result.solutions[0] ? ` across ${result.solutions[0].score.activeWeeks} active teaching week(s) for solution 1` : ""}.`,
     result.blocked.length > 0
       ? `Blocked: ${result.blocked.map((entry) => `${entry.dayName} ${entry.periodStart}-${entry.periodEnd}`).join(", ")}`
       : "",
@@ -220,6 +221,30 @@ export function formatDegreeAudit(result: DegreeAuditResult, requirementsPath: s
   if (result.ambiguous.length > 0) {
     lines.push(...result.ambiguous.map((entry) =>
       `  ? ${entry.grade.code} ${entry.grade.name || entry.grade.nameEn} · ${entry.requirementIds.join(", ")}`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Unresolved grades ${result.summary.unresolvedGrades}`);
+  if (result.unresolved.length > 0) {
+    lines.push(...result.unresolved.map((entry) =>
+      `  ! ${entry.grade.code} ${entry.grade.name || entry.grade.nameEn} · ${entry.detail}${entry.requirementIds.length > 0 ? ` · matches ${entry.requirementIds.join(", ")}` : ""}`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Excluded failed/non-completed grades ${result.summary.excludedGrades}`);
+  if (result.excluded.length > 0) {
+    lines.push(...result.excluded.map((entry) =>
+      `  x ${entry.grade.code} ${entry.grade.name || entry.grade.nameEn} · ${entry.detail}${entry.requirementIds.length > 0 ? ` · matches ${entry.requirementIds.join(", ")}` : ""}`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Duplicate course codes ${result.summary.duplicateCourseCodes}`);
+  if (result.duplicateCourses.length > 0) {
+    lines.push(...result.duplicateCourses.map((entry) =>
+      `  = ${entry.code} · kept ${entry.counted?.semester ?? "none"}${entry.excludedPassedRetakes.length > 0 ? ` · excluded ${entry.excludedPassedRetakes.length} passed retake(s)` : ""}${entry.unresolvedAttempts.length > 0 ? ` · ${entry.unresolvedAttempts.length} unresolved` : ""}${entry.failedOrNonCompletedAttempts.length > 0 ? ` · ${entry.failedOrNonCompletedAttempts.length} failed/non-completed` : ""}`,
     ));
   } else {
     lines.push("  (none)");

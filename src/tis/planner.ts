@@ -55,6 +55,8 @@ export interface TimetableScoreMetrics {
 export interface TimetableScoreBreakdown {
   total: number;
   weights: TimetableScoreWeights;
+  metricUnit: "average-per-active-week";
+  activeWeeks: number;
   metrics: TimetableScoreMetrics;
   contributions: {
     earlySessions: number;
@@ -276,16 +278,14 @@ export function normaliseTimetablePreferences(
 }
 
 function scoreTimetable(sections: readonly Course[], preferences: TimetablePreferences): TimetableScoreBreakdown {
-  const metrics: TimetableScoreMetrics = {
-    earlySessions: 0,
-    gapSegments: 0,
-    gapPeriods: 0,
-    distinctWeekdays: 0,
-    campusSwitches: 0,
-  };
-  const activeDays = new Set<number>();
+  let earlySessions = 0;
+  let gapSegments = 0;
+  let gapPeriods = 0;
+  let distinctWeekdays = 0;
+  let campusSwitches = 0;
+  const activeWeeks = new Set<number>();
+  const activeDaysByWeek = new Map<number, Set<number>>();
   const meetingsByWeekDay = new Map<string, Array<{
-    day: number;
     periodStart: number;
     periodEnd: number;
     campus: string;
@@ -294,13 +294,12 @@ function scoreTimetable(sections: readonly Course[], preferences: TimetablePrefe
   for (const course of sections) {
     const campus = course.campus.trim();
     for (const slot of course.schedule) {
-      activeDays.add(slot.day);
       for (const week of slot.weeks) {
-        metrics.earlySessions += slot.periodStart <= preferences.earlyPeriodThreshold ? 1 : 0;
+        activeWeeks.add(week);
+        activeDaysByWeek.set(week, new Set([...(activeDaysByWeek.get(week) ?? []), slot.day]));
         const key = `${week}:${slot.day}`;
         const dayMeetings = meetingsByWeekDay.get(key) ?? [];
         dayMeetings.push({
-          day: slot.day,
           periodStart: slot.periodStart,
           periodEnd: slot.periodEnd,
           campus,
@@ -310,7 +309,9 @@ function scoreTimetable(sections: readonly Course[], preferences: TimetablePrefe
     }
   }
 
-  metrics.distinctWeekdays = activeDays.size;
+  for (const weekdays of activeDaysByWeek.values()) {
+    distinctWeekdays += weekdays.size;
+  }
 
   for (const meetings of meetingsByWeekDay.values()) {
     meetings.sort((left, right) =>
@@ -318,19 +319,29 @@ function scoreTimetable(sections: readonly Course[], preferences: TimetablePrefe
       || left.periodEnd - right.periodEnd
       || left.campus.localeCompare(right.campus),
     );
+    earlySessions += meetings.filter((meeting) => meeting.periodStart <= preferences.earlyPeriodThreshold).length;
     for (let index = 1; index < meetings.length; index += 1) {
       const previous = meetings[index - 1];
       const current = meetings[index];
       const gap = current.periodStart - previous.periodEnd - 1;
       if (gap > 0) {
-        metrics.gapSegments += 1;
-        metrics.gapPeriods += gap;
+        gapSegments += 1;
+        gapPeriods += gap;
       }
       if (previous.campus && current.campus && previous.campus !== current.campus) {
-        metrics.campusSwitches += 1;
+        campusSwitches += 1;
       }
     }
   }
+
+  const weekCount = Math.max(activeWeeks.size, 1);
+  const metrics: TimetableScoreMetrics = {
+    earlySessions: round(earlySessions / weekCount, 2),
+    gapSegments: round(gapSegments / weekCount, 2),
+    gapPeriods: round(gapPeriods / weekCount, 2),
+    distinctWeekdays: round(distinctWeekdays / weekCount, 2),
+    campusSwitches: round(campusSwitches / weekCount, 2),
+  };
 
   const contributions = {
     earlySessions: -metrics.earlySessions * preferences.weights.earlySession,
@@ -340,12 +351,17 @@ function scoreTimetable(sections: readonly Course[], preferences: TimetablePrefe
     campusSwitches: -metrics.campusSwitches * preferences.weights.campusSwitch,
   };
   return {
-    total: contributions.earlySessions
+    total: round(
+      contributions.earlySessions
       + contributions.gapSegments
       + contributions.gapPeriods
       + contributions.distinctWeekdays
       + contributions.campusSwitches,
+      2,
+    ),
     weights: preferences.weights,
+    metricUnit: "average-per-active-week",
+    activeWeeks: activeWeeks.size,
     metrics,
     contributions,
   };
