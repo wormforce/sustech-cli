@@ -1,5 +1,5 @@
 import { CliError } from "../core/errors.js";
-import { asRecord, asRecords, asStringArray, compactSemester, stringValue } from "./remaining-shared.js";
+import { asRecord, asRecords, compactSemester, numberValue, stringValue } from "./remaining-shared.js";
 
 export type EvaluationStatusFilter = "all" | "pending" | "draft" | "submitted";
 export type EvaluationQuestionKind = "rating" | "text" | "choice" | "unknown";
@@ -63,14 +63,11 @@ export class EvaluationStatusClient {
   ) {}
 
   public async categories(): Promise<EvaluationTaskCategory[]> {
-    const response = asRecord(await this.requester.getJson("/personnelEvaluation/listObtainPersonnelEvaluationTasks", {
+    const list = await fetchEvaluationRows(this.requester, "/personnelEvaluation/listObtainPersonnelEvaluationTasks", {
       yhdm: this.userId,
       rwmc: "",
       sfyp: "0",
-      pageNum: "1",
-      pageSize: "20",
-    }));
-    const list = asRecords(asRecord(response.result).list);
+    }, 20);
     return list.map(normaliseCategory);
   }
 
@@ -79,14 +76,12 @@ export class EvaluationStatusClient {
     const categories = await this.categories();
     const results: EvaluationCourseStatus[] = [];
     for (const category of categories) {
-      const response = asRecord(await this.requester.getJson("/personnelEvaluation/listEcaluationRalationshipEnriry", {
+      const rows = await fetchEvaluationRows(this.requester, "/personnelEvaluation/listEcaluationRalationshipEnriry", {
         pjrdm: this.userId,
         wjid: category.firstQuestionnaireId,
         bpmc: "",
         sfyp: "0",
         xnxq: compact,
-        pageNum: "1",
-        pageSize: "50",
         zc: "",
         xqj: "",
         jc: "",
@@ -97,14 +92,53 @@ export class EvaluationStatusClient {
         sfcxqbwj: "0",
         rwid: category.taskId,
         lsjgzt: "",
-      }));
-      const code = stringValue(response.code);
-      if (code && code !== "200") continue;
-      const rows = asRecords(asRecord(response.result).list);
+      }, 50);
       for (const row of rows) results.push(normaliseCourseStatus(row, category, semester));
     }
     return results.filter((row) => matchesStatus(row, status));
   }
+}
+
+async function fetchEvaluationRows(
+  requester: EvaluationRequester,
+  path: string,
+  params: Record<string, string>,
+  pageSize: number,
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  const seenPages = new Set<string>();
+  for (let page = 1; page <= 100; page += 1) {
+    const response = asRecord(await requester.getJson(path, {
+      ...params,
+      pageNum: String(page),
+      pageSize: String(pageSize),
+    }));
+    const code = stringValue(response.code);
+    if (code && code !== "200") {
+      throw new CliError("TIS evaluation endpoint rejected the paginated read.", "TIS_EVALUATION_ERROR", 1, {
+        path,
+        code,
+        message: stringValue(response.message),
+      });
+    }
+
+    const result = asRecord(response.result);
+    const pageRows = asRecords(result.list);
+    if (pageRows.length === 0) return rows;
+    const fingerprint = JSON.stringify(pageRows);
+    if (seenPages.has(fingerprint)) {
+      throw new CliError("TIS evaluation pagination repeated a page.", "TIS_PAGINATION_ERROR", 1, { path, page });
+    }
+    seenPages.add(fingerprint);
+    rows.push(...pageRows);
+
+    const pages = numberValue(result.pages ?? result.totalPage ?? result.totalPages);
+    const total = numberValue(result.total ?? result.totalCount);
+    if (pages !== undefined && page >= pages) return rows;
+    if (total !== undefined && rows.length >= total) return rows;
+    if (pages === undefined && total === undefined && pageRows.length < pageSize) return rows;
+  }
+  throw new CliError("TIS evaluation pagination exceeded the safe page limit.", "TIS_PAGINATION_LIMIT", 1, { path });
 }
 
 export function summariseEvaluationStatuses(rows: readonly EvaluationCourseStatus[]): EvaluationSummary {

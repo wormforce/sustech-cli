@@ -23,6 +23,12 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
     if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/users/_1_1/courses") {
       return jsonResponse({
         results: [{ courseId: "_8343_1", courseRoleId: "Student" }],
+        paging: { nextPage: "/learn/api/public/v1/users/_1_1/courses?offset=1" },
+      });
+    }
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/users/_1_1/courses?offset=1") {
+      return jsonResponse({
+        results: [{ courseId: "_9000_1", courseRoleId: "Student" }],
       });
     }
     if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1") {
@@ -34,7 +40,16 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
         availability: { available: "Yes" },
       });
     }
-    if (url.startsWith("https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/columns")) {
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_9000_1") {
+      return jsonResponse({
+        id: "_9000_1",
+        name: "Algorithms",
+        courseCode: "CS208",
+        externalId: "CS208-2026",
+        availability: { available: "Yes" },
+      });
+    }
+    if (url.includes("/learn/api/public/v1/courses/_8343_1/gradebook/columns") && !url.includes("offset=1")) {
       return jsonResponse({
         results: [{
           id: "_991_1",
@@ -42,29 +57,59 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
           contentId: "_490876_1",
           score: { possible: 100 },
         }],
+        paging: { nextPage: "/learn/api/public/v1/courses/_8343_1/gradebook/columns?offset=1" },
+      });
+    }
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/columns?offset=1") {
+      return jsonResponse({
+        results: [{
+          id: "_992_1",
+          name: "Final Project",
+          contentId: "_490877_1",
+          score: { possible: 80 },
+        }],
       });
     }
     throw new Error(`Unexpected URL ${url}`);
   });
 
   const courses = await listBlackboardCourses(adapter);
-  assert.deepEqual(courses, [{
-    id: "_8343_1",
-    numericId: "8343",
-    name: "Physical Chemistry",
-    courseCode: "CHEM201",
-    externalId: "CHEM201-2026",
-    roleId: "Student",
-    availability: "Yes",
-  }]);
+  assert.deepEqual(courses, [
+    {
+      id: "_8343_1",
+      numericId: "8343",
+      name: "Physical Chemistry",
+      courseCode: "CHEM201",
+      externalId: "CHEM201-2026",
+      roleId: "Student",
+      availability: "Yes",
+    },
+    {
+      id: "_9000_1",
+      numericId: "9000",
+      name: "Algorithms",
+      courseCode: "CS208",
+      externalId: "CS208-2026",
+      roleId: "Student",
+      availability: "Yes",
+    },
+  ]);
 
   const assignments = await listBlackboardAssignments(adapter, "_8343_1");
-  assert.deepEqual(assignments, [{
-    id: "991",
-    contentId: "490876",
-    title: "Lab Report 1",
-    scorePossible: 100,
-  }]);
+  assert.deepEqual(assignments, [
+    {
+      id: "991",
+      contentId: "490876",
+      title: "Lab Report 1",
+      scorePossible: 100,
+    },
+    {
+      id: "992",
+      contentId: "490877",
+      title: "Final Project",
+      scorePossible: 80,
+    },
+  ]);
 
   assert.deepEqual(normaliseBlackboardContentItem({
     id: "_888_1",

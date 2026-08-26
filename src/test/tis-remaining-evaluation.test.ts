@@ -47,6 +47,31 @@ test("evaluation status service normalises categories, statuses, and compact sem
   assert.equal(calls[1]?.params.xnxq, "2025-20262");
 });
 
+test("evaluation status service follows category and course pagination", async () => {
+  const calls: string[] = [];
+  const requester = {
+    async getJson(path: string, params: Record<string, string>): Promise<unknown> {
+      calls.push(`${path}:${params.rwid ?? "categories"}:${params.pageNum}`);
+      if (path.endsWith("listObtainPersonnelEvaluationTasks")) {
+        return params.pageNum === "1"
+          ? { result: { list: [{ rwid: "task-1", firstwjid: "wj-1", rwmc: "理论" }], pages: 2, total: 2 } }
+          : { result: { list: [{ rwid: "task-2", firstwjid: "wj-2", rwmc: "实验" }], pages: 2, total: 2 } };
+      }
+      if (params.rwid === "task-1") {
+        return params.pageNum === "1"
+          ? { code: "200", result: { list: [{ kcdm: "CS101", kcmc: "A", lsjgzt: "0" }], pages: 2, total: 2 } }
+          : { code: "200", result: { list: [{ kcdm: "CS102", kcmc: "B", lsjgzt: "2" }], pages: 2, total: 2 } };
+      }
+      return { code: "200", result: { list: [{ kcdm: "CS103", kcmc: "C", lsjgzt: "3" }], pages: 1, total: 1 } };
+    },
+  };
+
+  const rows = await new EvaluationStatusClient(requester, "12210000").listCourses("2025-2026-2");
+  assert.deepEqual(rows.map((row) => row.courseCode), ["CS101", "CS102", "CS103"]);
+  assert.ok(calls.some((call) => call.endsWith("task-1:2")));
+  assert.ok(calls.some((call) => call.endsWith("categories:2")));
+});
+
 test("evaluation snapshot parser extracts question blocks without a browser runtime", () => {
   const blocks = parseEvaluationQuestionBlocks({
     wjlist: [
