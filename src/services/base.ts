@@ -29,7 +29,8 @@ export class ServiceError extends CliError {
       cause?: string;
     } = {},
   ) {
-    super(message, "SERVICE_ERROR", 1, details);
+    const safeDetails = details.url ? { ...details, url: redactServiceUrl(details.url) } : details;
+    super(message, "SERVICE_ERROR", 1, safeDetails);
     this.name = "ServiceError";
   }
 }
@@ -178,3 +179,17 @@ async function fetchResponse(adapter: ServiceAdapter, url: string, init?: Reques
 }
 
 type QueryValue = string | number | boolean | readonly (string | number | boolean)[] | undefined | null;
+
+function redactServiceUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/(?:auth|password|secret|session|ticket|token)/i.test(key)) url.searchParams.set(key, "[REDACTED]");
+    }
+    return url.toString();
+  } catch {
+    return value.split("?", 1)[0] ?? "";
+  }
+}

@@ -3,7 +3,17 @@ import test from "node:test";
 import { buildPrimoSearchUrl, extractPrimoDocId, LIBRARY_CATALOG_STATUS } from "../services/library.js";
 import { getNcesCourseDetail, pickBestNcesSection, searchNces, tisToNcesTerm } from "../services/nces.js";
 import { resolveOpenAccess, searchCrossref } from "../services/papers.js";
+import { ServiceError } from "../services/base.js";
 import type { ServiceAdapter } from "../services/base.js";
+
+test("service errors redact authentication tokens from diagnostic URLs", () => {
+  const error = new ServiceError("failed", {
+    url: "https://ws.sustech.edu.cn/api?userToken=ABC123&query=program",
+  });
+  const url = new URL(String(error.details?.url));
+  assert.equal(url.searchParams.get("userToken"), "[REDACTED]");
+  assert.equal(url.searchParams.get("query"), "program");
+});
 
 test("library Primo URL builder preserves modern facet-based search parameters", () => {
   const url = buildPrimoSearchUrl({
