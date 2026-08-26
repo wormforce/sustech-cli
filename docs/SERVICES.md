@@ -21,33 +21,38 @@ while the CLI already supplies that transport for a specific command family.
 
 | Service | Availability | Auth | CLI surface today | Notes |
 | --- | --- | --- | --- | --- |
-| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb attachments`, `bb download`, `bb assignments`, `bb attempts`, `bb submit preview`, `bb submit apply` | CLI CAS login and courses read passed an opt-in live smoke test on 2026-08-26. Content attachment download supports the official Original endpoint and embedded BBML links. Assignment submission is fixture-tested against the official Learn REST attempt/upload/file flow and currently targets Classic/Original assignments. |
-| `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings` | CLI login and room-list read passed an opt-in live smoke test on 2026-08-26. |
+| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb attachments`, `bb download`, `bb assignments`, `bb deadlines`, `bb search`, `bb sync`, `bb attempts`, `bb submit preview`, `bb submit apply` | CLI CAS login and courses read passed an opt-in live smoke test on 2026-08-26. Content download/sync supports the official Original endpoint and embedded BBML links. Assignment submission is fixture-tested against the official Learn REST attempt/upload/file flow and currently targets Classic/Original assignments. |
+| `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings`, `booking create preview/apply`, `booking cancel preview/apply` | CLI login and room-list read passed an opt-in live smoke test on 2026-08-26. Mutation paths are fixture-tested only, explicitly warn that exact slot availability is not verified, and fail closed on policy blockers or ambiguous read-back. |
 | `library-catalog` | `unavailable` | browser session | `library search-url` | The rewrite only offers a Primo handoff URL builder. It does not fabricate catalog results. |
-| `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations` | Login plus identity, summary, labs, and count reads passed an opt-in live smoke test on 2026-08-26. |
+| `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations`, `lib-booking create preview/apply`, `lib-booking cancel preview/apply` | Login plus identity, summary, labs, and count reads passed an opt-in live smoke test on 2026-08-26. Mutation paths are fixture-tested only and apply conservative capacity and membership policy checks. |
 | `ws` | `adapter_required` | CAS cookie session | `ws programs`, `ws detail` | CLI CAS login and program-list read passed an opt-in live smoke test on 2026-08-26. |
-| `pms` | `implemented` | PMS auth token, RSA login, OSESSIONID cookie, campus reachability | `pms check`, `pms server-groups`, `pms stations`, `pms jobs`, `pms scan-jobs`, `pms usage` | CLI performs the PMS auth flow directly, keeps OSESSIONID in memory, and uses transient RSA login material. A first browser-side account link may still be needed on some accounts. |
+| `pms` | `implemented` | PMS auth token, RSA login, OSESSIONID cookie, campus reachability | `pms check`, `pms server-groups`, `pms stations`, `pms jobs`, `pms scan-jobs`, `pms usage`, `pms upload preview/apply`, `pms delete preview/apply` | CLI performs the PMS auth flow directly, keeps OSESSIONID in memory, and uses transient RSA login material. Queue mutations are fixture-tested only. A first browser-side account link may still be needed on some accounts. |
 | `nces` | `implemented` | none | `nces browse`, `nces search`, `nces course` | Public HTTP API backed by `ncesnext.com`; callers should avoid aggressive polling. |
-| `papers` | `implemented` | none | `papers search` | Uses CrossRef bibliographic relevance plus optional Unpaywall resolution. Metadata and OA links only, no downloads. |
+| `papers` | `implemented` | none | `papers search`, `papers fetch-oa` | Uses CrossRef bibliographic relevance plus optional Unpaywall resolution. OA downloads require an explicit guarded destination and validate redirects, PDF bytes, size, and SHA-256. |
 
-## Read-only transport guards
+## Authenticated transport guards
 
-Booking, library-booking, and PMS are now implemented as authenticated
-read-only transports, not generic "logged-in browsers."
+Booking, library-booking, and PMS are implemented as constrained authenticated
+transports, not generic "logged-in browsers."
 
 - `booking` keeps CAS cookies plus the booking bearer token in memory and only
-  calls the documented profile, room, and meeting endpoints
-- `library-booking` keeps the `ic-cookie` session in memory and only allows
-  `GET` or `HEAD` to the documented idle-summary, lab, room, and reservation
-  endpoints
+  calls documented profile, room, and meeting endpoints; writes are exposed
+  through typed create/cancel methods rather than generic POST access
+- `library-booking` keeps the `ic-cookie` session in memory and constrains reads
+  and typed create/cancel calls to documented idle-summary, lab, room, and
+  reservation endpoints
 - `pms` keeps the OSESSIONID cookie plus transient auth-token/public-key login
-  material in memory and only allows the documented read endpoints for printer
-  groups, printer lists, print jobs, scan jobs, and usage history
+  material in memory and constrains reads plus typed queue upload/delete calls
+  to documented PMS endpoints
 
 None of those session secrets are written to disk or echoed in normal command
 output. The account password may be persisted only through `auth login`, which
 uses the operating-system credential store described in `docs/AUTHENTICATION.md`.
-All write paths for these three services remain unavailable in this repository.
+Remote writes require an operation-specific preview, explicit `--confirm`, a
+fresh preflight, and exact read-back. If the write may have happened but cannot
+be verified, the command exits 5 and emits `DO_NOT_RETRY_AUTOMATICALLY`.
+No real write was used to validate these new paths; current evidence is from
+protocol fixtures and transport-guard tests.
 
 ## Blackboard submission boundary
 

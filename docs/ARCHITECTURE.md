@@ -26,13 +26,17 @@ output renderer       text | versioned JSON | streaming JSONL
   local config contains profile metadata only.
 - `src/sso` owns generic CAS session flow. TIS, Blackboard, and WS reuse this
   layer instead of reimplementing login logic separately.
-- `src/tis` owns TIS protocol details, normalized course models, planning, the
-  guarded `enroll apply` write path, and the newer classroom/evaluation/ICS and
-  selection-preview helpers.
+- `src/tis` owns TIS protocol details, normalized course models, persistent
+  planning and conservative degree audit, live classroom/context helpers,
+  multi-source ICS export, and guarded enroll/cart/drop/bid write paths.
 - `src/calendar`, `src/faculty`, `src/transit`, `src/resources`, and
   `src/wifi` own public or local-only data sources.
 - `src/context` composes a truthful snapshot from whichever sources are
-  available and marks missing inputs explicitly.
+  available and marks missing or partial inputs explicitly.
+- `src/profile` aggregates only whitelisted student fields and can save a
+  versioned, private local report without exposing raw upstream profiles.
+- Academic snapshots and shared local-store helpers provide guarded,
+  digest-verifiable local persistence and offline diffing.
 - `src/services` owns reusable campus-service adapters such as Blackboard, WS,
   booking, library booking, PMS, NCES, and papers, plus the authenticated
   session wrappers that sit in front of some of them.
@@ -68,7 +72,7 @@ The repo now has three service-facing patterns:
 
    - retrieve credentials just in time and keep cookies and transient tokens in memory only
    - constrain service origins; booking, library-booking, and PMS additionally
-     enforce documented read-only endpoint allowlists
+     enforce documented read allowlists and typed write endpoint allowlists
    - normalize the resulting responses through the same typed service layer
 
 `sustech services status` reports the reusable service layer, not only whether
@@ -89,18 +93,22 @@ commands for them.
   same-origin URL checks, exclusive no-overwrite placement, and a portable
   filesystem fallback when hard links are unavailable.
 - Booking, library-booking, and PMS sessions keep credentials and session
-  material in memory only and reject requests outside their read-only
-  allowlists.
+  material in memory only, reject requests outside their allowlists, and never
+  expose a generic authenticated write primitive.
 - `auth login` verifies the selected service before storing a password in the
   operating-system credential store. Linux refuses a session-only keyutils or
   plaintext fallback when Secret Service is unavailable.
-- The currently exposed remote mutation commands are `tis enroll apply --confirm`
-  and `bb submit apply --expected-sha256 HASH --confirm`. `bb download` mutates
-  only the selected local filesystem path.
+- Remote mutations cover TIS enroll/cart/drop/bid, Blackboard submission,
+  eHall and library booking create/cancel, and PMS queue upload/delete. Every
+  path requires `--confirm`; file-bound uploads additionally require the
+  previewed SHA-256. These paths are protocol-fixture-tested, not live-written.
+- Local file mutations such as Blackboard download/sync, OA PDF fetch,
+  iCalendar/profile/snapshot export, and plan persistence require explicit or
+  well-scoped destinations, reject symbolic-link traversal, default to
+  no-overwrite, and use private permissions for personal academic artifacts.
 - Mutation commands use explicit preview/build phases and post-action
-  verification. Blackboard apply also requires the previewed file SHA-256 and
-  returns exit code 5 plus `DO_NOT_RETRY_AUTOMATICALLY` when write state cannot
-  be determined safely.
+  verification. Any ambiguous remote result returns exit code 5 plus
+  `DO_NOT_RETRY_AUTOMATICALLY` when write state cannot be determined safely.
 - Consequence metadata lives in `src/core/consequences.ts` so agents can inspect
   risks and follow-up checks without scraping prose.
 - New authenticated campus-service wrappers are validated with protocol fixtures
