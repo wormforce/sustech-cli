@@ -26,10 +26,50 @@ export interface BlockedTime {
   periodEnd: number;
 }
 
+export interface TimetableScoreWeights {
+  earlySession: number;
+  gapSegment: number;
+  gapPeriod: number;
+  distinctWeekday: number;
+  campusSwitch: number;
+}
+
+export interface TimetablePreferenceInput {
+  earlyPeriodThreshold?: number;
+  weights?: Partial<TimetableScoreWeights>;
+}
+
+export interface TimetablePreferences {
+  earlyPeriodThreshold: number;
+  weights: TimetableScoreWeights;
+}
+
+export interface TimetableScoreMetrics {
+  earlySessions: number;
+  gapSegments: number;
+  gapPeriods: number;
+  distinctWeekdays: number;
+  campusSwitches: number;
+}
+
+export interface TimetableScoreBreakdown {
+  total: number;
+  weights: TimetableScoreWeights;
+  metrics: TimetableScoreMetrics;
+  contributions: {
+    earlySessions: number;
+    gapSegments: number;
+    gapPeriods: number;
+    distinctWeekdays: number;
+    campusSwitches: number;
+  };
+}
+
 export interface TimetableSolution {
   index: number;
   totalCredits: number;
   sections: Course[];
+  score: TimetableScoreBreakdown;
 }
 
 export interface TimetableResult {
@@ -40,7 +80,22 @@ export interface TimetableResult {
   truncated: boolean;
   candidatesByCode: Record<string, number>;
   excludedUnscheduledByCode: Record<string, number>;
+  preferences: TimetablePreferences;
+  evaluatedCount: number;
+  searchLimit: number;
+  searchTruncated: boolean;
 }
+
+export const DEFAULT_TIMETABLE_PREFERENCES: TimetablePreferences = {
+  earlyPeriodThreshold: 2,
+  weights: {
+    earlySession: 2,
+    gapSegment: 5,
+    gapPeriod: 1,
+    distinctWeekday: 4,
+    campusSwitch: 6,
+  },
+};
 
 export function parseBlockedTime(value: string): BlockedTime {
   const match = /^([^:]+):(\d+)(?:-(\d+))?$/.exec(value.trim());
@@ -70,7 +125,7 @@ export function parseBlockedTime(value: string): BlockedTime {
 export function solveTimetables(
   catalog: Course[],
   requested: string[],
-  options: { maxResults: number; blocked?: BlockedTime[] },
+  options: { maxResults: number; blocked?: BlockedTime[]; preferences?: TimetablePreferenceInput; maxSearchCandidates?: number },
 ): TimetableResult {
   const requestedCodes = [...new Set(requested.map((code) => code.trim().toUpperCase()).filter(Boolean))];
   if (requestedCodes.length === 0) {
@@ -83,6 +138,8 @@ export function solveTimetables(
   }
 
   const blocked = options.blocked ?? [];
+  const preferences = normaliseTimetablePreferences(options.preferences);
+  const searchLimit = boundedInteger(options.maxSearchCandidates, 5000, 1, 100000);
   const candidates = new Map<string, Course[]>();
   const excludedUnscheduledByCode: Record<string, number> = {};
   for (const code of requestedCodes) {
@@ -110,40 +167,58 @@ export function solveTimetables(
       truncated: false,
       candidatesByCode,
       excludedUnscheduledByCode,
+      preferences,
+      evaluatedCount: 0,
+      searchLimit,
+      searchTruncated: false,
     };
   }
 
   const orderedCodes = [...requestedCodes].sort(
     (left, right) => (candidates.get(left)?.length ?? 0) - (candidates.get(right)?.length ?? 0),
   );
-  const rawSolutions: Course[][] = [];
-  const collectionLimit = options.maxResults + 1;
+  const topSolutions: TimetableSolution[] = [];
+  let evaluatedCount = 0;
+  let searchTruncated = false;
 
-  const visit = (index: number, selected: Course[]): void => {
-    if (rawSolutions.length >= collectionLimit) return;
+  const visit = (index: number, selected: Course[]): boolean => {
+    if (searchTruncated) return true;
     if (index === orderedCodes.length) {
-      rawSolutions.push([...selected]);
-      return;
+      evaluatedCount += 1;
+      const orderedSections = [...selected].sort(
+        (left, right) => requestedCodes.indexOf(left.code.toUpperCase()) - requestedCodes.indexOf(right.code.toUpperCase()),
+      );
+      const solution: TimetableSolution = {
+        index: 0,
+        totalCredits: round(orderedSections.reduce((total, course) => total + course.credits, 0), 2),
+        sections: orderedSections,
+        score: scoreTimetable(orderedSections, preferences),
+      };
+      topSolutions.push(solution);
+      topSolutions.sort(compareSolutions);
+      if (topSolutions.length > options.maxResults) topSolutions.pop();
+      if (evaluatedCount >= searchLimit) {
+        searchTruncated = true;
+        return true;
+      }
+      return false;
     }
     const code = orderedCodes[index];
     for (const section of candidates.get(code) ?? []) {
       if (selected.some((existing) => coursesConflict(section, existing))) continue;
       selected.push(section);
-      visit(index + 1, selected);
+      if (visit(index + 1, selected)) {
+        selected.pop();
+        return true;
+      }
       selected.pop();
-      if (rawSolutions.length >= collectionLimit) return;
     }
+    return false;
   };
   visit(0, []);
 
-  const truncated = rawSolutions.length > options.maxResults;
-  const solutions = rawSolutions.slice(0, options.maxResults).map((sections, index) => ({
-    index: index + 1,
-    totalCredits: round(sections.reduce((total, course) => total + course.credits, 0), 2),
-    sections: [...sections].sort(
-      (left, right) => requestedCodes.indexOf(left.code.toUpperCase()) - requestedCodes.indexOf(right.code.toUpperCase()),
-    ),
-  }));
+  const truncated = searchTruncated || evaluatedCount > options.maxResults;
+  const solutions = topSolutions.map((solution, index) => ({ ...solution, index: index + 1 }));
   return {
     requestedCodes,
     missingCodes,
@@ -152,6 +227,10 @@ export function solveTimetables(
     truncated,
     candidatesByCode,
     excludedUnscheduledByCode,
+    preferences,
+    evaluatedCount,
+    searchLimit,
+    searchTruncated,
   };
 }
 
@@ -169,6 +248,137 @@ function slotOverlapsBlock(slot: ScheduleSlot, blocked: BlockedTime): boolean {
   return slot.day === blocked.day
     && slot.periodEnd >= blocked.periodStart
     && blocked.periodEnd >= slot.periodStart;
+}
+
+export function normaliseTimetablePreferences(
+  value: TimetablePreferenceInput | undefined,
+): TimetablePreferences {
+  return {
+    earlyPeriodThreshold: boundedInteger(
+      value?.earlyPeriodThreshold,
+      DEFAULT_TIMETABLE_PREFERENCES.earlyPeriodThreshold,
+      1,
+      13,
+    ),
+    weights: {
+      earlySession: boundedInteger(value?.weights?.earlySession, DEFAULT_TIMETABLE_PREFERENCES.weights.earlySession, 0, 100),
+      gapSegment: boundedInteger(value?.weights?.gapSegment, DEFAULT_TIMETABLE_PREFERENCES.weights.gapSegment, 0, 100),
+      gapPeriod: boundedInteger(value?.weights?.gapPeriod, DEFAULT_TIMETABLE_PREFERENCES.weights.gapPeriod, 0, 100),
+      distinctWeekday: boundedInteger(
+        value?.weights?.distinctWeekday,
+        DEFAULT_TIMETABLE_PREFERENCES.weights.distinctWeekday,
+        0,
+        100,
+      ),
+      campusSwitch: boundedInteger(value?.weights?.campusSwitch, DEFAULT_TIMETABLE_PREFERENCES.weights.campusSwitch, 0, 100),
+    },
+  };
+}
+
+function scoreTimetable(sections: readonly Course[], preferences: TimetablePreferences): TimetableScoreBreakdown {
+  const metrics: TimetableScoreMetrics = {
+    earlySessions: 0,
+    gapSegments: 0,
+    gapPeriods: 0,
+    distinctWeekdays: 0,
+    campusSwitches: 0,
+  };
+  const activeDays = new Set<number>();
+  const meetingsByWeekDay = new Map<string, Array<{
+    day: number;
+    periodStart: number;
+    periodEnd: number;
+    campus: string;
+  }>>();
+
+  for (const course of sections) {
+    const campus = course.campus.trim();
+    for (const slot of course.schedule) {
+      activeDays.add(slot.day);
+      for (const week of slot.weeks) {
+        metrics.earlySessions += slot.periodStart <= preferences.earlyPeriodThreshold ? 1 : 0;
+        const key = `${week}:${slot.day}`;
+        const dayMeetings = meetingsByWeekDay.get(key) ?? [];
+        dayMeetings.push({
+          day: slot.day,
+          periodStart: slot.periodStart,
+          periodEnd: slot.periodEnd,
+          campus,
+        });
+        meetingsByWeekDay.set(key, dayMeetings);
+      }
+    }
+  }
+
+  metrics.distinctWeekdays = activeDays.size;
+
+  for (const meetings of meetingsByWeekDay.values()) {
+    meetings.sort((left, right) =>
+      left.periodStart - right.periodStart
+      || left.periodEnd - right.periodEnd
+      || left.campus.localeCompare(right.campus),
+    );
+    for (let index = 1; index < meetings.length; index += 1) {
+      const previous = meetings[index - 1];
+      const current = meetings[index];
+      const gap = current.periodStart - previous.periodEnd - 1;
+      if (gap > 0) {
+        metrics.gapSegments += 1;
+        metrics.gapPeriods += gap;
+      }
+      if (previous.campus && current.campus && previous.campus !== current.campus) {
+        metrics.campusSwitches += 1;
+      }
+    }
+  }
+
+  const contributions = {
+    earlySessions: -metrics.earlySessions * preferences.weights.earlySession,
+    gapSegments: -metrics.gapSegments * preferences.weights.gapSegment,
+    gapPeriods: -metrics.gapPeriods * preferences.weights.gapPeriod,
+    distinctWeekdays: -metrics.distinctWeekdays * preferences.weights.distinctWeekday,
+    campusSwitches: -metrics.campusSwitches * preferences.weights.campusSwitch,
+  };
+  return {
+    total: contributions.earlySessions
+      + contributions.gapSegments
+      + contributions.gapPeriods
+      + contributions.distinctWeekdays
+      + contributions.campusSwitches,
+    weights: preferences.weights,
+    metrics,
+    contributions,
+  };
+}
+
+function compareSolutions(left: TimetableSolution, right: TimetableSolution): number {
+  if (left.score.total !== right.score.total) return right.score.total - left.score.total;
+  if (left.score.metrics.distinctWeekdays !== right.score.metrics.distinctWeekdays) {
+    return left.score.metrics.distinctWeekdays - right.score.metrics.distinctWeekdays;
+  }
+  if (left.score.metrics.gapSegments !== right.score.metrics.gapSegments) {
+    return left.score.metrics.gapSegments - right.score.metrics.gapSegments;
+  }
+  if (left.score.metrics.gapPeriods !== right.score.metrics.gapPeriods) {
+    return left.score.metrics.gapPeriods - right.score.metrics.gapPeriods;
+  }
+  if (left.score.metrics.earlySessions !== right.score.metrics.earlySessions) {
+    return left.score.metrics.earlySessions - right.score.metrics.earlySessions;
+  }
+  if (left.score.metrics.campusSwitches !== right.score.metrics.campusSwitches) {
+    return left.score.metrics.campusSwitches - right.score.metrics.campusSwitches;
+  }
+  return solutionIdentity(left).localeCompare(solutionIdentity(right));
+}
+
+function solutionIdentity(solution: TimetableSolution): string {
+  return solution.sections.map((course) => course.rwh || `${course.code}/${course.classGroup}`).join("|");
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const candidate = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(candidate) || candidate < minimum || candidate > maximum) return fallback;
+  return candidate;
 }
 
 function round(value: number, places: number): number {

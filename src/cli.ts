@@ -51,15 +51,19 @@ import {
   formatEnrollPreview,
   formatEnrollSuccess,
   formatExams,
+  formatDegreeAudit,
   formatGrades,
   formatScheduleEntries,
+  formatTisPlan,
   formatTimetables,
   formatVersion,
 } from "./core/text.js";
+import { auditDegreeRequirements, loadDegreeRequirements } from "./tis/degree-audit.js";
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
 import { TisClient, type TisSelectionState } from "./tis/client.js";
 import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
+import { addPlanEntries, createPlanDocument, loadPlan, removePlanEntries, savePlan } from "./tis/plan.js";
 import {
   fetchLiveRoomCatalog,
   fetchLiveRoomSchedule,
@@ -262,6 +266,11 @@ Usage:
   sustech tis grades [--semester YYYY-YYYY-N]
   sustech tis exams
   sustech tis timetable CODE... [--semester YYYY-YYYY-N] [--block MON:1-4] [--max N] [--refresh]
+  sustech tis plan init [CODE...] [--semester YYYY-YYYY-N] [--block MON:1-4] [--path PATH]
+  sustech tis plan show [--path PATH]
+  sustech tis plan add [CODE...] [--block MON:1-4] [--path PATH]
+  sustech tis plan remove [CODE...] [--block MON:1-4] [--path PATH]
+  sustech tis plan solve [--path PATH] [--semester YYYY-YYYY-N] [--max N] [--refresh]
   sustech tis classroom rooms [KEYWORD] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom occupancy ROOM --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom free --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
@@ -269,6 +278,7 @@ Usage:
   sustech tis classroom now ROOM [--semester YYYY-YYYY-N]
   sustech tis evals [--semester YYYY-YYYY-N] [--status all|pending|draft|submitted]
   sustech tis ical [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-name NAME]
+  sustech tis degree audit --requirements FILE [--semester YYYY-YYYY-N]
   sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
   sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
   sustech tis bid plan --pick COURSE_ID:BID|RWH:COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--bid-limit N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2]
@@ -367,6 +377,8 @@ type Values = OutputFlags & {
   profile?: string;
   sid?: string;
   "password-stdin"?: boolean;
+  path?: string;
+  requirements?: string;
   help?: boolean;
 };
 
@@ -426,6 +438,11 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis schedule": ["credentials-file", "semester", "week", "all"],
   "tis grades": ["credentials-file", "semester"],
   "tis exams": ["credentials-file"],
+  "tis plan init": ["semester", "block", "path"],
+  "tis plan show": ["path"],
+  "tis plan add": ["block", "path"],
+  "tis plan remove": ["block", "path"],
+  "tis plan solve": ["credentials-file", "semester", "refresh", "max", "path"],
   "tis classroom rooms": ["credentials-file", "semester", "refresh"],
   "tis classroom occupancy": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
   "tis classroom free": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
@@ -434,6 +451,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis evals": ["credentials-file", "semester", "status"],
   "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-name"],
   "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
+  "tis degree audit": ["credentials-file", "semester", "requirements"],
   "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
   "tis selection preview": ["semester", "course-id", "rwh", "round", "bid", "where", "cultivation"],
   "tis selection apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "where", "cultivation", "confirm"],
@@ -524,6 +542,8 @@ async function main(argv: string[]): Promise<void> {
         profile: { type: "string" },
         sid: { type: "string" },
         "password-stdin": { type: "boolean", default: false },
+        path: { type: "string" },
+        requirements: { type: "string" },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -750,6 +770,93 @@ async function main(argv: string[]): Promise<void> {
       text: formatExams(exams),
       items: exams,
       summary: { total: exams.length },
+    }, output);
+    return;
+  }
+  if (command === "plan" && operation === "init") {
+    const semester = values.semester ? parseSemester(values.semester) : undefined;
+    const view = await savePlan(values.path, createPlanDocument({
+      ...(semester ? { semester } : {}),
+      requestedCodes: parsed.positionals.slice(3),
+      blocked: (values.block ?? []).map(parseBlockedTime),
+    }));
+    writeSuccess({
+      command: "tis plan init",
+      data: { path: view.path, plan: view.plan, mutation: "local-only" },
+      text: formatTisPlan(view, "TIS plan initialized"),
+    }, output);
+    return;
+  }
+  if (command === "plan" && operation === "show" && parsed.positionals.length === 3) {
+    const view = await loadPlan(values.path);
+    writeSuccess({
+      command: "tis plan show",
+      data: { path: view.path, plan: view.plan },
+      text: formatTisPlan(view),
+    }, output);
+    return;
+  }
+  if (command === "plan" && operation === "add") {
+    const existing = await loadPlan(values.path);
+    const next = addPlanEntries(existing.plan, {
+      requestedCodes: parsed.positionals.slice(3),
+      blocked: (values.block ?? []).map(parseBlockedTime),
+    });
+    const view = await savePlan(existing.path, next);
+    writeSuccess({
+      command: "tis plan add",
+      data: { path: view.path, plan: view.plan, mutation: "local-only" },
+      text: formatTisPlan(view, "TIS plan updated"),
+    }, output);
+    return;
+  }
+  if (command === "plan" && operation === "remove") {
+    const existing = await loadPlan(values.path);
+    const next = removePlanEntries(existing.plan, {
+      requestedCodes: parsed.positionals.slice(3),
+      blocked: (values.block ?? []).map(parseBlockedTime),
+    });
+    const view = await savePlan(existing.path, next);
+    writeSuccess({
+      command: "tis plan remove",
+      data: { path: view.path, plan: view.plan, mutation: "local-only" },
+      text: formatTisPlan(view, "TIS plan updated"),
+    }, output);
+    return;
+  }
+  if (command === "plan" && operation === "solve" && parsed.positionals.length === 3) {
+    const view = await loadPlan(values.path);
+    const semester = values.semester
+      ? parseSemester(values.semester)
+      : view.plan.semester
+        ? parseSemester(view.plan.semester)
+        : parseSemester(undefined);
+    const maxResults = parsePositiveInteger(values.max, 20, "--max");
+    if (maxResults > 100) throw usageError("--max cannot exceed 100.");
+    const client = await tisClient(values);
+    const catalog = await client.catalog(semester, values.refresh);
+    const result = solveTimetables(catalog.courses, view.plan.requestedCodes, {
+      maxResults,
+      blocked: view.plan.blocked,
+      preferences: view.plan.preferences,
+    });
+    writeSuccess({
+      command: "tis plan solve",
+      data: { path: view.path, semester, source: catalog.source, plan: view.plan, ...result },
+      text: `${formatTisPlan(view)}\n\n${formatTimetables(result)}`,
+      items: result.solutions,
+      summary: {
+        path: view.path,
+        semester: semester.value,
+        source: catalog.source,
+        requestedCodes: result.requestedCodes,
+        missingCodes: result.missingCodes,
+        total: result.solutions.length,
+        truncated: result.truncated,
+        evaluatedCount: result.evaluatedCount,
+        searchLimit: result.searchLimit,
+        searchTruncated: result.searchTruncated,
+      },
     }, output);
     return;
   }
@@ -1288,7 +1395,25 @@ async function main(argv: string[]): Promise<void> {
         missingCodes: result.missingCodes,
         total: result.solutions.length,
         truncated: result.truncated,
+        evaluatedCount: result.evaluatedCount,
+        searchLimit: result.searchLimit,
+        searchTruncated: result.searchTruncated,
       },
+    }, output);
+    return;
+  }
+  if (command === "degree" && operation === "audit" && parsed.positionals.length === 3) {
+    const requirementsPath = required(values.requirements, "--requirements");
+    const requirements = await loadDegreeRequirements(requirementsPath);
+    const semester = values.semester ? parseSemester(values.semester) : undefined;
+    const client = await tisClient(values);
+    const grades = await client.grades(semester);
+    const audit = auditDegreeRequirements(grades, requirements);
+    writeSuccess({
+      command: "tis degree audit",
+      data: { ...(semester ? { semester } : {}), requirementsPath, ...audit },
+      text: formatDegreeAudit(audit, requirementsPath),
+      meta: { requirementsPath },
     }, output);
     return;
   }

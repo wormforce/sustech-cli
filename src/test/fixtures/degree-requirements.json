@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1",
+  "kind": "tis-degree-requirements",
+  "title": "Sample CS Program",
+  "requirements": [
+    {
+      "id": "cs-core",
+      "title": "CS Core",
+      "minCourses": 1,
+      "match": {
+        "codes": ["CS101"]
+      }
+    },
+    {
+      "id": "cs-elective",
+      "title": "CS Elective",
+      "minCredits": 3,
+      "match": {
+        "prefixes": ["CS"]
+      }
+    },
+    {
+      "id": "math",
+      "title": "Math Foundation",
+      "minCredits": 4,
+      "match": {
+        "codes": ["MA101"]
+      }
+    }
+  ]
+}

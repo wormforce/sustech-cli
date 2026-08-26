@@ -48,11 +48,50 @@ test("timetable solver excludes unknown-time sections and reports truncation onl
   assert.equal(exactlyOne.truncated, false);
 });
 
+test("timetable solver ranks later and more compact combinations ahead of earlier or looser ones", () => {
+  const early = course("CS101", "EARLY", slot([1, 2], 1, 1, 2), "南校区");
+  const late = course("CS101", "LATE", slot([1, 2], 1, 3, 4), "南校区");
+  const compact = course("MA101", "COMPACT", slot([1, 2], 1, 5, 6), "南校区");
+  const loose = course("MA101", "LOOSE", slot([1, 2], 1, 8, 9), "南校区");
+
+  const result = solveTimetables([early, late, compact, loose], ["CS101", "MA101"], { maxResults: 4 });
+  assert.deepEqual(
+    result.solutions.map((solution) => solution.sections.map((section) => section.classGroup)),
+    [
+      ["LATE", "COMPACT"],
+      ["LATE", "LOOSE"],
+      ["EARLY", "COMPACT"],
+      ["EARLY", "LOOSE"],
+    ],
+  );
+  assert.equal(result.solutions[0].score.metrics.earlySessions, 0);
+  assert.equal(result.solutions[0].score.metrics.gapPeriods, 0);
+  assert.ok(result.solutions[0].score.total > result.solutions[3].score.total);
+});
+
+test("timetable scoring penalizes weekly campus switches and surfaces truthful search metadata", () => {
+  const base = course("CS101", "BASE", slot([1, 2], 1, 3, 4), "南校区");
+  const sameCampus = course("MA101", "SAME", slot([1, 2], 1, 5, 6), "南校区");
+  const switchCampus = course("MA101", "SWITCH", slot([1, 2], 1, 5, 6), "北校区");
+
+  const result = solveTimetables([base, sameCampus, switchCampus], ["CS101", "MA101"], {
+    maxResults: 1,
+    maxSearchCandidates: 1,
+  });
+  assert.equal(result.searchTruncated, true);
+  assert.equal(result.evaluatedCount, 1);
+  assert.equal(result.searchLimit, 1);
+
+  const full = solveTimetables([base, sameCampus, switchCampus], ["CS101", "MA101"], { maxResults: 2 });
+  assert.equal(full.solutions[0].sections[1].classGroup, "SAME");
+  assert.equal(full.solutions[1].score.metrics.campusSwitches, 2);
+});
+
 function slot(weeks: number[], day: number, periodStart: number, periodEnd: number): ScheduleSlot {
   return { weeks, day, dayName: `day${day}`, periodStart, periodEnd, room: "R1" };
 }
 
-function course(code: string, classGroup: string, schedule: ScheduleSlot): Course {
+function course(code: string, classGroup: string, schedule: ScheduleSlot, campus = ""): Course {
   return {
     code,
     name: code,
@@ -62,7 +101,7 @@ function course(code: string, classGroup: string, schedule: ScheduleSlot): Cours
     college: "",
     category: "",
     nature: "",
-    campus: "",
+    campus,
     credits: 3,
     totalHours: 48,
     cultivation: "本科",

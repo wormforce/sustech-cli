@@ -204,6 +204,9 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const bbDeadlines = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb deadlines");
   const bbSearch = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb search");
   const bbSync = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb sync");
+  const planInit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan init");
+  const planSolve = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan solve");
+  const degreeAudit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree audit");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -234,6 +237,12 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(bbSearch.authentication, "bb");
   assert.equal(bbSync.kind, "mutation");
   assert.equal(bbSync.authentication, "bb");
+  assert.equal(planInit.kind, "local");
+  assert.equal(planInit.network, false);
+  assert.equal(planSolve.kind, "plan");
+  assert.equal(planSolve.authentication, "tis");
+  assert.equal(degreeAudit.kind, "plan");
+  assert.equal(degreeAudit.authentication, "tis");
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -310,6 +319,69 @@ test("new local Agent surfaces remain machine-readable and mutation-free", () =>
   assert.equal(doctorData.live, false);
   assert.deepEqual(doctorData.requestedServices, ["tis", "pms"]);
   assert.equal(doctorData.checks.find((entry: { id: string }) => entry.id === "service.pms").status, "skipped");
+});
+
+test("TIS plan subcommands persist local planning state without network", () => {
+  const tempDir = mkdtempSync(join(process.cwd(), ".tmp-sustech-cli-plan-cli-"));
+  const planPath = join(tempDir, "plan.json");
+
+  try {
+    const init = run([
+      "tis", "plan", "init", "CS101",
+      "--semester", "2025-2026-1",
+      "--block", "MON:1-2",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(init.status, 0);
+    assert.deepEqual(JSON.parse(init.stdout).data.plan.requestedCodes, ["CS101"]);
+
+    const add = run([
+      "tis", "plan", "add", "MA101",
+      "--block", "WED:3-4",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(add.status, 0);
+    const added = JSON.parse(add.stdout).data.plan;
+    assert.deepEqual(added.requestedCodes, ["CS101", "MA101"]);
+    assert.equal(added.blocked.length, 2);
+
+    const remove = run([
+      "tis", "plan", "remove", "CS101",
+      "--block", "MON:1-2",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(remove.status, 0);
+    const removed = JSON.parse(remove.stdout).data.plan;
+    assert.deepEqual(removed.requestedCodes, ["MA101"]);
+    assert.equal(removed.blocked.length, 1);
+
+    const show = run(["tis", "plan", "show", "--path", planPath, "--json"]);
+    assert.equal(show.status, 0);
+    assert.equal(JSON.parse(show.stdout).data.path, planPath);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("degree-audit validates local requirements format before credential lookup", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-degree-cli-"));
+  const requirementsPath = join(tempDir, "requirements.yaml");
+  writeFileSync(requirementsPath, "kind: tis-degree-requirements\n", "utf8");
+
+  try {
+    const result = runWithoutCredentials([
+      "tis", "degree", "audit",
+      "--requirements", requirementsPath,
+      "--json",
+    ]);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).error.code, "DEGREE_REQUIREMENTS_UNSUPPORTED_FORMAT");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("booking, library-booking, and PMS expose read-only Agent commands", () => {

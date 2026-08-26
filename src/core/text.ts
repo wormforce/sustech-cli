@@ -1,5 +1,7 @@
 import type { Semester } from "./semester.js";
 import type { TimetableResult } from "../tis/planner.js";
+import type { DegreeAuditResult } from "../tis/degree-audit.js";
+import type { TisPlanView } from "../tis/plan.js";
 import type { Course, ExamRecord, GpaSummary, GradeRecord, PersonalScheduleEntry } from "../tis/types.js";
 
 interface Column<T> {
@@ -152,19 +154,83 @@ export function formatTimetables(result: TimetableResult): string {
       ).join("; ") || "time TBA";
       return `  - ${course.code}/${course.classGroup || "?"} · ${course.teachers.join(", ") || "teacher TBA"} · ${schedule} · RWH ${course.rwh}`;
     });
-    return [`Solution ${solution.index} · ${solution.totalCredits} credits`, ...sections].join("\n");
+    const score = [
+      `score ${solution.score.total}`,
+      `early ${solution.score.metrics.earlySessions}`,
+      `gaps ${solution.score.metrics.gapSegments}/${solution.score.metrics.gapPeriods}`,
+      `weekdays ${solution.score.metrics.distinctWeekdays}`,
+      `switches ${solution.score.metrics.campusSwitches}`,
+    ].join(" · ");
+    return [`Solution ${solution.index} · ${solution.totalCredits} credits · ${score}`, ...sections].join("\n");
   });
   return [
     "Timetable solver",
     `Candidates: ${candidateSummary}`,
+    result.searchTruncated
+      ? `Ranking scope: partial top-${result.solutions.length}; evaluated ${result.evaluatedCount} complete timetable(s) before the search cap ${result.searchLimit}.`
+      : `Ranking scope: complete; evaluated ${result.evaluatedCount} complete timetable(s).`,
     result.blocked.length > 0
       ? `Blocked: ${result.blocked.map((entry) => `${entry.dayName} ${entry.periodStart}-${entry.periodEnd}`).join(", ")}`
       : "",
     "",
     solutions.join("\n\n"),
     "",
-    `${result.solutions.length} solution(s)${result.truncated ? " (truncated at --max)" : ""}.`,
+    `${result.solutions.length} solution(s) shown${result.truncated ? " (ranking window truncated)" : ""}.`,
   ].filter((line, index) => line !== "" || index > 1).join("\n");
+}
+
+export function formatTisPlan(view: TisPlanView, title = "TIS plan"): string {
+  const blocked = view.plan.blocked.length > 0
+    ? view.plan.blocked.map((entry) => `${entry.dayName} ${entry.periodStart}-${entry.periodEnd}`).join(", ")
+    : "(none)";
+  return [
+    `${title}`,
+    `Path: ${view.path}`,
+    `Schema: ${view.plan.schemaVersion} · ${view.plan.kind}`,
+    `Semester: ${view.plan.semester ?? "(not pinned)"}`,
+    `Codes: ${view.plan.requestedCodes.join(", ") || "(none)"}`,
+    `Blocked: ${blocked}`,
+    `Preferences: early<=P${view.plan.preferences.earlyPeriodThreshold}; weights ${formatWeights(view.plan.preferences.weights)}`,
+  ].join("\n");
+}
+
+export function formatDegreeAudit(result: DegreeAuditResult, requirementsPath: string): string {
+  const lines = [
+    `Degree audit${result.requirements.title ? ` · ${result.requirements.title}` : ""}`,
+    `Requirements: ${requirementsPath}`,
+    "",
+    `Satisfied ${result.summary.satisfiedRequirements}/${result.summary.totalRequirements}`,
+  ];
+  if (result.satisfied.length > 0) {
+    lines.push(...result.satisfied.map((entry) =>
+      `  ✓ ${entry.id} · ${entry.title} · ${entry.matchedCredits}/${entry.requiredCredits || entry.matchedCredits} credits · ${entry.matchedCourses}/${entry.requiredCourses || entry.matchedCourses} courses`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Remaining ${result.summary.remainingRequirements}`);
+  if (result.remaining.length > 0) {
+    lines.push(...result.remaining.map((entry) =>
+      `  - ${entry.id} · ${entry.title} · need ${entry.remainingCredits} credits, ${entry.remainingCourses} courses${entry.ambiguousMatches.length > 0 ? ` · ${entry.ambiguousMatches.length} ambiguous match(es)` : ""}`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Ambiguous grades ${result.summary.ambiguousGrades}`);
+  if (result.ambiguous.length > 0) {
+    lines.push(...result.ambiguous.map((entry) =>
+      `  ? ${entry.grade.code} ${entry.grade.name || entry.grade.nameEn} · ${entry.requirementIds.join(", ")}`,
+    ));
+  } else {
+    lines.push("  (none)");
+  }
+  lines.push("", `Unmatched grades ${result.summary.unmatchedGrades}`);
+  if (result.unmatched.length > 0) {
+    lines.push(...result.unmatched.map((grade) => `  · ${grade.code} ${grade.name || grade.nameEn}`));
+  } else {
+    lines.push("  (none)");
+  }
+  return lines.join("\n");
 }
 
 export function formatEnrollPreview(target: {
@@ -222,6 +288,22 @@ function formatSeats(course: Course): string {
   if (course.enrolled !== undefined && course.capacity !== undefined) return `${course.enrolled}/${course.capacity}`;
   if (course.capacity !== undefined) return String(course.capacity);
   return "-";
+}
+
+function formatWeights(weights: {
+  earlySession: number;
+  gapSegment: number;
+  gapPeriod: number;
+  distinctWeekday: number;
+  campusSwitch: number;
+}): string {
+  return [
+    `early=${weights.earlySession}`,
+    `gapSegment=${weights.gapSegment}`,
+    `gapPeriod=${weights.gapPeriod}`,
+    `weekday=${weights.distinctWeekday}`,
+    `switch=${weights.campusSwitch}`,
+  ].join(", ");
 }
 
 function padCell(value: string, width: number): string {
