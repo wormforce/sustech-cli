@@ -31,7 +31,8 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/context` composes a truthful snapshot from whichever sources are
   available and marks missing inputs explicitly.
 - `src/services` owns reusable campus-service adapters such as Blackboard, WS,
-  booking, library booking, PMS, NCES, and papers.
+  booking, library booking, PMS, NCES, and papers, plus the authenticated
+  read-only session wrappers that sit in front of some of them.
 - `src/core/capabilities.ts` is the machine-discoverable safety registry.
 - Services must not write to stdout or stderr.
 - Machine-readable output is versioned by `schemaVersion`.
@@ -39,7 +40,7 @@ output renderer       text | versioned JSON | streaming JSONL
 
 ## Service layers
 
-The repo now has two service-facing patterns:
+The repo now has three service-facing patterns:
 
 1. Direct clients
 
@@ -57,21 +58,36 @@ The repo now has two service-facing patterns:
    - tests with fixture-backed adapters
    - browser-backed or cookie-injected transports
 
-`sustech services status` reports this adapter layer, not only whether a CLI
-command happens to wrap it. For example, Blackboard and WS remain
-`adapter_required` at the service-module level even though the CLI already
-provides CAS-backed read commands for them.
+3. Authenticated read-only wrappers
+
+   Booking, library-booking, and PMS now have repo-owned login wrappers that:
+
+   - keep credentials, cookies, and transient tokens in memory only
+   - constrain requests to documented read-only endpoint allowlists
+   - normalize the resulting responses through the same typed service layer
+
+`sustech services status` reports the reusable service layer, not only whether
+a command exists. That is why booking, library-booking, and PMS now show
+`implemented`, while Blackboard and WS still show `adapter_required` at the
+service-module level even though the CLI already provides CAS-backed read
+commands for them.
 
 ## Safety model
 
 - Read commands never mutate remote state.
 - Local planning commands such as `tis enroll preview`, `tis selection preview`,
   `tis bid plan`, and `library search-url` do not authenticate or write.
+- Booking, library-booking, and PMS sessions keep credentials and session
+  material in memory only and reject requests outside their read-only
+  allowlists.
 - The only live mutation currently exposed is `tis enroll apply --confirm`.
 - Mutation commands use explicit preview/build phases and post-action
   verification where the upstream service allows it.
 - Consequence metadata lives in `src/core/consequences.ts` so agents can inspect
   risks and follow-up checks without scraping prose.
+- New authenticated campus-service wrappers are validated with protocol fixtures
+  and transport guards. They have not yet been live-QA'd against a user account
+  in this repository.
 
 ## Current shape
 

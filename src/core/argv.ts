@@ -37,6 +37,15 @@ const VALUE_OPTIONS = new Set([
   "--parent-id",
   "--program-code",
   "--program-token",
+  "--start",
+  "--end",
+  "--begin",
+  "--kind-id",
+  "--lab-id",
+  "--class-kind",
+  "--need-status",
+  "--server-group",
+  "--type",
   "--service",
 ]);
 

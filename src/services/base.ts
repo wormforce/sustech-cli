@@ -171,6 +171,7 @@ async function fetchResponse(adapter: ServiceAdapter, url: string, init?: Reques
   try {
     return await adapter.fetch(url, init);
   } catch (error) {
+    if (error instanceof CliError) throw error;
     throw new ServiceError("Could not reach the upstream service.", {
       url,
       cause: error instanceof Error ? error.message : String(error),

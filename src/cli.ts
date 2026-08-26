@@ -65,18 +65,34 @@ import { formatBusLines, formatBusSchedule, formatFacilities, formatLiveBuses } 
 import { WifiClient } from "./wifi/client.js";
 import { formatAssociation, formatWifiEvents } from "./wifi/text.js";
 import { CasSession, type CasServiceConfig } from "./sso/cas.js";
+import { BookingSession } from "./services/booking-auth.js";
+import { LibraryBookingSession } from "./services/library-booking-auth.js";
+import { PmsSession } from "./services/pms-auth.js";
 import {
   SERVICE_STATUSES,
   browseNces,
   buildPrimoSearchUrl,
   formatServiceStatuses,
   getBlackboardUser,
+  getLibraryBookingUser,
+  getLibraryIdleSummary,
+  getLibraryReservationCount,
   getNcesCourseDetail,
   getWsProgramDetail,
   getWsToken,
   listBlackboardAssignments,
   listBlackboardContent,
   listBlackboardCourses,
+  listBookingRooms,
+  listLibraryLabs,
+  listLibraryReservationsPage,
+  listLibraryRooms,
+  listMyBookingMeetings,
+  listPmsPrintJobs,
+  listPmsScanJobs,
+  listPmsServerGroups,
+  listPmsStations,
+  listPmsUsageHistory,
   listWsPrograms,
   searchCrossref,
   searchNces,
@@ -84,6 +100,9 @@ import {
   type ServiceAdapter,
 } from "./services/index.js";
 import {
+  formatBookingMeetings,
+  formatBookingProfile,
+  formatBookingRooms,
   formatBlackboardAssignments,
   formatBlackboardContent,
   formatBlackboardCourses,
@@ -91,6 +110,16 @@ import {
   formatNcesCourses,
   formatNcesDetail,
   formatPapers,
+  formatLibraryBookingUser,
+  formatLibraryIdleSummary,
+  formatLibraryLabs,
+  formatLibraryReservations,
+  formatLibraryRooms,
+  formatPmsPrintJobs,
+  formatPmsScanJobs,
+  formatPmsServerGroups,
+  formatPmsStations,
+  formatPmsUsage,
   formatWsDetail,
   formatWsPrograms,
 } from "./services/text.js";
@@ -103,7 +132,7 @@ Usage:
   sustech version [--json|--jsonl]
   sustech capabilities [--json|--jsonl]
   sustech consequences [OPERATION] [--json|--jsonl]
-  sustech auth check [--service tis|bb|ws] [--credentials-file PATH] [--json|--jsonl]
+  sustech auth check [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--json|--jsonl]
   sustech calendar terms [--year YYYY] [--calendar-level undergraduate|graduate]
   sustech calendar day [YYYY-MM-DD|--date YYYY-MM-DD] [--calendar-level undergraduate|graduate]
   sustech faculty departments
@@ -128,6 +157,21 @@ Usage:
   sustech ws programs [KEYWORD] [--page N] [--page-size N]
   sustech ws detail ID [--program-code CODE] [--program-token TOKEN]
   sustech library search-url QUERY [--limit N]
+  sustech booking whoami
+  sustech booking rooms [QUERY] [--available] [--page N] [--page-size N]
+  sustech booking my-meetings [--page N] [--page-size N]
+  sustech lib-booking whoami
+  sustech lib-booking home-summary
+  sustech lib-booking labs [--class-kind N]
+  sustech lib-booking rooms --kind-id N --lab-id N [--class-kind N]
+  sustech lib-booking reservation-count
+  sustech lib-booking reservations [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--need-status N] [--page N] [--page-size N]
+  sustech pms check
+  sustech pms server-groups
+  sustech pms stations [--server-group N]
+  sustech pms jobs
+  sustech pms scan-jobs
+  sustech pms usage --begin YYYY-MM-DD --end YYYY-MM-DD [--type N] [--page N] [--page-size N]
   sustech tis courses search [KEYWORD] [--semester YYYY-YYYY-N] [--limit N] [--refresh]
   sustech tis courses available [KEYWORD] --round ROUND [--semester YYYY-YYYY-N] [--limit N]
   sustech tis enrolled [--semester YYYY-YYYY-N]
@@ -207,9 +251,21 @@ type Values = OutputFlags & {
   "parent-id"?: string;
   "program-code"?: string;
   "program-token"?: string;
+  available?: boolean;
+  start?: string;
+  end?: string;
+  begin?: string;
+  "kind-id"?: string;
+  "lab-id"?: string;
+  "class-kind"?: string;
+  "need-status"?: string;
+  "server-group"?: string;
+  type?: string;
   service?: string;
   help?: boolean;
 };
+
+type AuthService = "tis" | "bb" | "ws" | "booking" | "lib-booking" | "pms";
 
 const SHARED_OUTPUT_OPTIONS = new Set(["output", "json", "jsonl", "pretty"]);
 const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
@@ -231,6 +287,21 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "ws programs": ["credentials-file", "page", "page-size"],
   "ws detail": ["credentials-file", "program-code", "program-token"],
   "library search-url": ["limit"],
+  "booking whoami": ["credentials-file"],
+  "booking rooms": ["credentials-file", "available", "page", "page-size"],
+  "booking my-meetings": ["credentials-file", "page", "page-size"],
+  "lib-booking whoami": ["credentials-file"],
+  "lib-booking home-summary": ["credentials-file"],
+  "lib-booking labs": ["credentials-file", "class-kind"],
+  "lib-booking rooms": ["credentials-file", "kind-id", "lab-id", "class-kind"],
+  "lib-booking reservation-count": ["credentials-file"],
+  "lib-booking reservations": ["credentials-file", "start", "end", "need-status", "page", "page-size"],
+  "pms check": ["credentials-file"],
+  "pms server-groups": ["credentials-file"],
+  "pms stations": ["credentials-file", "server-group"],
+  "pms jobs": ["credentials-file"],
+  "pms scan-jobs": ["credentials-file"],
+  "pms usage": ["credentials-file", "begin", "end", "type", "page", "page-size"],
   "tis courses search": ["credentials-file", "semester", "limit", "refresh"],
   "tis courses available": ["credentials-file", "semester", "limit", "round"],
   "tis enrolled": ["credentials-file", "semester"],
@@ -304,6 +375,16 @@ async function main(argv: string[]): Promise<void> {
         "parent-id": { type: "string" },
         "program-code": { type: "string" },
         "program-token": { type: "string" },
+        available: { type: "boolean", default: false },
+        start: { type: "string" },
+        end: { type: "string" },
+        begin: { type: "string" },
+        "kind-id": { type: "string" },
+        "lab-id": { type: "string" },
+        "class-kind": { type: "string" },
+        "need-status": { type: "string" },
+        "server-group": { type: "string" },
+        type: { type: "string" },
         service: { type: "string" },
         output: { type: "string" },
         json: { type: "boolean", default: false },
@@ -360,13 +441,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (group === "auth" && command === "check" && operation === undefined) {
-    const service = values.service ?? "tis";
-    const { session, credentialSource } = service === "tis"
-      ? await authenticatedSession(values)
-      : await authenticatedCasService(values, casServiceConfig(service));
-    await session.login();
-    const data = { authenticated: true, service, credentialSource, credentialsStored: false };
-    writeSuccess({ command: "auth check", data, text: `${service.toUpperCase()} ${formatAuthCheck(credentialSource)}` }, output);
+    const service = authServiceValue(values.service);
+    const result = await checkAuthentication(values, service);
+    const data = { ...result, service, credentialsStored: false };
+    const identity = result.identity ? `\nIdentity ${result.identity}` : "";
+    writeSuccess({ command: "auth check", data, text: `${service.toUpperCase()} ${formatAuthCheck(result.credentialSource)}${identity}` }, output);
     return;
   }
   if (group === "transit") {
@@ -415,6 +494,18 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "library") {
     runLibrary(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "booking") {
+    await runBooking(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "lib-booking") {
+    await runLibraryBooking(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "pms") {
+    await runPms(parsed.positionals, values, output);
     return;
   }
   if (group !== "tis") throw usageError(`Unknown command: ${parsed.positionals.join(" ")}`);
@@ -740,6 +831,71 @@ async function main(argv: string[]): Promise<void> {
 async function authenticatedSession(values: Values): Promise<{ session: TisSession; credentialSource: string }> {
   const credentials = await resolveCredentials(values["credentials-file"]);
   return { session: new TisSession(credentials), credentialSource: credentials.source };
+}
+
+async function checkAuthentication(
+  values: Values,
+  service: AuthService,
+): Promise<{ authenticated: true; credentialSource: string; identity?: string }> {
+  const credentials = await resolveCredentials(values["credentials-file"]);
+  if (service === "tis") {
+    await new TisSession(credentials).login();
+    return { authenticated: true, credentialSource: credentials.source };
+  }
+  if (service === "bb" || service === "ws") {
+    await new CasSession(credentials, casServiceConfig(service)).login();
+    return { authenticated: true, credentialSource: credentials.source };
+  }
+  if (service === "booking") {
+    const session = new BookingSession(credentials);
+    await session.login();
+    return {
+      authenticated: true,
+      credentialSource: credentials.source,
+      ...(session.userProfile?.name ? { identity: session.userProfile.name } : {}),
+    };
+  }
+  if (service === "lib-booking") {
+    const session = new LibraryBookingSession(credentials);
+    await session.login();
+    const user = await getLibraryBookingUser(session);
+    return {
+      authenticated: true,
+      credentialSource: credentials.source,
+      ...((user.trueName || user.logonName) ? { identity: user.trueName || user.logonName } : {}),
+    };
+  }
+  if (service === "pms") {
+    const session = new PmsSession({ username: credentials.sid, password: credentials.password });
+    await session.login();
+    const check = await session.check();
+    if (!check.authenticated) {
+      throw new CliError("PMS login completed but the session check failed.", "AUTHENTICATION_FAILED", 2, {
+        service: "pms",
+      });
+    }
+    return {
+      authenticated: true,
+      credentialSource: credentials.source,
+      ...(check.displayName ? { identity: check.displayName } : {}),
+    };
+  }
+  throw usageError("Unsupported authentication service.");
+}
+
+async function bookingService(values: Values): Promise<BookingSession> {
+  const credentials = await resolveCredentials(values["credentials-file"]);
+  return new BookingSession(credentials);
+}
+
+async function libraryBookingService(values: Values): Promise<LibraryBookingSession> {
+  const credentials = await resolveCredentials(values["credentials-file"]);
+  return new LibraryBookingSession(credentials);
+}
+
+async function pmsService(values: Values): Promise<PmsSession> {
+  const credentials = await resolveCredentials(values["credentials-file"]);
+  return new PmsSession({ username: credentials.sid, password: credentials.password });
 }
 
 async function authenticatedCasService(
@@ -1256,6 +1412,226 @@ function runLibrary(
   }, output);
 }
 
+async function runBooking(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const command = positionals[1];
+  if (command === "whoami" && positionals.length === 2) {
+    const session = await bookingService(values);
+    await session.login();
+    const profile = session.userProfile;
+    if (!profile) throw new CliError("Booking login did not expose a user profile.", "SERVICE_PROTOCOL_ERROR", 1);
+    writeSuccess({ command: "booking whoami", data: profile, text: formatBookingProfile(profile) }, output);
+    return;
+  }
+  if (command === "rooms") {
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 100, "--page-size");
+    if (pageSize > 500) throw usageError("--page-size cannot exceed 500 for booking rooms.");
+    const query = positionals.slice(2).join(" ").trim() || undefined;
+    const session = await bookingService(values);
+    let rooms = await listBookingRooms(session, { page, pageSize, keyword: query });
+    if (values.available) rooms = rooms.filter((room) => room.available);
+    writeSuccess({
+      command: "booking rooms",
+      data: { query, availableOnly: Boolean(values.available), page, pageSize, rooms, total: rooms.length },
+      text: formatBookingRooms(rooms),
+      items: rooms,
+      summary: { query, availableOnly: Boolean(values.available), page, pageSize, total: rooms.length },
+    }, output);
+    return;
+  }
+  if (command === "my-meetings" && positionals.length === 2) {
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 50, "--page-size");
+    if (pageSize > 500) throw usageError("--page-size cannot exceed 500 for booking meetings.");
+    const session = await bookingService(values);
+    const meetings = await listMyBookingMeetings(session, { page, pageSize });
+    writeSuccess({
+      command: "booking my-meetings",
+      data: { page, pageSize, meetings, total: meetings.length },
+      text: formatBookingMeetings(meetings),
+      items: meetings,
+      summary: { page, pageSize, total: meetings.length },
+    }, output);
+    return;
+  }
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runLibraryBooking(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const command = positionals[1];
+  if (command === "whoami" && positionals.length === 2) {
+    const session = await libraryBookingService(values);
+    const user = await getLibraryBookingUser(session);
+    writeSuccess({ command: "lib-booking whoami", data: user, text: formatLibraryBookingUser(user) }, output);
+    return;
+  }
+  if (command === "home-summary" && positionals.length === 2) {
+    const session = await libraryBookingService(values);
+    const categories = await getLibraryIdleSummary(session);
+    writeSuccess({
+      command: "lib-booking home-summary",
+      data: { categories, total: categories.length },
+      text: formatLibraryIdleSummary(categories),
+      items: categories,
+      summary: { total: categories.length },
+    }, output);
+    return;
+  }
+  if (command === "labs" && positionals.length === 2) {
+    const classKind = parsePositiveInteger(values["class-kind"], 1, "--class-kind");
+    const session = await libraryBookingService(values);
+    const labs = await listLibraryLabs(session, classKind);
+    writeSuccess({
+      command: "lib-booking labs",
+      data: { classKind, labs, total: labs.length },
+      text: formatLibraryLabs(labs),
+      items: labs,
+      summary: { classKind, total: labs.length },
+    }, output);
+    return;
+  }
+  if (command === "rooms" && positionals.length === 2) {
+    const kindId = parsePositiveInteger(required(values["kind-id"], "--kind-id"), 1, "--kind-id");
+    const labId = parsePositiveInteger(required(values["lab-id"], "--lab-id"), 1, "--lab-id");
+    const classKind = parsePositiveInteger(values["class-kind"], 1, "--class-kind");
+    const session = await libraryBookingService(values);
+    const groups = await listLibraryRooms(session, { kindId, labId, classKind });
+    const total = groups.reduce((sum, group) => sum + group.labs.reduce((labSum, lab) => labSum + lab.rooms.length, 0), 0);
+    writeSuccess({
+      command: "lib-booking rooms",
+      data: { kindId, labId, classKind, groups, total },
+      text: formatLibraryRooms(groups),
+      items: groups,
+      summary: { kindId, labId, classKind, groups: groups.length, total },
+    }, output);
+    return;
+  }
+  if (command === "reservation-count" && positionals.length === 2) {
+    const session = await libraryBookingService(values);
+    const count = await getLibraryReservationCount(session);
+    writeSuccess({ command: "lib-booking reservation-count", data: { count }, text: `Library reservation count\n${count}` }, output);
+    return;
+  }
+  if (command === "reservations" && positionals.length === 2) {
+    const start = isoDate(values.start ?? todayInShenzhen(), "--start");
+    const end = isoDate(values.end ?? addIsoDays(start, 30), "--end");
+    if (end < start) throw usageError("--end must be on or after --start.");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 20, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for library reservations.");
+    const needStatus = values["need-status"] === undefined
+      ? undefined
+      : parseNonNegativeInteger(values["need-status"], 0, "--need-status");
+    const session = await libraryBookingService(values);
+    const result = await listLibraryReservationsPage(session, { start, end, page, pageSize, needStatus });
+    const reservations = result.reservations;
+    writeSuccess({
+      command: "lib-booking reservations",
+      data: { start, end, page, pageSize, needStatus, reservations, total: result.total, shown: reservations.length },
+      text: formatLibraryReservations(reservations),
+      items: reservations,
+      summary: { start, end, page, pageSize, needStatus, total: result.total, shown: reservations.length },
+    }, output);
+    return;
+  }
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runPms(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const command = positionals[1];
+  if (command === "check" && positionals.length === 2) {
+    const session = await pmsService(values);
+    await session.login();
+    const result = await session.check();
+    if (!result.authenticated) throw new CliError("PMS session check failed.", "AUTHENTICATION_FAILED", 2, { service: "pms" });
+    writeSuccess({ command: "pms check", data: result, text: `PMS authentication\n${result.message}` }, output);
+    return;
+  }
+  if (command === "server-groups" && positionals.length === 2) {
+    const session = await pmsService(values);
+    const groups = await listPmsServerGroups(session);
+    writeSuccess({
+      command: "pms server-groups",
+      data: { groups, total: groups.length },
+      text: formatPmsServerGroups(groups),
+      items: groups,
+      summary: { total: groups.length },
+    }, output);
+    return;
+  }
+  if (command === "stations" && positionals.length === 2) {
+    const serverGroup = values["server-group"] === undefined
+      ? undefined
+      : parsePositiveInteger(values["server-group"], 1, "--server-group");
+    const session = await pmsService(values);
+    const stations = await listPmsStations(session, serverGroup);
+    writeSuccess({
+      command: "pms stations",
+      data: { serverGroup, stations, total: stations.length },
+      text: formatPmsStations(stations),
+      items: stations,
+      summary: { serverGroup, total: stations.length },
+    }, output);
+    return;
+  }
+  if (command === "jobs" && positionals.length === 2) {
+    const session = await pmsService(values);
+    const jobs = await listPmsPrintJobs(session);
+    writeSuccess({
+      command: "pms jobs",
+      data: { jobs, total: jobs.length },
+      text: formatPmsPrintJobs(jobs),
+      items: jobs,
+      summary: { total: jobs.length },
+    }, output);
+    return;
+  }
+  if (command === "scan-jobs" && positionals.length === 2) {
+    const session = await pmsService(values);
+    const jobs = await listPmsScanJobs(session);
+    writeSuccess({
+      command: "pms scan-jobs",
+      data: { jobs, total: jobs.length },
+      text: formatPmsScanJobs(jobs),
+      items: jobs,
+      summary: { total: jobs.length },
+    }, output);
+    return;
+  }
+  if (command === "usage" && positionals.length === 2) {
+    const begin = isoDate(required(values.begin, "--begin"), "--begin");
+    const end = isoDate(required(values.end, "--end"), "--end");
+    if (end < begin) throw usageError("--end must be on or after --begin.");
+    const type = parsePositiveInteger(values.type, 1, "--type");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 20, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for PMS usage.");
+    const session = await pmsService(values);
+    const result = await listPmsUsageHistory(session, { begin, end, type, page, pageSize });
+    writeSuccess({
+      command: "pms usage",
+      data: { begin, end, type, page, pageSize, ...result, total: result.records.length },
+      text: formatPmsUsage(result.records),
+      items: result.records,
+      summary: { begin, end, type, page, pageSize, totalPages: result.totalPages, total: result.records.length },
+    }, output);
+    return;
+  }
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
 function enrollTarget(values: Values, semester: ReturnType<typeof parseSemester>) {
   const courseId = opaqueToken(required(values["course-id"], "--course-id"), "--course-id");
   const rwh = opaqueToken(required(values.rwh, "--rwh"), "--rwh");
@@ -1343,6 +1719,15 @@ function ncesSort(value: string | undefined): "rating" | "reviews" | "name" {
   throw usageError("--sort must be rating, reviews, or name for NCES.");
 }
 
+function authServiceValue(value: string | undefined): AuthService {
+  if (value === undefined || value === "tis") return "tis";
+  if (value === "library-booking") return "lib-booking";
+  if (value === "bb" || value === "ws" || value === "booking" || value === "lib-booking" || value === "pms") {
+    return value;
+  }
+  throw usageError("--service must be tis, bb, ws, booking, lib-booking (or library-booking), or pms.");
+}
+
 function classroomQuery(values: Values): { week: number; day: number; periodStart: number; periodEnd: number } {
   const week = parsePositiveInteger(values.week, 1, "--week");
   if (week > 36) throw usageError("--week must be between 1 and 36.");
@@ -1409,6 +1794,12 @@ function isoDate(value: string, option: string): string {
     throw usageError(`${option} must be YYYY-MM-DD.`);
   }
   return value;
+}
+
+function addIsoDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function todayInShenzhen(): string {

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { CliError } from "../core/errors.js";
 import {
   arrayValue,
+  booleanValue,
   fetchJson,
   numberValue,
   recordValue,
@@ -13,17 +15,19 @@ export const BOOKING_API = `${BOOKING_BASE}/api/SystemApi`;
 
 export const BOOKING_STATUS: ServiceStatus = {
   service: "booking",
-  availability: "adapter_required",
+  availability: "implemented",
   auth: "bearer-header",
   campusNetwork: true,
   browser: false,
-  summary: "The eHall booking APIs are stable JSON RPC methods once the adapter provides the Authorization header.",
+  summary: "The CLI performs the CAS ticket and GetUserProfile token handshake, then exposes read-only eHall booking APIs.",
   notes: [
     "The service must be reachable from the campus network or an approved campus access path.",
-    "This module only covers read paths and payload builders.",
+    "Credentials, cookies, CAS tickets, and the booking token remain in memory and are never returned in command output.",
+    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
     "Mutating calls such as AddMeeting and CancelMeeting are intentionally excluded.",
   ],
   endpoints: [
+    "/redirect",
     "/api/SystemApi/GetMeetingRoomAllByCondition",
     "/api/SystemApi/GetMyMeetings",
     "/api/SystemApi/GetUserProfile",
@@ -126,8 +130,8 @@ export function normaliseBookingRoom(raw: unknown): BookingRoom {
     roomType: stringValue(record.MeetingRoomType),
     capacity: numberValue(record.CapacityNumber),
     location: stringValue(record.MeetingRoomLocal),
-    available: Boolean(record.IsAvailable),
-    approvalRequired: Boolean(record.IsApproval),
+    available: booleanValue(record.IsAvailable),
+    approvalRequired: booleanValue(record.IsApproval),
     bookableDaysAhead: numberValue(record.NumberOfDaysAhead),
     bookStart: extractTime(stringValue(record.CanBookStartTime)),
     bookEnd: extractTime(stringValue(record.CanBookEndTime)),
@@ -153,7 +157,7 @@ export function normaliseBookingMeeting(raw: unknown): BookingMeeting {
     startAt: stringValue(record.StartTime ?? record.MeetingStart),
     endAt: stringValue(record.EndTime ?? record.MeetingEnd),
     status: stringValue(record.Status ?? record.MeetingStatus),
-    unread: Boolean(record.IsUnread ?? record.Unread),
+    unread: booleanValue(record.IsUnread ?? record.Unread),
   };
 }
 
@@ -166,10 +170,18 @@ async function callBooking(adapter: ServiceAdapter, method: string, data: Record
   });
   const record = recordValue(response);
   if (looksLikeBookingAuthError(record)) {
-    throw new Error(`Booking adapter is not authenticated for ${method}.`);
+    throw new CliError("The booking session was rejected by the upstream service.", "AUTHENTICATION_FAILED", 2, {
+      service: "booking",
+      operation: method,
+    });
   }
   if (record.IsSuccess !== true) {
-    throw new Error(`Booking API error on ${method}: ${stringValue(record.Message) || "unknown error"}`);
+    throw new CliError("Booking returned an application error.", "SERVICE_UPSTREAM_ERROR", 1, {
+      service: "booking",
+      operation: method,
+      errorCode: record.ErrorCode,
+      message: stringValue(record.Message) || "unknown error",
+    });
   }
   return record.Data;
 }

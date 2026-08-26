@@ -8,7 +8,9 @@ import {
 import { buildBookingEnvelope, listBookingRooms, looksLikeBookingAuthError } from "../services/booking.js";
 import {
   getLibraryIdleSummary,
+  listLibraryLabs,
   listLibraryReservations,
+  listLibraryReservationsPage,
   looksLikeLibraryBookingAuthError,
   normaliseLibraryCampusGroup,
 } from "../services/library.js";
@@ -148,7 +150,7 @@ test("booking adapter builds JSON envelope and normalizes room inventory", async
           MeetingRoomType: "会议室",
           CapacityNumber: 8,
           MeetingRoomLocal: "致诚书院 2F",
-          IsAvailable: true,
+          IsAvailable: "false",
           IsApproval: false,
           NumberOfDaysAhead: 30,
           CanBookStartTime: "1970-01-01T08:00:00",
@@ -165,6 +167,7 @@ test("booking adapter builds JSON envelope and normalizes room inventory", async
 
   const rooms = await listBookingRooms(adapter, { keyword: "致诚" });
   assert.equal(rooms.length, 1);
+  assert.equal(rooms[0]?.available, false);
   assert.equal(rooms[0]?.bookStart, "08:00:00");
   assert.deepEqual(rooms[0]?.equipment, ["Projector"]);
 });
@@ -184,7 +187,8 @@ test("library booking adapter exposes idle summary and reservations while surfac
       return jsonResponse({
         code: 0,
         message: "查询成功",
-        data: [{
+        count: 42,
+        data: { rows: [{
           resvId: 183442,
           uuid: "bdb93949",
           testName: "team sync",
@@ -196,7 +200,7 @@ test("library booking adapter exposes idle summary and reservations while surfac
             devName: "C105（1-3人）",
             labName: "涵泳一层",
           }],
-        }],
+        }] },
       });
     }
     throw new Error(`Unexpected URL ${url}`);
@@ -211,6 +215,14 @@ test("library booking adapter exposes idle summary and reservations while surfac
   });
   assert.equal(reservations[0]?.reservationId, 183442);
   assert.equal(reservations[0]?.roomName, "C105（1-3人）");
+  assert.equal(reservations[0]?.beginTime, "2026-07-01T14:00:00.000+08:00");
+
+  const reservationPage = await listLibraryReservationsPage(adapter, {
+    start: "2026-07-01",
+    end: "2026-07-10",
+  });
+  assert.equal(reservationPage.total, 42);
+  assert.equal(reservationPage.reservations.length, 1);
 
   assert.deepEqual(normaliseLibraryCampusGroup({
     campusId: 1,
@@ -222,6 +234,7 @@ test("library booking adapter exposes idle summary and reservations while surfac
         devId: 13,
         devName: "C105（1-3人）",
         minResvTime: 10,
+        resvInfos: [],
         openTimes: [{ openStartTime: "08:00", openEndTime: "21:59", openLimit: 1 }],
       }],
     }],
@@ -240,6 +253,18 @@ test("library booking adapter exposes idle summary and reservations while surfac
       }],
     }],
   });
+});
+
+test("library lab lookup preserves the upstream's explicit empty kindIds parameter", async () => {
+  const adapter = routeAdapter((rawUrl) => {
+    const url = new URL(rawUrl);
+    assert.equal(url.pathname, "/ic-web/lab/devKindLabs");
+    assert.equal(url.searchParams.get("classKind"), "1");
+    assert.equal(url.searchParams.has("kindIds"), true);
+    assert.equal(url.searchParams.get("kindIds"), "");
+    return jsonResponse({ code: 0, data: [{ labId: 1, labName: "涵泳一层" }] });
+  });
+  assert.deepEqual(await listLibraryLabs(adapter), [{ labId: 1, labName: "涵泳一层" }]);
 });
 
 test("PMS adapter normalizes station state, print queue, and usage history", async () => {

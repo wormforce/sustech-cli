@@ -1,7 +1,9 @@
 # TypeScript rewrite tracker
 
 The Python repository remains unchanged and acts as behavioral reference only.
-Ports are fixture-driven and land in this standalone repository.
+Ports are fixture-driven and land in this standalone repository. For the newly
+authenticated booking, library-booking, and PMS flows, this repo currently has
+protocol/mock coverage only; no user-account live QA has been run here yet.
 
 | Area | Read operations | Mutations | Status | Priority |
 | --- | --- | --- | --- | --- |
@@ -21,24 +23,25 @@ Ports are fixture-driven and land in this standalone repository.
 | Wi-Fi | current association and recent macOS SUSTC Wi-Fi events | none | Implemented on macOS only | P1 |
 | Blackboard | courses, content, assignments | submissions/downloads | Read adapter implemented; CLI wired through CAS; authenticated live QA pending | P2 |
 | Library catalog | Primo browser handoff URL | none | URL builder only; browser-backed fetch still unavailable | P2 |
-| Library booking | account state, rooms, reservations | reservations/cancel | Read adapter implemented; CLI auth wiring not added yet | P2 |
-| E-Hall booking | rooms and meetings | reservations/cancel | Read adapter and envelope builders implemented; CLI auth wiring not added yet | P2 |
+| Library booking | account state, idle summary, labs, rooms, reservation counts, reservations | reservations/cancel | Implemented with CLI auth wiring and read-only allowlist; protocol-fixture verified only | P2 |
+| E-Hall booking | user profile, rooms, meetings | reservations/cancel | Implemented with CLI auth wiring and read-only allowlist; protocol-fixture verified only | P2 |
 | SUSTech Global | program list and detail | service-specific writes | Read adapter implemented; CLI wired through CAS; authenticated live QA pending | P2 |
-| PMS | printer/account state and history | print operations | Read adapter implemented; CLI auth wiring not added yet | P2 |
+| PMS | auth check, printer groups, stations, print jobs, scan jobs, usage history | print operations | Implemented with CLI auth wiring and read-only allowlist; protocol-fixture verified only; first account link may still need browser help | P2 |
 | NCES | course evaluations and search | refresh/import | Implemented; public API only | P3 |
 | Papers | CrossRef metadata and optional OA resolution | downloads | Implemented and live-smoked; bibliographic relevance plus OA links only | P3 |
 | Web UI | local human interface | selection workflows | Separate package later | P4 |
 
 ## Porting order
 
-1. Finish authenticated live QA for TIS, Blackboard, and WS read flows.
-2. Add CLI auth/transport wiring for booking, library booking, and PMS.
-3. Decide whether library catalog stays browser-backed or moves to a dedicated helper package.
-4. Expand `context` beyond the current calendar-derived baseline.
+1. Finish opt-in authenticated live QA for TIS, Blackboard, WS, booking, library booking, and PMS.
+2. Decide whether library catalog stays browser-backed or moves to a dedicated helper package.
+3. Expand `context` beyond the current calendar-derived baseline.
+4. Decide whether PMS needs a dedicated first-link browser assist instead of pure CLI fallback messaging.
 5. Build a separate Web UI package on top of the same typed service layer.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-v0.3.0, the only live mutation is the existing guarded `tis enroll apply`
-command; selection preview, bid planning, and service adapters stay read-only
-or local-only.
+preview v0.4.0, the only live mutation is the existing guarded
+`tis enroll apply` command. Booking, library-booking, and PMS expose
+authenticated reads only; their write operations remain unavailable in this
+repository.

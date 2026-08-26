@@ -5,7 +5,7 @@ export interface Capability {
   summary: string;
   kind: CapabilityKind;
   network: boolean;
-  authentication: "none" | "sustech-cas" | "tis" | "bb" | "library" | "booking" | "ws" | "pms" | "nces" | "browser";
+  authentication: "none" | "selected-service" | "sustech-cas" | "tis" | "bb" | "lib-booking" | "booking" | "ws" | "pms" | "nces" | "browser";
   confirmation: "none" | "required";
   status: "stable" | "preview";
 }
@@ -38,7 +38,22 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("ws programs", "List or search authenticated SUSTech Global programs.", "read", { authentication: "ws", status: "preview" }),
   capability("ws detail", "Read one authenticated SUSTech Global program detail.", "read", { authentication: "ws", status: "preview" }),
   capability("library search-url", "Build a browser handoff URL for Primo without fabricating catalog results.", "plan", { network: false, status: "preview" }),
-  capability("auth check", "Verify SUSTech credentials against the selected TIS, Blackboard, or WS CAS target.", "read", { authentication: "sustech-cas", status: "preview" }),
+  capability("booking whoami", "Read a redacted eHall booking user profile after the CAS token handshake.", "read", { authentication: "booking", status: "preview" }),
+  capability("booking rooms", "List and filter eHall campus rooms without creating a reservation.", "read", { authentication: "booking", status: "preview" }),
+  capability("booking my-meetings", "List the authenticated user's current eHall bookings.", "read", { authentication: "booking", status: "preview" }),
+  capability("lib-booking whoami", "Read the authenticated IC library-booking user profile.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("lib-booking home-summary", "Read idle library-room counts by category.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("lib-booking labs", "List IC library-booking labs.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("lib-booking rooms", "List IC library-booking rooms for an exact kind and lab.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("lib-booking reservation-count", "Read the authenticated user's library reservation count.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("lib-booking reservations", "List the authenticated user's library reservations in a date range.", "read", { authentication: "lib-booking", status: "preview" }),
+  capability("pms check", "Verify direct PMS authentication without exposing session material.", "read", { authentication: "pms", status: "preview" }),
+  capability("pms server-groups", "List PMS printer server groups.", "read", { authentication: "pms", status: "preview" }),
+  capability("pms stations", "List and filter campus PMS printers.", "read", { authentication: "pms", status: "preview" }),
+  capability("pms jobs", "List pending PMS print jobs without uploading or deleting files.", "read", { authentication: "pms", status: "preview" }),
+  capability("pms scan-jobs", "List pending PMS scan jobs without deleting files.", "read", { authentication: "pms", status: "preview" }),
+  capability("pms usage", "Read paginated PMS usage history for an exact date range.", "read", { authentication: "pms", status: "preview" }),
+  capability("auth check", "Verify credentials against TIS, Blackboard, WS, booking, lib-booking (library-booking alias), or PMS.", "read", { authentication: "selected-service", status: "preview" }),
   capability("tis courses search", "Search the campus-wide course catalog.", "read", { authentication: "tis", status: "preview" }),
   capability("tis courses available", "Search courses available to the authenticated student.", "read", { authentication: "tis", status: "preview" }),
   capability("tis enrolled", "Read the normalized enrolled-course schedule.", "read", { authentication: "tis", status: "preview" }),

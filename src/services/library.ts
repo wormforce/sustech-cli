@@ -1,5 +1,7 @@
+import { CliError } from "../core/errors.js";
 import {
   arrayValue,
+  booleanValue,
   cleanText,
   dateString,
   fetchJson,
@@ -34,16 +36,18 @@ export const LIBRARY_CATALOG_STATUS: ServiceStatus = {
 
 export const LIBRARY_BOOKING_STATUS: ServiceStatus = {
   service: "library-booking",
-  availability: "adapter_required",
+  availability: "implemented",
   auth: "cookie-session",
-  campusNetwork: false,
+  campusNetwork: true,
   browser: false,
-  summary: "IC library room booking exposes stable JSON APIs when the adapter provides the ic-cookie session.",
+  summary: "The CLI resolves the dynamic authcenter service URL, completes CAS, and exposes read-only IC booking APIs.",
   notes: [
-    "The adapter must carry the IC library booking cookies and have campus reachability.",
+    "The IC booking cookie remains in memory and is never returned in command output.",
+    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
     "Reservation creation and cancellation are intentionally excluded here.",
   ],
   endpoints: [
+    "/ic-web/auth/address",
     "/ic-web/auth/userInfo",
     "/ic-web/home/page/room/idle",
     "/ic-web/lab/devKindLabs",
@@ -128,6 +132,13 @@ export interface LibraryReservation {
   status: number;
 }
 
+export interface LibraryReservationPage {
+  reservations: LibraryReservation[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export function buildPrimoSearchUrl(options: PrimoSearchOptions): string {
   const queryString = buildPrimoQueryString(options);
   const scopeMap = {
@@ -204,10 +215,10 @@ export async function getLibraryIdleSummary(adapter: ServiceAdapter): Promise<Li
 }
 
 export async function listLibraryLabs(adapter: ServiceAdapter, classKind = 1): Promise<LibraryLab[]> {
-  const raw = await fetchJson<unknown>(adapter, requestUrl(LIBRARY_BOOKING_BASE, "/ic-web/lab/devKindLabs", {
-    classKind,
-    kindIds: "",
-  }));
+  const url = new URL("/ic-web/lab/devKindLabs", LIBRARY_BOOKING_BASE);
+  url.searchParams.set("classKind", String(classKind));
+  url.searchParams.set("kindIds", "");
+  const raw = await fetchJson<unknown>(adapter, url.toString());
   return arrayValue(unwrapLibraryBooking(raw)).map((item) => normaliseLibraryLab(item));
 }
 
@@ -238,19 +249,48 @@ export async function listLibraryReservations(
     needStatus?: number;
   },
 ): Promise<LibraryReservation[]> {
+  return (await listLibraryReservationsPage(adapter, options)).reservations;
+}
+
+export async function listLibraryReservationsPage(
+  adapter: ServiceAdapter,
+  options: {
+    start: Date | string;
+    end: Date | string;
+    page?: number;
+    pageSize?: number;
+    needStatus?: number;
+  },
+): Promise<LibraryReservationPage> {
+  const page = options.page ?? 1;
+  const pageSize = options.pageSize ?? 20;
   const raw = await fetchJson<unknown>(adapter, requestUrl(LIBRARY_BOOKING_BASE, "/ic-web/reserve/resvInfo", {
     beginDate: dateString(options.start),
     endDate: dateString(options.end),
-    page: options.page ?? 1,
-    pageNum: options.pageSize ?? 20,
+    page,
+    pageNum: pageSize,
+    orderKey: "gmt_create",
+    orderModel: "desc",
     ...(options.needStatus !== undefined ? { needStatus: options.needStatus } : {}),
   }));
-  return arrayValue(unwrapLibraryBooking(raw)).map((item) => normaliseLibraryReservation(item));
+  const data = unwrapLibraryBooking(raw);
+  const dataRecord = recordValue(data);
+  const rows = Array.isArray(data)
+    ? data
+    : arrayValue(dataRecord.data ?? dataRecord.rows ?? dataRecord.list);
+  const envelope = recordValue(raw);
+  const reservations = rows.map((item) => normaliseLibraryReservation(item));
+  return {
+    reservations,
+    total: numberValue(envelope.count ?? dataRecord.count, reservations.length),
+    page,
+    pageSize,
+  };
 }
 
 export function looksLikeLibraryBookingAuthError(raw: unknown): boolean {
   const record = recordValue(raw);
-  return numberValue(record.code) !== 0 && /未登录|请重新登录|session/i.test(stringValue(record.message));
+  return numberValue(record.code, -1) !== 0 && /未登录|请重新登录|session/i.test(stringValue(record.message));
 }
 
 export function normaliseLibraryBookingUser(raw: unknown): LibraryBookingUser {
@@ -312,7 +352,9 @@ export function normaliseLibraryRoom(raw: unknown): LibraryRoom {
         limit: numberValue(time.openLimit),
       };
     }),
-    reserved: Boolean(record.resvInfos),
+    reserved: Array.isArray(record.resvInfos)
+      ? record.resvInfos.length > 0
+      : booleanValue(record.resvInfos),
   };
 }
 
@@ -358,17 +400,23 @@ function buildPrimoFacets(options: PrimoSearchOptions): string[] {
 function unwrapLibraryBooking(raw: unknown): unknown {
   const record = recordValue(raw);
   if (looksLikeLibraryBookingAuthError(record)) {
-    throw new Error(`Library booking adapter is not authenticated: ${stringValue(record.message)}`);
+    throw new CliError("The library-booking session was rejected by the upstream service.", "AUTHENTICATION_FAILED", 2, {
+      service: "library-booking",
+    });
   }
-  if (numberValue(record.code) !== 0) {
-    throw new Error(`Library booking API error: ${stringValue(record.message) || "unknown error"}`);
+  if (numberValue(record.code, -1) !== 0) {
+    throw new CliError("Library booking returned an application error.", "SERVICE_UPSTREAM_ERROR", 1, {
+      service: "library-booking",
+      code: numberValue(record.code, -1),
+      message: stringValue(record.message) || "unknown error",
+    });
   }
   return record.data;
 }
 
 function reservationDateTime(value: unknown): string {
   const numeric = numberValue(value);
-  if (numeric > 0) return new Date(numeric).toISOString();
+  if (numeric > 0) return `${new Date(numeric + 8 * 60 * 60 * 1000).toISOString().slice(0, -1)}+08:00`;
   const text = stringValue(value);
   return text;
 }

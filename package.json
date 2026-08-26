@@ -1,6 +1,6 @@
 {
   "name": "sustech-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",

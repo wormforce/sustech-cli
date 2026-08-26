@@ -4,11 +4,13 @@ A standalone TypeScript CLI for SUSTech services, designed for both people and
 agents. It talks to campus services directly and never invokes Python at
 runtime.
 
-> Status: preview v0.3.0. The TypeScript rewrite now covers the core TIS read
+> Status: preview v0.4.0. The TypeScript rewrite now covers the core TIS read
 > surface, guarded enrollment apply, public calendar/faculty/transit data,
-> local Wi-Fi and resource helpers, public papers/NCES queries, and CAS-backed
-> Blackboard/WS reads. Authenticated live QA is still pending before a stable
-> release. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
+> local Wi-Fi and resource helpers, public papers/NCES queries, CAS-backed
+> Blackboard/WS reads, and authenticated read-only booking, library-booking,
+> and PMS flows. The new authenticated service transports are verified with
+> mock/protocol fixtures only; no user-account live QA has been run for them
+> yet. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
 > and [docs/SERVICES.md](docs/SERVICES.md).
 
 ## Output for people and agents
@@ -64,6 +66,21 @@ sustech papers search
 sustech nces browse/search/course
 sustech bb user/courses/content/assignments
 sustech ws programs/detail
+sustech booking whoami
+sustech booking rooms [QUERY] [--available] [--page N] [--page-size N]
+sustech booking my-meetings [--page N] [--page-size N]
+sustech lib-booking whoami
+sustech lib-booking home-summary
+sustech lib-booking labs [--class-kind N]
+sustech lib-booking rooms --kind-id N --lab-id N [--class-kind N]
+sustech lib-booking reservation-count
+sustech lib-booking reservations [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--need-status N] [--page N] [--page-size N]
+sustech pms check
+sustech pms server-groups
+sustech pms stations [--server-group N]
+sustech pms jobs
+sustech pms scan-jobs
+sustech pms usage --begin YYYY-MM-DD --end YYYY-MM-DD [--type N] [--page N] [--page-size N]
 sustech library search-url
 sustech tis courses search [KEYWORD]
 sustech tis courses available [KEYWORD] --round ROUND
@@ -102,6 +119,7 @@ planning, or browser handoff:
 
 - `tis selection preview` builds enroll/drop/cart/bid payloads locally
 - `tis bid plan` validates bid budgets locally
+- `booking ...`, `lib-booking ...`, and `pms ...` expose authenticated reads only
 - `library search-url` builds a Primo handoff URL without claiming catalog data
 
 ## Service status model
@@ -109,14 +127,20 @@ planning, or browser handoff:
 `sustech services status` reports the reusable service-adapter layer rather than
 the CLI wrapper alone.
 
-- `implemented`: public HTTP access works directly in this repo
-- `adapter_required`: parsers and endpoints are ported, but the caller must
-  provide an authenticated transport or service-specific headers/cookies
+- `implemented`: this repo includes the transport, login handshake, and
+  read-only request guard needed to reach the documented service surface
+- `adapter_required`: parsers and endpoints are ported, but the caller still
+  must provide an authenticated transport or service-specific headers/cookies
 - `unavailable`: only safe URL builders or types are preserved for now
 
-This distinction matters for Blackboard and WS: the underlying adapters remain
-`adapter_required`, but the CLI already wires generic CAS-backed read commands
-for `bb ...` and `ws ...`. The full matrix is in [docs/SERVICES.md](docs/SERVICES.md).
+This distinction matters across the current campus-service surface:
+
+- `booking`, `library-booking`, and `pms` are now `implemented`
+- `blackboard` and `ws` still report `adapter_required` at the reusable
+  service-module level even though the CLI wires CAS-backed reads for them
+- `library-catalog` stays `unavailable` apart from `library search-url`
+
+The full matrix is in [docs/SERVICES.md](docs/SERVICES.md).
 `papers search` uses CrossRef bibliographic relevance by default and only
 resolves open-access links when `--resolve-oa` or `--open-access` is requested.
 
@@ -174,11 +198,27 @@ export SUSTECH_PASSWORD='your-password'
 sustech auth check
 sustech auth check --service bb
 sustech auth check --service ws
+sustech auth check --service booking
+sustech auth check --service lib-booking
+sustech auth check --service pms
 ```
 
 Alternatively set `SUSTECH_CREDENTIALS_FILE` or pass `--credentials-file` to a
-file whose only content is `sid:password`. The CLI never writes credentials or
-session cookies to disk.
+file whose only content is `sid:password`.
+
+All authenticated service sessions stay in memory only:
+
+- booking keeps CAS cookies plus the booking bearer token in memory
+- library booking keeps the `ic-cookie` session in memory
+- PMS keeps the `OSESSIONID` cookie in memory and uses transient RSA login material
+
+None of those secrets are written to disk or echoed in normal command output.
+Each transport is also restricted to an internal read-only allowlist of
+documented endpoints.
+
+For PMS specifically, the CLI reuses `SUSTECH_SID` and `SUSTECH_PASSWORD` as
+the PMS username/password pair. A first-time PMS account link or activation may
+still require a browser-side step before the CLI can authenticate successfully.
 
 ## Safe enrollment workflow
 

@@ -7,7 +7,7 @@ const CLI_PATH = new URL("../cli.js", import.meta.url);
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.3\.0/);
+  assert.match(text.stdout, /^sustech-cli 0\.4\.0/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -15,7 +15,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.3.0", runtime: `node ${process.version}` },
+    data: { version: "0.4.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -93,7 +93,7 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
-  assert.equal(auth.authentication, "sustech-cas");
+  assert.equal(auth.authentication, "selected-service");
 });
 
 test("new local Agent surfaces remain machine-readable and mutation-free", () => {
@@ -126,7 +126,70 @@ test("new local Agent surfaces remain machine-readable and mutation-free", () =>
   assert.match(libraryData.url, /query=any%2Ccontains%2Cmachine\+learning/);
 });
 
+test("booking, library-booking, and PMS expose read-only Agent commands", () => {
+  const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities as Array<{
+    command: string;
+    kind: string;
+    authentication: string;
+    confirmation: string;
+  }>;
+  for (const [command, authentication] of [
+    ["booking rooms", "booking"],
+    ["lib-booking reservations", "lib-booking"],
+    ["pms jobs", "pms"],
+  ] as const) {
+    const capability = capabilities.find((entry) => entry.command === command);
+    assert.equal(capability?.kind, "read");
+    assert.equal(capability?.authentication, authentication);
+    assert.equal(capability?.confirmation, "none");
+  }
+
+  for (const service of ["booking", "library-booking", "pms"]) {
+    const status = run(["services", "status", service, "--json"]);
+    assert.equal(status.status, 0);
+    assert.equal(JSON.parse(status.stdout).data.statuses[0].availability, "implemented");
+  }
+
+  for (const args of [
+    ["booking", "rooms", "--available", "--json"],
+    ["lib-booking", "home-summary", "--json"],
+    ["pms", "check", "--json"],
+    ["auth", "check", "--service", "library-booking", "--json"],
+  ]) {
+    const result = runWithoutCredentials(args);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).error.code, "CREDENTIALS_REQUIRED");
+  }
+});
+
+test("new authenticated commands reject invalid inputs before network or credential resolution", () => {
+  for (const args of [
+    ["booking", "rooms", "--page-size", "0", "--json"],
+    ["lib-booking", "rooms", "--kind-id", "0", "--lab-id", "1", "--json"],
+    ["lib-booking", "reservations", "--start", "2026-02-30", "--json"],
+    ["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"],
+    ["auth", "check", "--service", "not-a-service", "--json"],
+  ]) {
+    const result = runWithoutCredentials(args);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).error.code, "USAGE");
+  }
+});
+
 function run(args: string[]): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [CLI_PATH.pathname, ...args], { encoding: "utf8" });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function runWithoutCredentials(args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [CLI_PATH.pathname, ...args], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      SUSTECH_SID: "",
+      SUSTECH_PASSWORD: "",
+      SUSTECH_CREDENTIALS_FILE: "",
+    },
+  });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }

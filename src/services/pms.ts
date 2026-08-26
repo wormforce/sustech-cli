@@ -1,3 +1,4 @@
+import { CliError } from "../core/errors.js";
 import {
   arrayValue,
   fetchJson,
@@ -13,16 +14,22 @@ export const PMS_API = `${PMS_BASE}/api`;
 
 export const PMS_STATUS: ServiceStatus = {
   service: "pms",
-  availability: "adapter_required",
+  availability: "implemented",
   auth: "cookie-session",
   campusNetwork: true,
   browser: false,
-  summary: "PMS exposes stable JSON APIs for printer state and job queues, but requires campus reachability plus an authenticated OSESSIONID cookie.",
+  summary: "The CLI performs the PMS token, public-key, RSA login flow and exposes read-only printer and queue APIs.",
   notes: [
+    "The OSESSIONID cookie and encrypted login material remain in memory and are never returned in command output.",
+    "The transport is covered by protocol fixtures; authenticated live QA still requires an opt-in campus account check.",
     "This adapter layer only covers read paths.",
     "Upload and delete endpoints are intentionally excluded.",
   ],
   endpoints: [
+    "/api/client/Auth/GetAuthToken",
+    "/api/client/Auth/PublicKey",
+    "/api/client/Auth/Login",
+    "/api/client/Auth/Check",
     "/api/client/Station/GetSrvList",
     "/api/client/Station/GetList",
     "/api/client/PrintJob/Get",
@@ -114,8 +121,8 @@ export async function listPmsUsageHistory(
     }),
   });
   const record = recordValue(response);
-  if (numberValue(record.code) !== 0) {
-    throw new Error(`PMS API error: ${stringValue(record.message) || "unknown error"}`);
+  if (numberValue(record.code, -1) !== 0) {
+    throw pmsUpstreamError(record);
   }
   return {
     records: arrayValue(record.result).map((item) => normalisePmsUsageRecord(item)),
@@ -193,10 +200,18 @@ export function normalisePmsUsageRecord(raw: unknown): PmsUsageRecord {
 
 function unwrapPms(raw: unknown): unknown {
   const record = recordValue(raw);
-  if (numberValue(record.code) !== 0) {
-    throw new Error(`PMS API error: ${stringValue(record.message) || "unknown error"}`);
+  if (numberValue(record.code, -1) !== 0) {
+    throw pmsUpstreamError(record);
   }
   return record.result;
+}
+
+function pmsUpstreamError(record: Record<string, unknown>): CliError {
+  return new CliError("PMS returned an application error.", "SERVICE_UPSTREAM_ERROR", 1, {
+    service: "pms",
+    code: numberValue(record.code, -1),
+    message: stringValue(record.message) || "unknown error",
+  });
 }
 
 function parsePmsPaperDetail(raw: unknown): unknown[] {
