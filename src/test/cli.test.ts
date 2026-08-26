@@ -255,6 +255,13 @@ test("new local Agent surfaces remain machine-readable and mutation-free", () =>
   const libraryData = JSON.parse(library.stdout).data;
   assert.equal(libraryData.availability, "browser-required");
   assert.match(libraryData.url, /query=any%2Ccontains%2Cmachine\+learning/);
+
+  const doctor = runWithoutCredentials(["doctor", "--profile", `doctor-${process.pid}`, "--service", "tis,pms", "--json"]);
+  assert.equal(doctor.status, 0);
+  const doctorData = JSON.parse(doctor.stdout).data;
+  assert.equal(doctorData.live, false);
+  assert.deepEqual(doctorData.requestedServices, ["tis", "pms"]);
+  assert.equal(doctorData.checks.find((entry: { id: string }) => entry.id === "service.pms").status, "skipped");
 });
 
 test("booking, library-booking, and PMS expose read-only Agent commands", () => {
@@ -300,6 +307,7 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["lib-booking", "reservations", "--start", "2026-02-30", "--json"], "USAGE"],
     [["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"], "USAGE"],
     [["auth", "check", "--service", "not-a-service", "--json"], "USAGE"],
+    [["doctor", "--service", "tis,not-a-service", "--json"], "USAGE"],
     [["bb", "submit", "apply", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--expected-sha256", "not-a-sha", "--confirm", "--json"], "USAGE"],
   ] as const) {
     const result = runWithoutCredentials([...args]);

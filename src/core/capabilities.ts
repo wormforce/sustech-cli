@@ -14,6 +14,7 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("version", "Show CLI and runtime versions.", "local"),
   capability("capabilities", "List the machine-discoverable command surface.", "local"),
   capability("consequences", "List structured risks and verification rules for real-state mutations.", "local"),
+  capability("doctor", "Inspect runtime, credential storage, and optional live service authentication without mutating remote state.", "read", { authentication: "selected-service", status: "preview" }),
   capability("calendar terms", "Read semester boundaries from the public academic-calendar dataset.", "read"),
   capability("calendar day", "Resolve a date into teaching week, holiday, makeup, and exam flags.", "read"),
   capability("faculty departments", "List the known public faculty departments.", "read", { network: false }),

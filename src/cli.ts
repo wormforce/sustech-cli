@@ -32,6 +32,13 @@ import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
 import type { CalendarLevel } from "./calendar/types.js";
 import { ContextService } from "./context/service.js";
 import type { ContextLevel } from "./context/types.js";
+import {
+  DOCTOR_SERVICES,
+  buildDoctorReport,
+  type DoctorLiveResult,
+  type DoctorService,
+} from "./doctor/service.js";
+import { formatDoctorReport } from "./doctor/text.js";
 import { FacultyClient } from "./faculty/client.js";
 import { formatDepartments, formatFaculty } from "./faculty/text.js";
 import { searchResources, type ResourceCategory } from "./resources/catalog.js";
@@ -169,6 +176,7 @@ Usage:
   sustech version [--json|--jsonl]
   sustech capabilities [--json|--jsonl]
   sustech consequences [OPERATION] [--json|--jsonl]
+  sustech doctor [--profile NAME] [--credentials-file PATH] [--service all|tis,bb,ws,booking,lib-booking,pms] [--live]
   sustech auth login [--profile NAME] [--sid SID] [--service bb|tis|ws|booking|lib-booking|pms] [--password-stdin]
   sustech auth status [--profile NAME]
   sustech auth logout [--profile NAME]
@@ -320,6 +328,7 @@ type Values = OutputFlags & {
   profile?: string;
   sid?: string;
   "password-stdin"?: boolean;
+  live?: boolean;
   help?: boolean;
 };
 
@@ -331,6 +340,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "auth status": ["profile"],
   "auth logout": ["profile"],
   "auth check": ["service", "credentials-file", "profile"],
+  doctor: ["profile", "credentials-file", "service", "live"],
   "calendar terms": ["year", "calendar-level"],
   "calendar day": ["date", "calendar-level"],
   "faculty list": ["full", "limit"],
@@ -463,6 +473,7 @@ async function main(argv: string[]): Promise<void> {
         profile: { type: "string" },
         sid: { type: "string" },
         "password-stdin": { type: "boolean", default: false },
+        live: { type: "boolean", default: false },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -522,6 +533,10 @@ async function main(argv: string[]): Promise<void> {
       items: consequences,
       summary: { total: consequences.length },
     }, output);
+    return;
+  }
+  if (group === "doctor" && command === undefined) {
+    await runDoctor(values, output);
     return;
   }
   if (group === "auth") {
@@ -1001,6 +1016,59 @@ async function runAuth(positionals: readonly string[], values: Values, output: O
   }
 
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runDoctor(values: Values, output: OutputOptions): Promise<void> {
+  const services = doctorServices(values.service);
+  const backend = await getCredentialBackendStatus();
+  const profile = await getCredentialStatus(values.profile);
+  const liveResults: DoctorLiveResult[] = [];
+  let credentialSource: string | undefined;
+
+  if (values.live) {
+    let credentials: Credentials | undefined;
+    let credentialError: unknown;
+    try {
+      credentials = await resolvedCredentials(values);
+      credentialSource = credentials.source;
+    } catch (error) {
+      credentialError = error;
+    }
+
+    for (const service of services) {
+      if (!credentials) {
+        liveResults.push({ service, status: "fail", ...doctorFailure(credentialError) });
+        continue;
+      }
+      try {
+        const result = await authenticateCredentials(credentials, service);
+        liveResults.push({
+          service,
+          status: "pass",
+          message: `authentication succeeded via ${result.credentialSource}`,
+          ...(result.identity ? { identity: result.identity } : {}),
+        });
+      } catch (error) {
+        liveResults.push({ service, status: "fail", ...doctorFailure(error) });
+      }
+    }
+  }
+
+  const report = buildDoctorReport({
+    backend,
+    profile,
+    services,
+    live: Boolean(values.live),
+    ...(credentialSource ? { credentialSource } : {}),
+    ...(values.live ? { liveResults } : {}),
+  });
+  writeSuccess({
+    command: "doctor",
+    data: report,
+    text: formatDoctorReport(report),
+    items: report.checks,
+    summary: report.summary,
+  }, output);
 }
 
 async function authenticatedSession(values: Values): Promise<{ session: TisSession; credentialSource: string }> {
@@ -2503,6 +2571,32 @@ function authServiceValue(value: string | undefined, fallback: AuthService = "ti
     return value;
   }
   throw usageError("--service must be tis, bb, ws, booking, lib-booking (or library-booking), or pms.");
+}
+
+function doctorServices(value: string | undefined): DoctorService[] {
+  const available = DOCTOR_SERVICES.map((entry) => entry.service);
+  if (value === undefined || value.trim() === "" || value.trim() === "all") return [...available];
+  const services: DoctorService[] = [];
+  for (const raw of value.split(",")) {
+    const normalized = raw.trim() === "library-booking" ? "lib-booking" : raw.trim();
+    if (!available.includes(normalized as DoctorService)) {
+      throw usageError("--service for doctor must be all or a comma-separated subset of tis, bb, ws, booking, lib-booking, and pms.");
+    }
+    if (!services.includes(normalized as DoctorService)) services.push(normalized as DoctorService);
+  }
+  if (services.length === 0) throw usageError("--service for doctor cannot be empty.");
+  return services;
+}
+
+function doctorFailure(error: unknown): { code: string; message: string } {
+  const code = error instanceof CliError ? error.code : "UNEXPECTED_ERROR";
+  const raw = error instanceof Error ? error.message : String(error ?? "unknown diagnostic failure");
+  const message = raw
+    .replace(/(password|authorization|cookie|token)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+  return { code, message: message || "diagnostic probe failed" };
 }
 
 function classroomQuery(values: Values): { week: number; day: number; periodStart: number; periodEnd: number } {
