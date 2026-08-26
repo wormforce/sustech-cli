@@ -10,16 +10,17 @@ const BSSID_PATTERN = /\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b/i;
 export class WifiClient {
   public async currentAssociation(): Promise<WifiAssociation | null> {
     ensureMacOS();
-    const interfaceName = await wifiInterface();
     try {
-      const { stdout } = await execFileAsync("/usr/sbin/system_profiler", ["SPAirPortDataType"], {
+      const { stdout } = await execFileAsync("/usr/sbin/system_profiler", ["SPAirPortDataType", "-json"], {
         encoding: "utf8",
         timeout: 15_000,
         maxBuffer: 4 * 1024 * 1024,
       });
-      const parsed = parseCurrentNetwork(stdout, interfaceName);
-      if (parsed) return parsed;
+      return parseCurrentNetworkJson(stdout);
     } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new CliError("macOS returned invalid Wi-Fi profile JSON.", "WIFI_PROTOCOL_ERROR", 1);
+      }
       if (!isExpectedCommandFailure(error)) throw error;
     }
     return null;
@@ -57,6 +58,42 @@ export class WifiClient {
     }
     return parseWifiEvents(stdout, ssids);
   }
+}
+
+export function parseCurrentNetworkJson(text: string): WifiAssociation | null {
+  const root = recordValue(JSON.parse(text));
+  const profiles = arrayValue(root.SPAirPortDataType);
+  for (const profile of profiles) {
+    const interfaces = arrayValue(recordValue(profile).spairport_airport_interfaces);
+    for (const rawInterface of interfaces) {
+      const interfaceRecord = recordValue(rawInterface);
+      const network = recordValue(interfaceRecord.spairport_current_network_information);
+      const ssid = stringValue(network._name);
+      if (!ssid) continue;
+
+      const association: WifiAssociation = {
+        interface: stringValue(interfaceRecord._name) || "en0",
+        ssid,
+      };
+      const phyMode = stringValue(network.spairport_network_phymode);
+      const security = normaliseSecurity(stringValue(network.spairport_security_mode));
+      const channelValue = stringValue(network.spairport_network_channel);
+      const signalValue = stringValue(network.spairport_signal_noise);
+      const bssidValue = stringValue(network.spairport_network_bssid ?? network.BSSID);
+      const channel = /^(\d+)/.exec(channelValue)?.[1];
+      const band = /\(([^)]+)\)/.exec(channelValue)?.[1];
+      const signal = /(-?\d+)\s*dBm/i.exec(signalValue)?.[1];
+      const bssid = bssidValue.match(BSSID_PATTERN)?.[0]?.toUpperCase();
+      if (phyMode) association.phyMode = phyMode;
+      if (security) association.security = security;
+      if (channel) association.channel = Number(channel);
+      if (band) association.band = band;
+      if (signal) association.signalDbm = Number(signal);
+      if (bssid) association.bssid = bssid;
+      return association;
+    }
+  }
+  return null;
 }
 
 export function parseCurrentNetwork(text: string, interfaceName = "en0"): WifiAssociation | null {
@@ -119,25 +156,6 @@ export function parseWifiEvents(text: string, ssids: readonly string[] = DEFAULT
   return result;
 }
 
-async function wifiInterface(): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("/usr/sbin/networksetup", ["-listallhardwareports"], {
-      encoding: "utf8",
-      timeout: 5_000,
-    });
-    const lines = stdout.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      if (!lines[index]?.includes("Hardware Port: Wi-Fi")) continue;
-      for (const line of lines.slice(index + 1, index + 3)) {
-        if (line.trim().startsWith("Device:")) return line.split(":", 2)[1]?.trim() || "en0";
-      }
-    }
-  } catch {
-    // Fall through to the conventional interface name.
-  }
-  return "en0";
-}
-
 function classifyEvent(message: string): WifiEvent["category"] {
   const lower = message.toLowerCase();
   if (lower.includes("disassoc") || lower.includes("link down") || lower.includes("deauth")) return "disassociate";
@@ -175,4 +193,27 @@ function leadingWhitespace(value: string): number {
 
 function isExpectedCommandFailure(error: unknown): boolean {
   return error instanceof Error;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normaliseSecurity(value: string): string {
+  const normalized = value.replace(/^spairport_security_mode_/, "");
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => /^wpa\d?$/i.test(part) ? part.toUpperCase() : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 }
