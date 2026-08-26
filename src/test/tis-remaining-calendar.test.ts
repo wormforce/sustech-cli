@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -106,6 +105,7 @@ test("generic ICS builder supports all-day holidays and timed deadline-style eve
 
 test("exam datetime helpers accept exact values and reject guesses", () => {
   assert.equal(parseIsoDateTimeToUtcStamp("2026-08-26T18:00:00+08:00"), "20260826T100000Z");
+  assert.equal(parseIsoDateTimeToUtcStamp("2026-02-30T18:00:00+08:00"), undefined);
   assert.equal(parseIsoDateTimeToUtcStamp("2026/08/26 18:00"), undefined);
   assert.deepEqual(parseShenzhenExamTimeRange("2026-08-28", "09:00-11:00"), {
     startUtc: "20260828T010000Z",
@@ -183,10 +183,48 @@ test("nearest upcoming exam keeps exact-order semantics and reports omitted malf
   assert.match(selected.omissions[0]?.message ?? "", /exact YYYY-MM-DD/);
 });
 
+test("nearest upcoming exam omits future rows whose time is not exact", () => {
+  const exams: ExamRecord[] = [
+    {
+      code: "CS203",
+      name: "Data Structures",
+      date: "2026-08-29",
+      weekday: "周六",
+      weekdayEn: "Saturday",
+      time: "",
+      building: "主楼",
+      room: "101",
+      campus: "南科大",
+      type: "期末",
+      semester: "2025-2026学年春季学期",
+    },
+    {
+      code: "MA205",
+      name: "Probability",
+      date: "2026-08-30",
+      weekday: "周日",
+      weekdayEn: "Sunday",
+      time: "09:00-11:00",
+      building: "理学院",
+      room: "201",
+      campus: "南科大",
+      type: "期末",
+      semester: "2025-2026学年春季学期",
+    },
+  ];
+
+  const selected = nearestUpcomingExam(exams, { now: new Date("2026-08-26T04:00:00Z") });
+  assert.equal(selected.exam?.code, "MA205");
+  assert.equal(selected.omissions.length, 1);
+  assert.match(selected.omissions[0]?.message ?? "", /future exam time could not be parsed exactly/i);
+});
+
 test("safe ICS writer rejects symlinks and keeps new files mode 0600", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "sustech-cli-ics-"));
+  const tempDir = await mkdtemp(join(process.cwd(), ".tmp-sustech-cli-ics-"));
   const destination = join(tempDir, "schedule.ics");
   const symlinkPath = join(tempDir, "schedule-link.ics");
+  const symlinkedParent = join(tempDir, "linked-parent");
+  const guardedDestination = join(symlinkedParent, "nested.ics");
   const payload = "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n";
 
   try {
@@ -197,6 +235,8 @@ test("safe ICS writer rejects symlinks and keeps new files mode 0600", async () 
 
     await symlink(destination, symlinkPath);
     await assert.rejects(() => writeIcsFile(payload, symlinkPath), /symbolic link/i);
+    await symlink(tempDir, symlinkedParent);
+    await assert.rejects(() => writeIcsFile(payload, guardedDestination), /symbolic link/i);
     await assert.rejects(() => writeIcsFile(payload, destination), /already exists/i);
 
     await writeFile(destination, "old", "utf8");

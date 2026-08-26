@@ -3,6 +3,7 @@ import { constants as fileSystemConstants } from "node:fs";
 import { copyFile, link, lstat, open, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { CliError } from "../core/errors.js";
+import { assertPathAndParentsAreNotSymlinks } from "../core/local-store.js";
 import type { Holiday } from "../calendar/types.js";
 import type { ExamRecord, PersonalScheduleEntry } from "./types.js";
 import { addUtcDays, parseIsoDate, toIsoDate } from "./remaining-shared.js";
@@ -223,9 +224,36 @@ export async function writeIcsFile(
 }
 
 export function parseIsoDateTimeToUtcStamp(value: string): string | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.trim())) return undefined;
+  const match = /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2}))?(?:\.\d+)?(?<zone>Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2}))$/.exec(value.trim());
+  if (!match?.groups) return undefined;
+  const year = Number(match.groups.year);
+  const month = Number(match.groups.month);
+  const day = Number(match.groups.day);
+  const hour = Number(match.groups.hour);
+  const minute = Number(match.groups.minute);
+  const second = Number(match.groups.second ?? "0");
+  if (!validClock(hour, minute) || !Number.isInteger(second) || second < 0 || second > 59) return undefined;
+  const offsetHour = Number(match.groups.offsetHour ?? "0");
+  const offsetMinute = Number(match.groups.offsetMinute ?? "0");
+  if (!Number.isInteger(offsetHour) || offsetHour < 0 || offsetHour > 23 || !Number.isInteger(offsetMinute) || offsetMinute < 0 || offsetMinute > 59) {
+    return undefined;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return undefined;
+  const offsetMinutes = match.groups.zone === "Z"
+    ? 0
+    : (match.groups.sign === "-" ? -1 : 1) * ((offsetHour * 60) + offsetMinute);
+  const shifted = new Date(parsed.getTime() + (offsetMinutes * 60 * 1000));
+  if (
+    shifted.getUTCFullYear() !== year
+    || shifted.getUTCMonth() + 1 !== month
+    || shifted.getUTCDate() !== day
+    || shifted.getUTCHours() !== hour
+    || shifted.getUTCMinutes() !== minute
+    || shifted.getUTCSeconds() !== second
+  ) {
+    return undefined;
+  }
   return formatUtc(parsed);
 }
 
@@ -326,10 +354,14 @@ export function nearestUpcomingExam(
       continue;
     }
     const range = parseTimeRange(exam.time);
+    if (!range) {
+      omissions.push({ code, message: `Skipped ${code}: future exam time could not be parsed exactly.` });
+      continue;
+    }
     candidates.push({
       exam,
       date: exam.date,
-      timeOrder: range ? range.startHour * 60 + range.startMinute : Number.POSITIVE_INFINITY,
+      timeOrder: range.startHour * 60 + range.startMinute,
     });
   }
 
@@ -502,6 +534,7 @@ function periodStartMinutes(period: number): number {
 
 async function inspectIcsDestination(destination: string, overwrite: boolean): Promise<{ destination: string; existed: boolean }> {
   const absolute = resolvePath(destination);
+  await assertPathAndParentsAreNotSymlinks(absolute);
   const parent = dirname(absolute);
   let parentInfo;
   try {

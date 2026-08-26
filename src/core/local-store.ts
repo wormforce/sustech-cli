@@ -49,7 +49,7 @@ export async function writeJsonAtomically(path: string, value: unknown): Promise
   }
 }
 
-async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {
+export async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {
   const resolved = resolve(path);
   const root = parse(resolved).root;
   const segments = resolved.slice(root.length).split("/").filter(Boolean);
