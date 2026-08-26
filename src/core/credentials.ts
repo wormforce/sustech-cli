@@ -1,29 +1,66 @@
 import { readFile } from "node:fs/promises";
 import { CliError } from "./errors.js";
+import {
+  loadStoredCredentials,
+  type CredentialStoreOptions,
+} from "./keyring.js";
+
+export type CredentialSource = "environment" | "file" | "system-keyring" | "interactive";
 
 export interface Credentials {
   sid: string;
   password: string;
-  source: "environment" | "file";
+  source: CredentialSource;
+  profile?: string;
+  backend?: string;
 }
 
-export async function resolveCredentials(credentialsFile?: string): Promise<Credentials> {
-  if (credentialsFile) return readCredentialsFile(credentialsFile);
+export interface ResolveCredentialsOptions {
+  credentialsFile?: string;
+  profile?: string;
+  env?: NodeJS.ProcessEnv;
+  store?: CredentialStoreOptions;
+}
 
-  const sid = process.env.SUSTECH_SID?.trim();
-  const password = process.env.SUSTECH_PASSWORD;
+export async function resolveCredentials(
+  input: string | ResolveCredentialsOptions = {},
+): Promise<Credentials> {
+  const options = typeof input === "string" ? { credentialsFile: input } : input;
+  if (options.credentialsFile) return readCredentialsFile(options.credentialsFile);
+
+  const env = options.env ?? process.env;
+  const sid = env.SUSTECH_SID?.trim();
+  const password = env.SUSTECH_PASSWORD;
   if (sid && password) return { sid, password, source: "environment" };
 
-  const file = process.env.SUSTECH_CREDENTIALS_FILE;
+  const file = env.SUSTECH_CREDENTIALS_FILE;
   if (file) {
     return readCredentialsFile(file);
   }
 
-  throw new CliError(
-    "Credentials are required. Set SUSTECH_SID and SUSTECH_PASSWORD, or pass --credentials-file.",
-    "CREDENTIALS_REQUIRED",
-    2,
-  );
+  try {
+    const stored = await loadStoredCredentials(options.profile, {
+      ...options.store,
+      env: options.store?.env ?? env,
+    });
+    return {
+      sid: stored.sid,
+      password: stored.password,
+      source: "system-keyring",
+      profile: stored.profile,
+      backend: stored.backend,
+    };
+  } catch (error) {
+    if (error instanceof CliError && error.code === "CREDENTIAL_PROFILE_NOT_FOUND") {
+      throw new CliError(
+        "Credentials are required. Run 'sustech auth login', inject SUSTECH_SID and SUSTECH_PASSWORD, or pass --credentials-file.",
+        "CREDENTIALS_REQUIRED",
+        2,
+        { profile: options.profile ?? (env.SUSTECH_PROFILE?.trim() || "default") },
+      );
+    }
+    throw error;
+  }
 }
 
 async function readCredentialsFile(file: string): Promise<Credentials> {

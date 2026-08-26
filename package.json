@@ -1,11 +1,11 @@
 {
   "name": "sustech-cli",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "bin": {
-    "sustech": "./dist/cli.js"
+    "sustech": "dist/cli.js"
   },
   "files": [
     "dist/cli.d.ts",
@@ -21,18 +21,19 @@
     "dist/tis",
     "dist/transit",
     "dist/wifi",
+    "docs",
     "README.md",
     "LICENSE",
     "NOTICE.md"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aprylewu/sustech-cli.git"
+    "url": "git+https://github.com/wormforce/sustech-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/aprylewu/sustech-cli/issues"
+    "url": "https://github.com/wormforce/sustech-cli/issues"
   },
-  "homepage": "https://github.com/aprylewu/sustech-cli#readme",
+  "homepage": "https://github.com/wormforce/sustech-cli#readme",
   "keywords": [
     "sustech",
     "cli",
@@ -44,7 +45,8 @@
     "node": ">=20.18.0"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc --project tsconfig.json",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
     "check": "tsc --noEmit --project tsconfig.json",
     "prepare": "npm run build",
     "start": "node dist/cli.js",
@@ -55,5 +57,8 @@
   "devDependencies": {
     "@types/node": "^22.15.30",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "1.3.0"
   }
 }

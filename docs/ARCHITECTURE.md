@@ -21,6 +21,9 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/cli.ts` owns command routing, option validation, and user-facing help.
 - `src/core` owns credentials, errors, output contracts, capabilities,
   consequences, and other shared primitives.
+- `src/core/keyring.ts` keeps long-lived passwords behind a platform adapter:
+  macOS Keychain, Windows Credential Manager, or Linux Secret Service. Its
+  local config contains profile metadata only.
 - `src/sso` owns generic CAS session flow. TIS, Blackboard, and WS reuse this
   layer instead of reimplementing login logic separately.
 - `src/tis` owns TIS protocol details, normalized course models, planning, the
@@ -32,7 +35,7 @@ output renderer       text | versioned JSON | streaming JSONL
   available and marks missing inputs explicitly.
 - `src/services` owns reusable campus-service adapters such as Blackboard, WS,
   booking, library booking, PMS, NCES, and papers, plus the authenticated
-  read-only session wrappers that sit in front of some of them.
+  session wrappers that sit in front of some of them.
 - `src/core/capabilities.ts` is the machine-discoverable safety registry.
 - Services must not write to stdout or stderr.
 - Machine-readable output is versioned by `schemaVersion`.
@@ -58,12 +61,14 @@ The repo now has three service-facing patterns:
    - tests with fixture-backed adapters
    - browser-backed or cookie-injected transports
 
-3. Authenticated read-only wrappers
+3. Authenticated wrappers
 
-   Booking, library-booking, and PMS now have repo-owned login wrappers that:
+   Booking, library-booking, PMS, and the CLI's CAS-backed Blackboard/WS
+   entrypoints now have repo-owned login wrappers that:
 
-   - keep credentials, cookies, and transient tokens in memory only
-   - constrain requests to documented read-only endpoint allowlists
+   - retrieve credentials just in time and keep cookies and transient tokens in memory only
+   - constrain service origins; booking, library-booking, and PMS additionally
+     enforce documented read-only endpoint allowlists
    - normalize the resulting responses through the same typed service layer
 
 `sustech services status` reports the reusable service layer, not only whether
@@ -77,12 +82,25 @@ commands for them.
 - Read commands never mutate remote state.
 - Local planning commands such as `tis enroll preview`, `tis selection preview`,
   `tis bid plan`, and `library search-url` do not authenticate or write.
+- `bb submit preview` authenticates for live read-only preflight checks but
+  never calls a mutation endpoint.
+- `bb attachments` keeps teacher-provided content files separate from student
+  attempt files. `bb download` is a local mutation with an explicit destination,
+  same-origin URL checks, exclusive no-overwrite placement, and a portable
+  filesystem fallback when hard links are unavailable.
 - Booking, library-booking, and PMS sessions keep credentials and session
   material in memory only and reject requests outside their read-only
   allowlists.
-- The only live mutation currently exposed is `tis enroll apply --confirm`.
+- `auth login` verifies the selected service before storing a password in the
+  operating-system credential store. Linux refuses a session-only keyutils or
+  plaintext fallback when Secret Service is unavailable.
+- The currently exposed remote mutation commands are `tis enroll apply --confirm`
+  and `bb submit apply --expected-sha256 HASH --confirm`. `bb download` mutates
+  only the selected local filesystem path.
 - Mutation commands use explicit preview/build phases and post-action
-  verification where the upstream service allows it.
+  verification. Blackboard apply also requires the previewed file SHA-256 and
+  returns exit code 5 plus `DO_NOT_RETRY_AUTOMATICALLY` when write state cannot
+  be determined safely.
 - Consequence metadata lives in `src/core/consequences.ts` so agents can inspect
   risks and follow-up checks without scraping prose.
 - New authenticated campus-service wrappers are validated with protocol fixtures

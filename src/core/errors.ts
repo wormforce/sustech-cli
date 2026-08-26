@@ -11,9 +11,9 @@ export class CliError extends Error {
 }
 
 export class ConfirmationRequiredError extends CliError {
-  public constructor(action: string) {
+  public constructor(action: string, message?: string) {
     super(
-      `${action} changes your TIS enrollment. Re-run with --confirm after reviewing the preview.`,
+      message ?? `${action} changes your TIS enrollment. Re-run with --confirm after reviewing the preview.`,
       "CONFIRMATION_REQUIRED",
       3,
       { action },

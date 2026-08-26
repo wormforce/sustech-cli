@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const CLI_PATH = new URL("../cli.js", import.meta.url);
+const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.4\.1/);
+  assert.match(text.stdout, /^sustech-cli 0\.6\.0/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -15,7 +20,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.4.1", runtime: `node ${process.version}` },
+    data: { version: "0.6.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -83,17 +88,143 @@ test("enrollment preview is a no-network command with an exact apply handoff", (
   assert.equal(JSON.parse(unsafe.stdout).error.code, "USAGE");
 });
 
+test("blackboard submission preview now requires Blackboard authentication after local file validation", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-bb-"));
+  const filePath = join(tempDir, "report final.pdf");
+  writeFileSync(filePath, "%PDF-1.7\nmock", "utf8");
+
+  try {
+    const result = runWithoutCredentials([
+      "bb", "submit", "preview",
+      "--course-id", "_8537_1",
+      "--content-id", "_629896_1",
+      "--file", filePath,
+      "--comment", "late upload note",
+      "--json",
+    ]);
+    assert.equal(result.status, 2);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.error.code, "CREDENTIALS_REQUIRED");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("blackboard apply requires both the preview hash and explicit confirmation before authentication", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-bb-apply-"));
+  const filePath = join(tempDir, "answer.txt");
+  const contents = "reviewed answer";
+  writeFileSync(filePath, contents, "utf8");
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const baseArgs = [
+    "bb", "submit", "apply",
+    "--course-id", "_8537_1",
+    "--content-id", "_629896_1",
+    "--file", filePath,
+  ];
+
+  try {
+    const unconfirmed = runWithoutCredentials([...baseArgs, "--expected-sha256", sha256, "--json"]);
+    assert.equal(unconfirmed.status, 3);
+    assert.equal(JSON.parse(unconfirmed.stdout).error.code, "CONFIRMATION_REQUIRED");
+
+    const mismatched = runWithoutCredentials([
+      ...baseArgs,
+      "--expected-sha256", "0".repeat(64),
+      "--confirm",
+      "--json",
+    ]);
+    assert.equal(mismatched.status, 2);
+    assert.equal(JSON.parse(mismatched.stdout).error.code, "BLACKBOARD_FILE_HASH_MISMATCH");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("blackboard content attachment commands keep selection and local writes explicit", () => {
+  const list = runWithoutCredentials(["bb", "attachments", "_8537_1", "_629896_1", "--json"]);
+  assert.equal(list.status, 2);
+  assert.equal(JSON.parse(list.stdout).command, "bb attachments");
+  assert.equal(JSON.parse(list.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const missingDestination = runWithoutCredentials([
+    "bb", "download", "_8537_1", "_629896_1", "_42588_1", "--json",
+  ]);
+  assert.equal(missingDestination.status, 2);
+  assert.equal(JSON.parse(missingDestination.stdout).command, "bb download");
+  assert.equal(JSON.parse(missingDestination.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(missingDestination.stdout).error.message, /--destination/);
+
+  const irrelevantOverwrite = runWithoutCredentials([
+    "bb", "attachments", "_8537_1", "_629896_1", "--overwrite", "--json",
+  ]);
+  assert.equal(irrelevantOverwrite.status, 2);
+  assert.match(JSON.parse(irrelevantOverwrite.stdout).error.message, /not valid for 'bb attachments'/);
+});
+
 test("capabilities exposes safety metadata without requiring help-text parsing", () => {
   const result = run(["capabilities", "--json"]);
   assert.equal(result.status, 0);
   const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.data.credentialStorage.profiles, true);
+  assert.equal(envelope.data.credentialStorage.passwordArgument, false);
+  assert.equal(typeof envelope.data.credentialStorage.backend.available, "boolean");
   const apply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis enroll apply");
   const preview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis enroll preview");
   const auth = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "auth check");
+  const authLogin = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "auth login");
+  const authStatus = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "auth status");
+  const authLogout = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "auth logout");
+  const bbApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb submit apply");
+  const bbPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb submit preview");
+  const bbAttachments = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb attachments");
+  const bbDownload = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb download");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
   assert.equal(auth.authentication, "selected-service");
+  assert.equal(authLogin.kind, "mutation");
+  assert.equal(authLogin.network, true);
+  assert.equal(authStatus.kind, "local");
+  assert.equal(authStatus.network, false);
+  assert.equal(authLogout.kind, "mutation");
+  assert.equal(authLogout.network, false);
+  assert.equal(bbApply.kind, "mutation");
+  assert.equal(bbApply.authentication, "bb");
+  assert.equal(bbApply.confirmation, "required");
+  assert.equal(bbPreview.network, true);
+  assert.equal(bbAttachments.kind, "read");
+  assert.equal(bbAttachments.authentication, "bb");
+  assert.equal(bbDownload.kind, "mutation");
+  assert.equal(bbDownload.confirmation, "none");
+});
+
+test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
+  const profile = `test-${process.pid}`;
+  const status = runWithoutCredentials(["auth", "status", "--profile", profile, "--json"]);
+  assert.equal(status.status, 0);
+  const statusEnvelope = JSON.parse(status.stdout);
+  assert.equal(statusEnvelope.data.profile, profile);
+  assert.equal(statusEnvelope.data.configured, false);
+  assert.equal(statusEnvelope.data.credentialAvailable, false);
+  assert.equal("password" in statusEnvelope.data, false);
+
+  const logout = runWithoutCredentials(["auth", "logout", "--profile", profile, "--json"]);
+  assert.equal(logout.status, 0);
+  assert.deepEqual(JSON.parse(logout.stdout).data, {
+    profile,
+    removed: false,
+    backend: "unavailable",
+  });
+
+  const check = runWithoutCredentials(["auth", "check", "--profile", profile, "--service", "bb", "--json"]);
+  assert.equal(check.status, 2);
+  assert.equal(JSON.parse(check.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const missingSid = runWithoutCredentials(["auth", "login", "--password-stdin", "--json"]);
+  assert.equal(missingSid.status, 2);
+  assert.equal(JSON.parse(missingSid.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(missingSid.stdout).error.message, /requires --sid/);
 });
 
 test("new local Agent surfaces remain machine-readable and mutation-free", () => {
@@ -163,32 +294,35 @@ test("booking, library-booking, and PMS expose read-only Agent commands", () => 
 });
 
 test("new authenticated commands reject invalid inputs before network or credential resolution", () => {
-  for (const args of [
-    ["booking", "rooms", "--page-size", "0", "--json"],
-    ["lib-booking", "rooms", "--kind-id", "0", "--lab-id", "1", "--json"],
-    ["lib-booking", "reservations", "--start", "2026-02-30", "--json"],
-    ["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"],
-    ["auth", "check", "--service", "not-a-service", "--json"],
-  ]) {
-    const result = runWithoutCredentials(args);
+  for (const [args, expectedCode] of [
+    [["booking", "rooms", "--page-size", "0", "--json"], "USAGE"],
+    [["lib-booking", "rooms", "--kind-id", "0", "--lab-id", "1", "--json"], "USAGE"],
+    [["lib-booking", "reservations", "--start", "2026-02-30", "--json"], "USAGE"],
+    [["pms", "usage", "--begin", "2026-08-30", "--end", "2026-08-01", "--json"], "USAGE"],
+    [["auth", "check", "--service", "not-a-service", "--json"], "USAGE"],
+    [["bb", "submit", "apply", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--expected-sha256", "not-a-sha", "--confirm", "--json"], "USAGE"],
+  ] as const) {
+    const result = runWithoutCredentials([...args]);
     assert.equal(result.status, 2);
-    assert.equal(JSON.parse(result.stdout).error.code, "USAGE");
+    assert.equal(JSON.parse(result.stdout).error.code, expectedCode);
   }
 });
 
 function run(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [CLI_PATH.pathname, ...args], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf8" });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 function runWithoutCredentials(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [CLI_PATH.pathname, ...args], {
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
       SUSTECH_SID: "",
       SUSTECH_PASSWORD: "",
       SUSTECH_CREDENTIALS_FILE: "",
+      SUSTECH_PROFILE: "",
+      XDG_CONFIG_HOME: join(tmpdir(), `sustech-cli-empty-config-${process.pid}`),
     },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };

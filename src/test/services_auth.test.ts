@@ -51,24 +51,30 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
         availability: { available: "Yes" },
       });
     }
-    if (url.includes("/learn/api/public/v1/courses/_8343_1/gradebook/columns") && !url.includes("offset=1")) {
+    if (url.includes("/learn/api/public/v2/courses/_8343_1/gradebook/columns") && !url.includes("offset=1")) {
       return jsonResponse({
         results: [{
           id: "_991_1",
           name: "Lab Report 1",
           contentId: "_490876_1",
+          availability: { available: "Yes" },
+          grading: { type: "Attempts", scoringModel: "Last", attemptsAllowed: 2 },
           score: { possible: 100 },
+          scoreProviderHandle: "resource/x-bb-assignment",
         }],
-        paging: { nextPage: "/learn/api/public/v1/courses/_8343_1/gradebook/columns?offset=1" },
+        paging: { nextPage: "/learn/api/public/v2/courses/_8343_1/gradebook/columns?offset=1" },
       });
     }
-    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/columns?offset=1") {
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v2/courses/_8343_1/gradebook/columns?offset=1") {
       return jsonResponse({
         results: [{
           id: "_992_1",
           name: "Final Project",
           contentId: "_490877_1",
+          availability: { available: "Yes" },
+          grading: { type: "Attempts", scoringModel: "Last" },
           score: { possible: 80 },
+          scoreProviderHandle: "resource/x-bb-assignment",
         }],
       });
     }
@@ -104,12 +110,25 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
       contentId: "490876",
       title: "Lab Report 1",
       scorePossible: 100,
+      availability: "Yes",
+      grading: {
+        type: "Attempts",
+        attemptsAllowed: 2,
+        scoringModel: "Last",
+      },
+      scoreProviderHandle: "resource/x-bb-assignment",
     },
     {
       id: "992",
       contentId: "490877",
       title: "Final Project",
       scorePossible: 80,
+      availability: "Yes",
+      grading: {
+        type: "Attempts",
+        scoringModel: "Last",
+      },
+      scoreProviderHandle: "resource/x-bb-assignment",
     },
   ]);
 

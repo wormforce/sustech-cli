@@ -35,6 +35,12 @@ const VALUE_OPTIONS = new Set([
   "--sort",
   "--min-year",
   "--parent-id",
+  "--content-id",
+  "--column-id",
+  "--file",
+  "--comment",
+  "--expected-sha256",
+  "--destination",
   "--program-code",
   "--program-token",
   "--start",
@@ -47,6 +53,8 @@ const VALUE_OPTIONS = new Set([
   "--server-group",
   "--type",
   "--service",
+  "--profile",
+  "--sid",
 ]);
 
 export function inferCommandName(argv: string[]): string {
@@ -65,7 +73,10 @@ export function inferCommandName(argv: string[]): string {
   if (!group) return "unknown";
   if (group === "version" || group === "capabilities" || group === "context" || group === "consequences") return group;
   if (!command) return group;
-  if (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid"].includes(command)) {
+  if (
+    (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid"].includes(command))
+    || (group === "bb" && command === "submit")
+  ) {
     return positionals.slice(0, 3).join(" ");
   }
   return positionals.slice(0, 2).join(" ");

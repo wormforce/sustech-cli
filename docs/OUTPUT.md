@@ -55,7 +55,9 @@ Every line is independent JSON. JSONL is never pretty-printed.
 - `1`: network, protocol, or upstream service failure.
 - `2`: usage, credentials, or authentication failure.
 - `3`: a mutation was attempted without explicit confirmation.
-- `4`: TIS accepted the request transport but rejected the mutation.
+- `4`: a mutation precondition failed or TIS rejected the mutation.
+- `5`: a write may have partially completed and its final state is unknown;
+  do not retry automatically.
 
 Exit status is authoritative even when an error envelope was parsed.
 
@@ -65,3 +67,11 @@ Adding optional fields does not change `schemaVersion`. Removing or renaming a
 field, changing its type, or changing JSONL record semantics requires a new
 schema version. Command availability and safety metadata are discoverable with
 `sustech capabilities --json`.
+
+Credential commands return backend, profile, availability, and masked account
+metadata only. Passwords, cookies, bearer tokens, and keyring values are never
+part of text, JSON, JSONL, error details, or capability output.
+
+Blackboard attachment listings likewise omit signed `bbcswebdav` URLs. A
+successful `bb download` result contains only stable attachment metadata, the
+absolute destination path, byte count, content type, and SHA-256.

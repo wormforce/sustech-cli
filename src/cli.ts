@@ -3,15 +3,28 @@ import { parseArgs } from "node:util";
 import { inferCommandName } from "./core/argv.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
 import { CONSEQUENCES, consequenceByOperation, formatConsequences } from "./core/consequences.js";
-import { resolveCredentials } from "./core/credentials.js";
+import { resolveCredentials, type Credentials } from "./core/credentials.js";
 import { CliError, ConfirmationRequiredError } from "./core/errors.js";
+import {
+  DEFAULT_CREDENTIAL_PROFILE,
+  deleteStoredCredentials,
+  getCredentialBackendStatus,
+  getCredentialStatus,
+  maskSid,
+  saveStoredCredentials,
+  validateCredentialPassword,
+  validateCredentialSid,
+  validateProfileName,
+} from "./core/keyring.js";
 import {
   inferOutputOptions,
   resolveOutputOptions,
   writeError,
   writeSuccess,
   type OutputFlags,
+  type OutputOptions,
 } from "./core/output.js";
+import { promptHiddenPassword, promptLoginSid, readPasswordFromStdin } from "./core/prompt.js";
 import { parseSemester } from "./core/semester.js";
 import { CLI_VERSION } from "./core/version.js";
 import { CalendarClient } from "./calendar/client.js";
@@ -70,10 +83,17 @@ import { LibraryBookingSession } from "./services/library-booking-auth.js";
 import { PmsSession } from "./services/pms-auth.js";
 import {
   SERVICE_STATUSES,
+  attachBlackboardAttemptFile,
   browseNces,
   buildPrimoSearchUrl,
+  createBlackboardAttempt,
+  downloadBlackboardContentAttachment,
+  evaluateBlackboardSubmissionPreflight,
   formatServiceStatuses,
+  getBlackboardAttempt,
+  getBlackboardContentItem,
   getBlackboardUser,
+  getBlackboardUploadSettings,
   getLibraryBookingUser,
   getLibraryIdleSummary,
   getLibraryReservationCount,
@@ -81,6 +101,9 @@ import {
   getWsProgramDetail,
   getWsToken,
   listBlackboardAssignments,
+  listBlackboardContentAttachments,
+  listBlackboardAttemptFiles,
+  listBlackboardAttempts,
   listBlackboardContent,
   listBlackboardCourses,
   listBookingRooms,
@@ -94,9 +117,18 @@ import {
   listPmsStations,
   listPmsUsageHistory,
   listWsPrograms,
+  inspectBlackboardSubmissionFile,
+  readBlackboardSubmissionPayload,
+  selectBlackboardAssignment,
   searchCrossref,
   searchNces,
   serviceStatus,
+  updateBlackboardAttempt,
+  uploadBlackboardTemporaryFile,
+  type BlackboardAttempt,
+  type BlackboardAttemptFile,
+  type BlackboardSubmissionFile,
+  type BlackboardSubmissionPreflight as BlackboardSubmissionAssessment,
   type ServiceAdapter,
 } from "./services/index.js";
 import {
@@ -104,8 +136,13 @@ import {
   formatBookingProfile,
   formatBookingRooms,
   formatBlackboardAssignments,
+  formatBlackboardAttachmentDownload,
+  formatBlackboardAttachments,
+  formatBlackboardAttempts,
   formatBlackboardContent,
   formatBlackboardCourses,
+  formatBlackboardSubmissionSuccess,
+  formatBlackboardSubmitPreview,
   formatBlackboardUser,
   formatNcesCourses,
   formatNcesDetail,
@@ -132,7 +169,10 @@ Usage:
   sustech version [--json|--jsonl]
   sustech capabilities [--json|--jsonl]
   sustech consequences [OPERATION] [--json|--jsonl]
-  sustech auth check [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--json|--jsonl]
+  sustech auth login [--profile NAME] [--sid SID] [--service bb|tis|ws|booking|lib-booking|pms] [--password-stdin]
+  sustech auth status [--profile NAME]
+  sustech auth logout [--profile NAME]
+  sustech auth check [--profile NAME] [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--json|--jsonl]
   sustech calendar terms [--year YYYY] [--calendar-level undergraduate|graduate]
   sustech calendar day [YYYY-MM-DD|--date YYYY-MM-DD] [--calendar-level undergraduate|graduate]
   sustech faculty departments
@@ -153,7 +193,12 @@ Usage:
   sustech bb user
   sustech bb courses [QUERY]
   sustech bb content COURSE_ID [--parent-id CONTENT_ID]
+  sustech bb attachments COURSE_ID CONTENT_ID
+  sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite]
   sustech bb assignments COURSE_ID
+  sustech bb attempts COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] [--status InProgress|NeedsGrading|Completed]
+  sustech bb submit preview --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH [--comment TEXT]
+  sustech bb submit apply --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH --expected-sha256 HEX [--comment TEXT] [--allow-late] --confirm
   sustech ws programs [KEYWORD] [--page N] [--page-size N]
   sustech ws detail ID [--program-code CODE] [--program-token TOKEN]
   sustech library search-url QUERY [--limit N]
@@ -200,11 +245,13 @@ Output:
   --output text|json|jsonl is the long form. --pretty formats JSON for review.
 
 Credentials:
-  Set SUSTECH_SID and SUSTECH_PASSWORD, or use SUSTECH_CREDENTIALS_FILE / --credentials-file.
-  A credentials file is exactly one sid:password line. The CLI never writes a password to disk.
+  'sustech auth login' verifies credentials, then stores the password in the operating-system credential store.
+  Use --profile to select an account. Environment variables and --credentials-file remain explicit automation overrides.
+  The CLI never accepts a password on the command line and never stores one in its config file.
 
 Safety:
-  "preview" performs no network request. "apply" changes enrollment only with --confirm.
+  TIS preview commands are local-only. Blackboard submission preview performs authenticated read-only checks.
+  Blackboard/TIS apply commands change remote state only with --confirm.
 `;
 
 type Values = OutputFlags & {
@@ -225,6 +272,14 @@ type Values = OutputFlags & {
   direction?: string;
   "route-index"?: string;
   status?: string;
+  "content-id"?: string;
+  "column-id"?: string;
+  file?: string;
+  comment?: string;
+  "expected-sha256"?: string;
+  destination?: string;
+  overwrite?: boolean;
+  "allow-late"?: boolean;
   "period-start"?: string;
   "period-end"?: string;
   "week-one-monday"?: string;
@@ -262,6 +317,9 @@ type Values = OutputFlags & {
   "server-group"?: string;
   type?: string;
   service?: string;
+  profile?: string;
+  sid?: string;
+  "password-stdin"?: boolean;
   help?: boolean;
 };
 
@@ -269,7 +327,10 @@ type AuthService = "tis" | "bb" | "ws" | "booking" | "lib-booking" | "pms";
 
 const SHARED_OUTPUT_OPTIONS = new Set(["output", "json", "jsonl", "pretty"]);
 const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  "auth check": ["service", "credentials-file"],
+  "auth login": ["profile", "sid", "service", "password-stdin"],
+  "auth status": ["profile"],
+  "auth logout": ["profile"],
+  "auth check": ["service", "credentials-file", "profile"],
   "calendar terms": ["year", "calendar-level"],
   "calendar day": ["date", "calendar-level"],
   "faculty list": ["full", "limit"],
@@ -283,7 +344,12 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "bb user": ["credentials-file"],
   "bb courses": ["credentials-file"],
   "bb content": ["credentials-file", "parent-id"],
+  "bb attachments": ["credentials-file"],
+  "bb download": ["credentials-file", "destination", "overwrite"],
   "bb assignments": ["credentials-file"],
+  "bb attempts": ["credentials-file", "content-id", "column-id", "status"],
+  "bb submit preview": ["credentials-file", "course-id", "content-id", "column-id", "file", "comment"],
+  "bb submit apply": ["credentials-file", "course-id", "content-id", "column-id", "file", "expected-sha256", "comment", "allow-late", "confirm"],
   "ws programs": ["credentials-file", "page", "page-size"],
   "ws detail": ["credentials-file", "program-code", "program-token"],
   "library search-url": ["limit"],
@@ -349,6 +415,14 @@ async function main(argv: string[]): Promise<void> {
         direction: { type: "string" },
         "route-index": { type: "string" },
         status: { type: "string" },
+        "content-id": { type: "string" },
+        "column-id": { type: "string" },
+        file: { type: "string" },
+        comment: { type: "string" },
+        "expected-sha256": { type: "string" },
+        destination: { type: "string" },
+        overwrite: { type: "boolean", default: false },
+        "allow-late": { type: "boolean", default: false },
         "period-start": { type: "string" },
         "period-end": { type: "string" },
         "week-one-monday": { type: "string" },
@@ -386,6 +460,9 @@ async function main(argv: string[]): Promise<void> {
         "server-group": { type: "string" },
         type: { type: "string" },
         service: { type: "string" },
+        profile: { type: "string" },
+        sid: { type: "string" },
+        "password-stdin": { type: "boolean", default: false },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -414,11 +491,18 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "capabilities" && command === undefined) {
     const capabilities = [...CAPABILITIES];
-    const data = { schemaVersion: "1", outputModes: ["text", "json", "jsonl"], capabilities };
+    const backend = await getCredentialBackendStatus();
+    const credentialStorage = {
+      profiles: true,
+      passwordArgument: false,
+      precedence: ["credentials-file", "environment", "environment-file", "system-keyring"],
+      backend,
+    };
+    const data = { schemaVersion: "1", outputModes: ["text", "json", "jsonl"], credentialStorage, capabilities };
     writeSuccess({
       command: "capabilities",
       data,
-      text: formatCapabilities(capabilities),
+      text: `${formatCapabilities(capabilities)}\n\nCredential storage\n  ${backend.backend}: ${backend.available ? "available" : "unavailable"} (${backend.persistent ? "persistent" : "non-persistent"})`,
       items: capabilities,
       summary: { total: capabilities.length, schemaVersion: "1" },
     }, output);
@@ -440,12 +524,8 @@ async function main(argv: string[]): Promise<void> {
     }, output);
     return;
   }
-  if (group === "auth" && command === "check" && operation === undefined) {
-    const service = authServiceValue(values.service);
-    const result = await checkAuthentication(values, service);
-    const data = { ...result, service, credentialsStored: false };
-    const identity = result.identity ? `\nIdentity ${result.identity}` : "";
-    writeSuccess({ command: "auth check", data, text: `${service.toUpperCase()} ${formatAuthCheck(result.credentialSource)}${identity}` }, output);
+  if (group === "auth") {
+    await runAuth(parsed.positionals, values, output);
     return;
   }
   if (group === "transit") {
@@ -828,16 +908,129 @@ async function main(argv: string[]): Promise<void> {
   throw usageError(`Unknown command: ${parsed.positionals.join(" ")}`);
 }
 
+async function runAuth(positionals: readonly string[], values: Values, output: OutputOptions): Promise<void> {
+  const [, command, operation] = positionals;
+  if (operation !== undefined) throw usageError(`Unknown command: ${positionals.join(" ")}`);
+
+  if (command === "login") {
+    const environmentProfile = process.env.SUSTECH_PROFILE?.trim() || undefined;
+    const profile = validateProfileName(values.profile ?? environmentProfile ?? DEFAULT_CREDENTIAL_PROFILE);
+    const service = authServiceValue(values.service, "bb");
+    if (values["password-stdin"] && !values.sid) {
+      throw usageError("--password-stdin requires --sid so stdin contains only the password.");
+    }
+    const backend = await getCredentialBackendStatus();
+    if (!backend.available) {
+      throw new CliError(
+        backend.reason ?? "No secure system credential store is available.",
+        "CREDENTIAL_STORE_UNAVAILABLE",
+        2,
+        {
+          backend: backend.backend,
+          persistent: backend.persistent,
+          ...(backend.remediation ? { remediation: backend.remediation } : {}),
+        },
+      );
+    }
+    const sid = validateCredentialSid(values.sid ?? await promptLoginSid());
+    const password = validateCredentialPassword(
+      values["password-stdin"] ? await readPasswordFromStdin() : await promptHiddenPassword(),
+    );
+    const authenticated = await authenticateCredentials({ sid, password, source: "interactive" }, service);
+    const stored = await saveStoredCredentials({ profile, sid, password });
+    const identity = authenticated.identity ? `\nIdentity: ${authenticated.identity}` : "";
+    writeSuccess({
+      command: "auth login",
+      data: {
+        authenticated: true,
+        service,
+        credentialsStored: true,
+        credentialSource: "system-keyring",
+        ...stored,
+        ...(authenticated.identity ? { identity: authenticated.identity } : {}),
+      },
+      text: [
+        `${service.toUpperCase()} credentials verified.${identity}`,
+        `Saved profile '${stored.profile}' (${stored.maskedSid}) to ${stored.backend}.`,
+      ].join("\n"),
+    }, output);
+    return;
+  }
+
+  if (command === "status") {
+    const status = await getCredentialStatus(values.profile);
+    const availability = status.credentialAvailable ? "ready" : status.configured ? "secret missing or locked" : "not configured";
+    const remediation = status.remediation ? `\n${status.remediation}` : "";
+    writeSuccess({
+      command: "auth status",
+      data: status,
+      text: [
+        `Credential profile '${status.profile}': ${availability}`,
+        `Backend: ${status.backend} (${status.backendAvailable ? "available" : "unavailable"}, ${status.persistent ? "persistent" : "non-persistent"})`,
+        ...(status.maskedSid ? [`Account: ${status.maskedSid}`] : []),
+        ...(status.reason ? [`Reason: ${status.reason}${remediation}`] : []),
+      ].join("\n"),
+    }, output);
+    return;
+  }
+
+  if (command === "logout") {
+    const result = await deleteStoredCredentials(values.profile);
+    writeSuccess({
+      command: "auth logout",
+      data: result,
+      text: result.removed
+        ? `Removed credential profile '${result.profile}' from ${result.backend}.`
+        : `Credential profile '${result.profile}' was not configured.`,
+    }, output);
+    return;
+  }
+
+  if (command === "check") {
+    const service = authServiceValue(values.service);
+    const result = await checkAuthentication(values, service);
+    const credentialsStored = result.credentialSource === "system-keyring";
+    const data = { ...result, service, credentialsStored };
+    const identity = result.identity ? `\nIdentity: ${result.identity}` : "";
+    writeSuccess({
+      command: "auth check",
+      data,
+      text: `${service.toUpperCase()} ${formatAuthCheck(result.credentialSource, credentialsStored)}${identity}`,
+    }, output);
+    return;
+  }
+
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
 async function authenticatedSession(values: Values): Promise<{ session: TisSession; credentialSource: string }> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
+  const credentials = await resolvedCredentials(values);
   return { session: new TisSession(credentials), credentialSource: credentials.source };
 }
 
 async function checkAuthentication(
   values: Values,
   service: AuthService,
+): Promise<{
+  authenticated: true;
+  credentialSource: string;
+  identity?: string;
+  profile?: string;
+  credentialBackend?: string;
+}> {
+  const credentials = await resolvedCredentials(values);
+  const result = await authenticateCredentials(credentials, service);
+  return {
+    ...result,
+    ...(credentials.profile ? { profile: credentials.profile } : {}),
+    ...(credentials.backend ? { credentialBackend: credentials.backend } : {}),
+  };
+}
+
+async function authenticateCredentials(
+  credentials: Credentials,
+  service: AuthService,
 ): Promise<{ authenticated: true; credentialSource: string; identity?: string }> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
   if (service === "tis") {
     await new TisSession(credentials).login();
     return { authenticated: true, credentialSource: credentials.source };
@@ -884,17 +1077,17 @@ async function checkAuthentication(
 }
 
 async function bookingService(values: Values): Promise<BookingSession> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
+  const credentials = await resolvedCredentials(values);
   return new BookingSession(credentials);
 }
 
 async function libraryBookingService(values: Values): Promise<LibraryBookingSession> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
+  const credentials = await resolvedCredentials(values);
   return new LibraryBookingSession(credentials);
 }
 
 async function pmsService(values: Values): Promise<PmsSession> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
+  const credentials = await resolvedCredentials(values);
   return new PmsSession({ username: credentials.sid, password: credentials.password });
 }
 
@@ -902,8 +1095,15 @@ async function authenticatedCasService(
   values: Values,
   config: CasServiceConfig,
 ): Promise<{ session: CasSession; credentialSource: string }> {
-  const credentials = await resolveCredentials(values["credentials-file"]);
+  const credentials = await resolvedCredentials(values);
   return { session: new CasSession(credentials, config), credentialSource: credentials.source };
+}
+
+async function resolvedCredentials(values: Values): Promise<Credentials> {
+  return resolveCredentials({
+    credentialsFile: values["credentials-file"],
+    profile: values.profile,
+  });
 }
 
 async function casServiceAdapter(values: Values, service: "bb" | "ws"): Promise<ServiceAdapter> {
@@ -1302,13 +1502,27 @@ async function runBlackboard(
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
   const command = positionals[1];
-  const adapter = await casServiceAdapter(values, "bb");
+  if (command === "submit" && positionals[2] === "preview" && positionals.length === 3) {
+    const target = blackboardSubmissionTarget(values);
+    const file = await inspectBlackboardSubmissionFile(required(values.file, "--file"));
+    const comment = submissionComment(values.comment);
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, file, comment);
+    writeSuccess({
+      command: "bb submit preview",
+      data: { mode: "preview", mutation: false, ...preflight },
+      text: formatBlackboardSubmitPreview(preflight),
+    }, output);
+    return;
+  }
   if (command === "user" && positionals.length === 2) {
+    const adapter = await casServiceAdapter(values, "bb");
     const user = await getBlackboardUser(adapter);
     writeSuccess({ command: "bb user", data: user, text: formatBlackboardUser(user) }, output);
     return;
   }
   if (command === "courses") {
+    const adapter = await casServiceAdapter(values, "bb");
     const query = positionals.slice(2).join(" ").trim() || undefined;
     const courses = await listBlackboardCourses(adapter, { query });
     writeSuccess({
@@ -1321,6 +1535,7 @@ async function runBlackboard(
     return;
   }
   if (command === "content" && positionals.length === 3) {
+    const adapter = await casServiceAdapter(values, "bb");
     const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
     const parentId = values["parent-id"]
       ? opaqueToken(values["parent-id"], "--parent-id")
@@ -1335,7 +1550,43 @@ async function runBlackboard(
     }, output);
     return;
   }
+  if (command === "attachments" && positionals.length === 4) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const contentId = opaqueToken(required(positionals[3], "Blackboard content ID"), "Blackboard content ID");
+    const adapter = await casServiceAdapter(values, "bb");
+    const attachments = await listBlackboardContentAttachments(adapter, courseId, contentId);
+    writeSuccess({
+      command: "bb attachments",
+      data: { courseId, contentId, attachments, total: attachments.length },
+      text: formatBlackboardAttachments(attachments, contentId),
+      items: attachments,
+      summary: { courseId, contentId, total: attachments.length },
+    }, output);
+    return;
+  }
+  if (command === "download" && positionals.length === 5) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const contentId = opaqueToken(required(positionals[3], "Blackboard content ID"), "Blackboard content ID");
+    const attachmentId = opaqueToken(required(positionals[4], "Blackboard attachment ID"), "Blackboard attachment ID");
+    const destination = required(values.destination, "--destination");
+    const adapter = await casServiceAdapter(values, "bb");
+    const result = await downloadBlackboardContentAttachment(
+      adapter,
+      courseId,
+      contentId,
+      attachmentId,
+      destination,
+      { overwrite: values.overwrite === true },
+    );
+    writeSuccess({
+      command: "bb download",
+      data: { courseId, contentId, ...result },
+      text: formatBlackboardAttachmentDownload(result, contentId),
+    }, output);
+    return;
+  }
   if (command === "assignments" && positionals.length === 3) {
+    const adapter = await casServiceAdapter(values, "bb");
     const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
     const assignments = await listBlackboardAssignments(adapter, courseId);
     writeSuccess({
@@ -1346,6 +1597,149 @@ async function runBlackboard(
       summary: { courseId, total: assignments.length },
     }, output);
     return;
+  }
+  if (command === "attempts" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const selector = blackboardAssignmentSelector(values);
+    const status = blackboardAttemptStatus(values.status);
+    const adapter = await casServiceAdapter(values, "bb");
+    const assignments = await listBlackboardAssignments(adapter, courseId);
+    const assignment = resolveBlackboardAssignmentSelector(assignments, selector, courseId);
+    const attempts = await listBlackboardAttempts(adapter, courseId, assignment.id, { ...(status ? { status } : {}) });
+    writeSuccess({
+      command: "bb attempts",
+      data: { courseId, assignment, ...(status ? { status } : {}), attempts, total: attempts.length },
+      text: formatBlackboardAttempts(assignment, attempts),
+      items: attempts,
+      summary: { courseId, contentId: assignment.contentId, columnId: assignment.id, ...(status ? { status } : {}), total: attempts.length },
+    }, output);
+    return;
+  }
+  if (command === "submit" && positionals[2] === "apply" && positionals.length === 3) {
+    const target = blackboardSubmissionTarget(values);
+    const filePath = required(values.file, "--file");
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "Blackboard submission",
+        "Blackboard submission uploads and submits an assignment attempt. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
+    const payload = await readBlackboardSubmissionPayload(filePath);
+    const file = payload.file;
+    const comment = submissionComment(values.comment);
+    if (file.sha256 !== expectedSha256) {
+      throw new CliError(
+        "The selected file no longer matches the reviewed preview hash. Re-run preview before submitting.",
+        "BLACKBOARD_FILE_HASH_MISMATCH",
+        2,
+        {
+          file: file.absolutePath,
+          expectedSha256,
+          actualSha256: file.sha256,
+        },
+      );
+    }
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, file, comment);
+    ensureBlackboardSubmissionAllowed(preflight, values["allow-late"] === true);
+
+    const assignment = preflight.assignment;
+    let createdAttemptId = "";
+    let uploadedId = "";
+    let stage: "upload" | "create_attempt" | "attach_file" | "submit_attempt" | "verify" = "upload";
+    try {
+      stage = "upload";
+      const uploaded = await uploadBlackboardTemporaryFile(adapter, file, payload.bytes);
+      uploadedId = uploaded.id;
+      stage = "create_attempt";
+      const attempt = await createBlackboardAttempt(adapter, target.courseId, assignment.id, {
+        ...(comment ? { studentComments: comment } : {}),
+      });
+      createdAttemptId = attempt.id;
+      stage = "attach_file";
+      await attachBlackboardAttemptFile(adapter, target.courseId, createdAttemptId, {
+        name: file.name,
+        uploadId: uploadedId,
+      });
+      stage = "submit_attempt";
+      const submitted = await updateBlackboardAttempt(adapter, target.courseId, assignment.id, createdAttemptId, {
+        status: "NeedsGrading",
+      });
+      stage = "verify";
+      const snapshot = await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId);
+      const observedAttempt = snapshot.attempt ?? submitted;
+      const verification = snapshot.attempt
+        ? verifyBlackboardSubmission(snapshot.attempt.status, snapshot.files, file.name)
+        : {
+            status: "unavailable" as const,
+            message: "The submitted attempt status could not be read back from Blackboard.",
+          };
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "Blackboard accepted the submission request, but the read-back verification was inconclusive.",
+          "BLACKBOARD_SUBMISSION_NOT_CONFIRMED",
+          1,
+          {
+            courseId: target.courseId,
+            contentId: assignment.contentId,
+            columnId: assignment.id,
+            attemptId: createdAttemptId,
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeBlackboardSubmissionResult(output, preflight, file, comment, observedAttempt, snapshot.files, verification);
+      return;
+    } catch (error) {
+      if (error instanceof CliError && error.code === "BLACKBOARD_FILE_CHANGED") throw error;
+      let candidateAttemptIds: string[] = [];
+      if (!createdAttemptId) {
+        const drift = stage === "create_attempt"
+          ? await observeBlackboardAttemptCreation(adapter, target.courseId, assignment.id, preflight.attempts)
+          : undefined;
+        candidateAttemptIds = drift?.candidateAttemptIds ?? [];
+        if (drift?.attempt) createdAttemptId = drift.attempt.id;
+      }
+      const snapshot = createdAttemptId
+        ? await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId)
+        : { files: [] as BlackboardAttemptFile[] };
+      const verification = verifyBlackboardSubmission(snapshot.attempt?.status ?? "", snapshot.files, file.name);
+      if (snapshot.attempt && verification.status === "confirmed") {
+        writeBlackboardSubmissionResult(
+          output,
+          preflight,
+          file,
+          comment,
+          snapshot.attempt,
+          snapshot.files,
+          verification,
+          true,
+        );
+        return;
+      }
+      throw new CliError(
+        "Blackboard submission outcome is uncertain. Do not retry automatically.",
+        "BLACKBOARD_SUBMISSION_OUTCOME_UNKNOWN",
+        5,
+        {
+          stage,
+          courseId: target.courseId,
+          contentId: assignment.contentId,
+          columnId: assignment.id,
+          ...(createdAttemptId ? { attemptId: createdAttemptId } : {}),
+          candidateAttemptIds,
+          ...(uploadedId ? { uploadId: uploadedId } : {}),
+          fileName: file.name,
+          ...(snapshot.attempt?.status ? { attemptStatus: snapshot.attempt.status } : {}),
+          observedFiles: snapshot.files.map((entry) => entry.name),
+          verification,
+          cause: error instanceof Error ? error.message : String(error),
+          warning: "DO_NOT_RETRY_AUTOMATICALLY",
+        },
+      );
+    }
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
 }
@@ -1645,9 +2039,391 @@ function required(value: string | undefined, option: string): string {
   return value.trim();
 }
 
+type BlackboardSubmissionTarget = {
+  courseId: string;
+  contentId?: string;
+  columnId?: string;
+};
+
+type BlackboardSubmissionVerification = {
+  status: "confirmed" | "not_observed" | "unavailable";
+  message: string;
+};
+
+type BlackboardSubmissionPreviewData = {
+  checkedAt: string;
+  target: BlackboardSubmissionTarget;
+  assignment: Awaited<ReturnType<typeof listBlackboardAssignments>>[number];
+  content: Awaited<ReturnType<typeof getBlackboardContentItem>>;
+  attempts: Array<{
+    id: string;
+    status: BlackboardAttempt["status"];
+    created: string;
+    attemptDate: string;
+    submissionDate?: string;
+  }>;
+  attemptsUsed: number;
+  remainingAttempts?: number;
+  inProgressAttempts: number;
+  file: Awaited<ReturnType<typeof inspectBlackboardSubmissionFile>>;
+  commentSummary: { present: boolean; length: number };
+  uploadSettings?: Awaited<ReturnType<typeof getBlackboardUploadSettings>>;
+  blockers: BlackboardSubmissionAssessment["blockers"];
+  warnings: BlackboardSubmissionAssessment["warnings"];
+  late: boolean;
+  applyAllowed: boolean;
+  confirmation: {
+    required: true;
+    available: boolean;
+    expectedSha256: string;
+    argv?: string[];
+    command?: string;
+  };
+};
+
+function blackboardAssignmentSelector(values: Values): { contentId?: string; columnId?: string } {
+  const contentId = values["content-id"] ? opaqueToken(values["content-id"], "--content-id") : undefined;
+  const columnId = values["column-id"] ? opaqueToken(values["column-id"], "--column-id") : undefined;
+  if (!contentId && !columnId) {
+    throw usageError("One of --content-id or --column-id is required.");
+  }
+  return { ...(contentId ? { contentId } : {}), ...(columnId ? { columnId } : {}) };
+}
+
+function blackboardSubmissionTarget(values: Values): BlackboardSubmissionTarget {
+  return {
+    courseId: opaqueToken(required(values["course-id"], "--course-id"), "--course-id"),
+    ...blackboardAssignmentSelector(values),
+  };
+}
+
+function resolveBlackboardAssignmentSelector(
+  assignments: Awaited<ReturnType<typeof listBlackboardAssignments>>,
+  selector: { contentId?: string; columnId?: string },
+  courseId: string,
+) {
+  const assignment = selectBlackboardAssignment(assignments, selector);
+  if (assignment) return assignment;
+
+  const contentMatch = selector.contentId
+    ? selectBlackboardAssignment(assignments, { contentId: selector.contentId })
+    : undefined;
+  const columnMatch = selector.columnId
+    ? selectBlackboardAssignment(assignments, { columnId: selector.columnId })
+    : undefined;
+  if (contentMatch && columnMatch && contentMatch.id !== columnMatch.id) {
+    throw new CliError(
+      "The provided --content-id and --column-id do not refer to the same Blackboard assignment.",
+      "BLACKBOARD_ASSIGNMENT_MISMATCH",
+      1,
+      { courseId, contentId: selector.contentId, columnId: selector.columnId },
+    );
+  }
+  throw new CliError(
+    "The provided Blackboard assignment selector did not match any assignment in this course.",
+    "BLACKBOARD_ASSIGNMENT_NOT_FOUND",
+    1,
+    { courseId, contentId: selector.contentId, columnId: selector.columnId },
+  );
+}
+
+function blackboardAttemptStatus(value: string | undefined):
+  | "InProgress"
+  | "NeedsGrading"
+  | "Completed"
+  | undefined {
+  if (value === undefined) return undefined;
+  if (value === "InProgress" || value === "NeedsGrading" || value === "Completed") return value;
+  throw usageError("--status must be InProgress, NeedsGrading, or Completed for Blackboard attempts.");
+}
+
+function submissionComment(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function summariseSubmissionComment(comment: string | undefined): { present: boolean; length: number } {
+  return { present: Boolean(comment), length: comment?.length ?? 0 };
+}
+
+function blackboardExpectedSha256(value: string): string {
+  const normalised = value.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalised)) {
+    throw usageError("--expected-sha256 must be a 64-character lowercase or uppercase hexadecimal digest.");
+  }
+  return normalised;
+}
+
+async function buildBlackboardSubmissionPreflight(
+  adapter: ServiceAdapter,
+  values: Values,
+  target: BlackboardSubmissionTarget,
+  file: Awaited<ReturnType<typeof inspectBlackboardSubmissionFile>>,
+  comment: string | undefined,
+): Promise<BlackboardSubmissionPreviewData> {
+  const assignments = await listBlackboardAssignments(adapter, target.courseId);
+  const assignment = resolveBlackboardAssignmentSelector(assignments, target, target.courseId);
+  const content = await getBlackboardContentItem(adapter, target.courseId, assignment.contentId);
+  const attempts = await listBlackboardAttempts(adapter, target.courseId, assignment.id);
+  let uploadSettings: Awaited<ReturnType<typeof getBlackboardUploadSettings>> | undefined;
+  try {
+    uploadSettings = await getBlackboardUploadSettings(adapter);
+  } catch (error) {
+    if (!isOptionalBlackboardUploadSettingsError(error)) throw error;
+    uploadSettings = undefined;
+  }
+
+  const assessed: BlackboardSubmissionAssessment = evaluateBlackboardSubmissionPreflight({
+    assignment,
+    content,
+    attempts,
+    file,
+    ...(uploadSettings ? { uploadSettings } : {}),
+  });
+  const attemptsAllowed = assessed.attemptsAllowed;
+  const attemptsUsed = assessed.attemptsUsed;
+  const remainingAttempts = attemptsAllowed !== undefined && attemptsAllowed > 0
+    ? Math.max(attemptsAllowed - attemptsUsed, 0)
+    : undefined;
+  const warnings = [...assessed.warnings];
+  if (attempts.some((attempt) => attempt.status === "NeedsGrading" || attempt.status === "Completed")) {
+    warnings.push({
+      code: "PREVIOUS_SUBMISSION_EXISTS",
+      message: "Previous submitted attempts already exist; verify Blackboard's submission history before consuming another attempt.",
+    });
+  }
+
+  const resolvedTarget = {
+    courseId: target.courseId,
+    contentId: assignment.contentId,
+    columnId: assignment.id,
+  };
+  const handoff = assessed.ready
+      ? buildBlackboardSubmitApplyConfirmation(resolvedTarget, file.absolutePath, file.sha256, {
+        credentialsFile: values["credentials-file"],
+        profile: values.profile,
+        comment,
+        allowLate: assessed.late,
+      })
+    : undefined;
+  return {
+    checkedAt: assessed.checkedAt,
+    target: resolvedTarget,
+    assignment,
+    content,
+    attempts: attempts.map((attempt) => ({
+      id: attempt.id,
+      status: attempt.status,
+      created: attempt.created,
+      attemptDate: attempt.attemptDate,
+      ...(attempt.attemptReceipt?.submissionDate ? { submissionDate: attempt.attemptReceipt.submissionDate } : {}),
+    })),
+    attemptsUsed,
+    ...(remainingAttempts !== undefined ? { remainingAttempts } : {}),
+    inProgressAttempts: assessed.inProgressAttemptIds.length,
+    file,
+    commentSummary: summariseSubmissionComment(comment),
+    ...(uploadSettings ? { uploadSettings } : {}),
+    blockers: assessed.blockers,
+    warnings,
+    late: assessed.late,
+    applyAllowed: assessed.ready,
+    confirmation: {
+      required: true,
+      available: Boolean(handoff),
+      expectedSha256: file.sha256,
+      ...(handoff ? { argv: handoff.argv, command: handoff.command } : {}),
+    },
+  };
+}
+
+function ensureBlackboardSubmissionAllowed(
+  preflight: BlackboardSubmissionPreviewData,
+  allowLate: boolean,
+): void {
+  if (preflight.blockers.length > 0) {
+    throw new CliError(
+      "Blackboard submission is blocked by the current live assignment state.",
+      "BLACKBOARD_SUBMISSION_BLOCKED",
+      4,
+      {
+        courseId: preflight.target.courseId,
+        contentId: preflight.assignment.contentId,
+        columnId: preflight.assignment.id,
+        blockers: preflight.blockers,
+        warning: "NO_MUTATION_PERFORMED",
+      },
+    );
+  }
+  if (preflight.late && !allowLate) {
+    throw new CliError(
+      "Blackboard shows this assignment as past due. Re-run with --allow-late only if you intend to submit late.",
+      "BLACKBOARD_LATE_SUBMISSION_REQUIRES_ALLOW_LATE",
+      3,
+      {
+        courseId: preflight.target.courseId,
+        contentId: preflight.assignment.contentId,
+        columnId: preflight.assignment.id,
+        due: preflight.assignment.grading.due,
+        warning: "NO_MUTATION_PERFORMED",
+      },
+    );
+  }
+}
+
+function isOptionalBlackboardUploadSettingsError(error: unknown): boolean {
+  if (!(error instanceof CliError)) return false;
+  const status = Number(error.details?.status);
+  return status === 401 || status === 403 || status === 404;
+}
+
+async function observeBlackboardAttemptSnapshot(
+  adapter: ServiceAdapter,
+  courseId: string,
+  columnId: string,
+  attemptId: string,
+): Promise<{
+  attempt?: Awaited<ReturnType<typeof getBlackboardAttempt>>;
+  files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>>;
+}> {
+  let attempt: Awaited<ReturnType<typeof getBlackboardAttempt>> | undefined;
+  let files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>> = [];
+  try {
+    attempt = await getBlackboardAttempt(adapter, courseId, columnId, attemptId);
+  } catch {
+    attempt = undefined;
+  }
+  try {
+    files = await listBlackboardAttemptFiles(adapter, courseId, attemptId);
+  } catch {
+    files = [];
+  }
+  return { attempt, files };
+}
+
+async function observeBlackboardAttemptCreation(
+  adapter: ServiceAdapter,
+  courseId: string,
+  columnId: string,
+  previousAttempts: readonly { id: string }[],
+): Promise<{
+  attempt?: Awaited<ReturnType<typeof listBlackboardAttempts>>[number];
+  candidateAttemptIds: string[];
+}> {
+  try {
+    const current = await listBlackboardAttempts(adapter, courseId, columnId);
+    const previousIds = new Set(previousAttempts.map((attempt) => attempt.id));
+    const candidates = current.filter((attempt) => !previousIds.has(attempt.id));
+    return {
+      ...(candidates.length === 1 ? { attempt: candidates[0] } : {}),
+      candidateAttemptIds: candidates.map((attempt) => attempt.id),
+    };
+  } catch {
+    return { candidateAttemptIds: [] };
+  }
+}
+
+function verifyBlackboardSubmission(
+  status: string,
+  files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>>,
+  expectedFileName: string,
+): BlackboardSubmissionVerification {
+  const observedFile = files.some((entry) => entry.name === expectedFileName);
+  if ((status === "NeedsGrading" || status === "Completed") && observedFile) {
+    return { status: "confirmed", message: "NeedsGrading/Completed and the uploaded filename were read back from Blackboard." };
+  }
+  if (status) {
+    return {
+      status: "not_observed",
+      message: `Attempt status was ${status}, but the expected uploaded filename was not fully observed in the read-back state.`,
+    };
+  }
+  return { status: "unavailable", message: "Blackboard did not expose enough read-back state to confirm the submission." };
+}
+
+function writeBlackboardSubmissionResult(
+  output: ReturnType<typeof resolveOutputOptions>,
+  preflight: BlackboardSubmissionPreviewData,
+  file: BlackboardSubmissionFile,
+  comment: string | undefined,
+  attempt: BlackboardAttempt,
+  files: readonly BlackboardAttemptFile[],
+  verification: BlackboardSubmissionVerification,
+  recoveredAfterError = false,
+): void {
+  writeSuccess({
+    command: "bb submit apply",
+    data: {
+      mode: "apply",
+      mutation: true,
+      target: preflight.target,
+      assignment: preflight.assignment,
+      file,
+      commentSummary: summariseSubmissionComment(comment),
+      preflight: {
+        checkedAt: preflight.checkedAt,
+        attemptsUsed: preflight.attemptsUsed,
+        ...(preflight.remainingAttempts !== undefined ? { remainingAttempts: preflight.remainingAttempts } : {}),
+        late: preflight.late,
+        ...(preflight.assignment.grading.due ? { due: preflight.assignment.grading.due } : {}),
+      },
+      attempt,
+      files,
+      verification,
+      ...(preflight.uploadSettings ? { uploadSettings: preflight.uploadSettings } : {}),
+    },
+    text: formatBlackboardSubmissionSuccess({
+      assignment: preflight.assignment,
+      attempt,
+      files,
+      verification,
+    }),
+    ...(recoveredAfterError ? { meta: { recoveredAfterError: true } } : {}),
+  }, output);
+}
+
+function buildBlackboardSubmitApplyConfirmation(
+  target: BlackboardSubmissionTarget,
+  absolutePath: string,
+  expectedSha256: string,
+  options: {
+    credentialsFile?: string;
+    profile?: string;
+    comment?: string;
+    allowLate?: boolean;
+  } = {},
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "bb",
+    "submit",
+    "apply",
+    ...(options.credentialsFile ? ["--credentials-file", options.credentialsFile] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--course-id",
+    target.courseId,
+    ...(target.contentId ? ["--content-id", target.contentId] : []),
+    ...(target.columnId ? ["--column-id", target.columnId] : []),
+    "--file",
+    absolutePath,
+    "--expected-sha256",
+    expectedSha256,
+    ...(options.comment ? ["--comment", options.comment] : []),
+    ...(options.allowLate ? ["--allow-late"] : []),
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9._/:=-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function validateCommandOptions(command: string, argv: readonly string[]): void {
   if (!CAPABILITIES.some((entry) => entry.command === command)) return;
   const allowed = new Set(COMMAND_OPTIONS[command] ?? []);
+  if (allowed.has("credentials-file")) allowed.add("profile");
   for (const option of suppliedOptionNames(argv)) {
     if (SHARED_OUTPUT_OPTIONS.has(option) || allowed.has(option)) continue;
     throw usageError(`Option '--${option}' is not valid for '${command}'.`);
@@ -1719,8 +2495,9 @@ function ncesSort(value: string | undefined): "rating" | "reviews" | "name" {
   throw usageError("--sort must be rating, reviews, or name for NCES.");
 }
 
-function authServiceValue(value: string | undefined): AuthService {
-  if (value === undefined || value === "tis") return "tis";
+function authServiceValue(value: string | undefined, fallback: AuthService = "tis"): AuthService {
+  if (value === undefined) return fallback;
+  if (value === "tis") return "tis";
   if (value === "library-booking") return "lib-booking";
   if (value === "bb" || value === "ws" || value === "booking" || value === "lib-booking" || value === "pms") {
     return value;

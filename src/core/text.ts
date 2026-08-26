@@ -12,8 +12,8 @@ export function formatVersion(version: string, runtime: string): string {
   return `sustech-cli ${version} (${runtime})`;
 }
 
-export function formatAuthCheck(source: string): string {
-  return `Authenticated with TIS\nCredentials: ${source} (not stored by sustech-cli)`;
+export function formatAuthCheck(source: string, stored: boolean): string {
+  return `authenticated\nCredentials: ${source} (${stored ? "stored in the system credential store" : "not stored by sustech-cli"})`;
 }
 
 export function formatCourseSearch(input: {

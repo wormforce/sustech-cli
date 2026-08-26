@@ -10,6 +10,11 @@ test("command inference skips option values in machine-readable errors", () => {
     "tis courses search",
   );
   assert.equal(inferCommandName(["tis", "timetable", "CS101", "MA101", "--block", "MON:1-2"]), "tis timetable");
+  assert.equal(inferCommandName(["auth", "login", "--profile", "personal", "--sid", "12410000"]), "auth login");
+  assert.equal(
+    inferCommandName(["bb", "download", "8537", "629896", "42588", "--destination", "/tmp/file.pdf", "--json"]),
+    "bb download",
+  );
 });
 
 test("output inference accepts --output=value for parse failures", () => {

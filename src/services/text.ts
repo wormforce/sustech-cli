@@ -1,4 +1,14 @@
-import type { BlackboardAssignment, BlackboardContentItem, BlackboardCourse, BlackboardUser } from "./blackboard.js";
+import type {
+  BlackboardAssignment,
+  BlackboardAttempt,
+  BlackboardAttemptFile,
+  BlackboardCourse,
+  BlackboardContentAttachment,
+  BlackboardContentAttachmentDownload,
+  BlackboardContentItem,
+  BlackboardSubmissionFile,
+  BlackboardUser,
+} from "./blackboard.js";
 import type { BookingUserProfile } from "./booking-auth.js";
 import type { BookingMeeting, BookingRoom } from "./booking.js";
 import type {
@@ -187,11 +197,130 @@ export function formatBlackboardContent(items: readonly BlackboardContentItem[],
   ].join("\n");
 }
 
+export function formatBlackboardAttachments(
+  attachments: readonly BlackboardContentAttachment[],
+  contentId: string,
+): string {
+  if (attachments.length === 0) {
+    return `Blackboard attachments · content ${contentId}\nNo downloadable attachments.`;
+  }
+  return [
+    `Blackboard attachments · content ${contentId} · ${attachments.length}`,
+    ...attachments.map((attachment) => [
+      `${attachment.id.padEnd(26)} ${attachment.fileName}`,
+      `  ${attachment.mimeType || "type unavailable"} · ${attachment.source}`,
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardAttachmentDownload(
+  result: BlackboardContentAttachmentDownload,
+  contentId: string,
+): string {
+  return [
+    "Blackboard attachment downloaded.",
+    `Content: ${contentId}`,
+    `Attachment: ${result.attachment.fileName} · ${result.attachment.id}`,
+    `Saved to: ${result.destination}`,
+    `Size: ${result.size} bytes`,
+    `SHA-256: ${result.sha256}`,
+    `Content type: ${result.contentType || result.attachment.mimeType || "unavailable"}`,
+    `Overwritten: ${result.overwritten ? "yes" : "no"}`,
+  ].join("\n");
+}
+
 export function formatBlackboardAssignments(items: readonly BlackboardAssignment[]): string {
   if (items.length === 0) return "Blackboard assignments\nNo assignment columns.";
   return [
     `Blackboard assignments · ${items.length}`,
-    ...items.map((item) => `${item.contentId.padEnd(12)} ${item.title}${item.scorePossible === undefined ? "" : ` · ${item.scorePossible} points`}`),
+    ...items.map((item) => [
+      `${item.contentId.padEnd(12)} column ${item.id.padEnd(8)} ${item.title}${item.scorePossible === undefined ? "" : ` · ${item.scorePossible} points`}`,
+      `  ${item.grading.due ? `due ${item.grading.due}` : "no due date returned"}${item.grading.attemptsAllowed === undefined || item.grading.attemptsAllowed === 0 ? "" : ` · ${item.grading.attemptsAllowed} attempt(s)`}`,
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardAttempts(
+  assignment: BlackboardAssignment,
+  attempts: readonly BlackboardAttempt[],
+): string {
+  if (attempts.length === 0) {
+    return `Blackboard attempts · ${assignment.title}\nNo attempts returned.`;
+  }
+  return [
+    `Blackboard attempts · ${assignment.title} · ${attempts.length}`,
+    ...attempts.map((attempt) => [
+      `${attempt.id.padEnd(10)} ${attempt.status || "status unavailable"}${attempt.displayGradeText ? ` · ${attempt.displayGradeText}` : ""}`,
+      `  created ${attempt.created || "unknown"}${attempt.attemptReceipt?.submissionDate ? ` · submitted ${attempt.attemptReceipt.submissionDate}` : ""}`,
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardSubmitPreview(input: {
+  target: { courseId: string; contentId?: string; columnId?: string };
+  assignment: BlackboardAssignment;
+  content: BlackboardContentItem;
+  attemptsUsed: number;
+  remainingAttempts?: number;
+  inProgressAttempts: number;
+  file: BlackboardSubmissionFile;
+  commentSummary: { present: boolean; length: number };
+  blockers: readonly { code: string; message: string }[];
+  warnings: readonly { code: string; message: string }[];
+  late: boolean;
+  applyAllowed: boolean;
+  confirmation: { available: boolean; command?: string };
+}): string {
+  const attemptsSummary = input.assignment.grading.attemptsAllowed !== undefined && input.assignment.grading.attemptsAllowed > 0
+    ? `${input.attemptsUsed}/${input.assignment.grading.attemptsAllowed}`
+    : `${input.attemptsUsed}`;
+  return [
+    "Blackboard submission preview — authenticated read-only checks completed; no mutation was performed.",
+    "",
+    `Course: ${input.target.courseId}`,
+    `Assignment: ${input.assignment.title}`,
+    `Content: ${input.assignment.contentId} · column ${input.assignment.id}`,
+    `Handler: ${input.content.handler || "unknown"} · kind ${input.content.kind}`,
+    `Availability: ${input.assignment.availability || "unknown"} · grading ${input.assignment.grading.type || "unknown"}`,
+    ...(input.assignment.grading.due ? [`Due: ${input.assignment.grading.due}${input.late ? " (past due)" : ""}`] : []),
+    `Attempts used: ${attemptsSummary}${input.remainingAttempts !== undefined ? ` · remaining ${input.remainingAttempts}` : ""}`,
+    `In-progress attempts: ${input.inProgressAttempts}`,
+    `File: ${input.file.absolutePath}`,
+    `Filename: ${input.file.name}`,
+    `Size: ${input.file.size} bytes`,
+    `SHA-256: ${input.file.sha256}`,
+    ...(input.commentSummary.present ? [`Comment: present (${input.commentSummary.length} chars)`] : []),
+    ...(input.blockers.length > 0 ? ["", "Blockers:", ...input.blockers.map((issue) => `- [${issue.code}] ${issue.message}`)] : []),
+    ...(input.warnings.length > 0 ? ["", "Warnings:", ...input.warnings.map((issue) => `- [${issue.code}] ${issue.message}`)] : []),
+    "",
+    ...(input.confirmation.available && input.confirmation.command
+      ? ["Apply command after reviewing the exact target, file hash, and warnings:", input.confirmation.command]
+      : ["No apply command was generated because the live preflight is blocked."]),
+  ].join("\n");
+}
+
+export function formatBlackboardSubmissionSuccess(input: {
+  assignment: BlackboardAssignment;
+  attempt: BlackboardAttempt;
+  files: readonly BlackboardAttemptFile[];
+  verification: { status: "confirmed" | "not_observed" | "unavailable"; message: string };
+}): string {
+  const fileLine = input.files.length > 0
+    ? input.files.map((file) => file.name).join(", ")
+    : "No files were read back.";
+  return [
+    input.verification.status === "confirmed"
+      ? "Blackboard submission confirmed by read-back."
+      : "Blackboard submission request accepted, but verification is incomplete.",
+    `Assignment: ${input.assignment.title}`,
+    `Attempt: ${input.attempt.id}`,
+    `Status: ${input.attempt.status || "unknown"}`,
+    `Files: ${fileLine}`,
+    ...(input.attempt.attemptReceipt
+      ? [`Receipt: ${input.attempt.attemptReceipt.receiptId} · ${input.attempt.attemptReceipt.submissionDate}`]
+      : []),
+    `Verification: ${input.verification.status} — ${input.verification.message}`,
+    ...(input.verification.status === "confirmed" ? [] : ["Do not retry automatically; inspect Blackboard before another write."]),
   ].join("\n");
 }
 

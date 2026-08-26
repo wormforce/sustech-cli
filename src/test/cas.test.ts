@@ -38,3 +38,53 @@ test("generic CAS session rejects non-HTTPS service configuration", () => {
     },
   );
 });
+
+test("generic CAS session safely follows a same-host Blackboard attachment redirect", async () => {
+  const originalFetch = globalThis.fetch;
+  const serviceUrl = "https://bb.sustech.edu.cn/webapps/bb-sso-BBLEARN/index.jsp";
+  const attachmentUrl = "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_10_1/contents/_20_1/attachments/_30_1/download";
+  const signedUrl = "https://bb.sustech.edu.cn/bbcswebdav/xid-30_1?temporary=fresh&signature=secret";
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    requests.push(`${method} ${url}`);
+    if (url.startsWith("https://cas.sustech.edu.cn/cas/login?") && method === "GET") {
+      return responseWithUrl('<input name="execution" value="e1">', 200, url);
+    }
+    if (url.startsWith("https://cas.sustech.edu.cn/cas/login?") && method === "POST") {
+      return responseWithUrl(null, 302, url, { location: serviceUrl });
+    }
+    if (url === serviceUrl) return responseWithUrl("signed in", 200, url);
+    if (url === attachmentUrl) return responseWithUrl(null, 302, url, { location: signedUrl });
+    if (url === signedUrl) {
+      return responseWithUrl("attachment bytes", 200, url, { "content-type": "application/pdf" });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  try {
+    const session = new CasSession(credentials, {
+      name: "Blackboard",
+      baseUrl: "https://bb.sustech.edu.cn",
+      serviceUrl,
+    });
+    await session.login();
+    const response = await session.fetch(attachmentUrl);
+    assert.equal(await response.text(), "attachment bytes");
+    assert.deepEqual(requests.slice(-2), [`GET ${attachmentUrl}`, `GET ${signedUrl}`]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function responseWithUrl(
+  body: string | null,
+  status: number,
+  url: string,
+  headers?: Record<string, string>,
+): Response {
+  const response = new Response(body, { status, headers });
+  Object.defineProperty(response, "url", { value: url });
+  return response;
+}

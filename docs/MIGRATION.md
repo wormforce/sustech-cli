@@ -9,7 +9,7 @@ campus-network gate; no mutation was attempted.
 
 | Area | Read operations | Mutations | Status | Priority |
 | --- | --- | --- | --- | --- |
-| Core CLI | text/JSON/JSONL, typed errors, exit codes, capabilities, consequences | confirmation policy | Implemented | P0 |
+| Core CLI | text/JSON/JSONL, typed errors, exit codes, capabilities, consequences, cross-platform system credential profiles | local credential login/logout, confirmation policy | Implemented | P0 |
 | CI | cross-platform check/test/pack workflow | none | Active at `.github/workflows/ci.yml` | P0 |
 | SSO/CAS | shared CAS sessions for TIS, Blackboard, and WS | none | Implemented; opt-in live login smoke passed for all three | P0 |
 | TIS catalog | search, normalized schedules, cache | none | Implemented | P0 |
@@ -23,7 +23,7 @@ campus-network gate; no mutation was attempted.
 | Context | truthful snapshot with per-source availability | none | Initial implementation; currently calendar-derived plus explicit missing-source markers | P1 |
 | Resources | built-in campus resource registry and search | none | Implemented | P1 |
 | Wi-Fi | current association and recent macOS SUSTC Wi-Fi events | none | Implemented on macOS only | P1 |
-| Blackboard | courses, content, assignments | submissions/downloads | CLI CAS login and courses read live-smoked; content/assignments still fixture-only | P2 |
+| Blackboard | courses, content, teacher-provided attachment listing/download, assignments, attempts | Classic assignment submission | CLI CAS login and courses read live-smoked; attachment download and the hash-bound submission workflow use official Learn REST/BBML paths and remain fixture-tested | P2 |
 | Library catalog | Primo browser handoff URL | none | URL builder only; browser-backed fetch still unavailable | P2 |
 | Library booking | account state, idle summary, labs, rooms, reservation counts, reservations | reservations/cancel | Login, account, summary, labs, and count live-smoked; rooms/reservations still fixture-only | P2 |
 | E-Hall booking | user profile, rooms, meetings | reservations/cancel | Login and rooms read live-smoked; meetings still fixture-only | P2 |
@@ -36,14 +36,16 @@ campus-network gate; no mutation was attempted.
 ## Porting order
 
 1. Finish targeted live QA for remaining authenticated reads and retry PMS from the campus network.
-2. Decide whether library catalog stays browser-backed or moves to a dedicated helper package.
-3. Expand `context` beyond the current calendar-derived baseline.
-4. Decide whether PMS needs a dedicated first-link browser assist instead of pure CLI fallback messaging.
-5. Build a separate Web UI package on top of the same typed service layer.
+2. Run a Blackboard submission preview against a real Classic assignment; keep the first real write user-confirmed and supervised.
+3. Decide whether library catalog stays browser-backed or moves to a dedicated helper package.
+4. Expand `context` beyond the current calendar-derived baseline.
+5. Decide whether PMS needs a dedicated first-link browser assist instead of pure CLI fallback messaging.
+6. Build a separate Web UI package on top of the same typed service layer.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-preview v0.4.1, the only live mutation is the existing guarded
-`tis enroll apply` command. Booking, library-booking, and PMS expose
-authenticated reads only; their write operations remain unavailable in this
+preview v0.6.0, the exposed remote mutation commands are the guarded
+`tis enroll apply` and `bb submit apply` flows. Blackboard submission is still
+fixture-validated only; booking, library-booking, and PMS continue to expose
+authenticated reads only, and their write operations remain unavailable in this
 repository.
