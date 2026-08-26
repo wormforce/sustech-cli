@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -57,7 +57,24 @@ test("profile collection keeps only whitelisted identity fields and masks the st
   assert.equal(report.sources.tisCurrentCourses.failures[0]?.code, "COURSE_IDENTITY_UNKNOWN");
 });
 
-test("profile collection chooses the next future exam and treats same-day unknown time conservatively", async () => {
+test("profile identity parser does not treat internal TIS codes as student ids", () => {
+  const identity = tisIdentityFromUserMe({
+    yhdm: "internal-code",
+    id: "internal-id",
+    sid: "12410000",
+    studentId: "",
+    name: "Test Student",
+    department: "Computer Science",
+    pylx: "Undergraduate",
+  });
+  assert.deepEqual(identity, {
+    name: "Test Student",
+    department: "Computer Science",
+    studentType: "Undergraduate",
+  });
+});
+
+test("profile collection chooses the next future exam and omits same-day or future unknown-time exams conservatively", async () => {
   const report = await collectStudentProfile({
     semester: parseSemester("2026-2027-1"),
     generatedAt: "2026-08-26T10:00:00+08:00",
@@ -103,6 +120,19 @@ test("profile collection chooses the next future exam and treats same-day unknow
         type: "Final",
         semester: "2026秋季",
       },
+      {
+        code: "EE101",
+        name: "Circuits",
+        date: "2026-08-27",
+        weekday: "Thu",
+        weekdayEn: "Thu",
+        time: "15:00-17:00",
+        building: "二教",
+        room: "202",
+        campus: "SUSTech",
+        type: "Final",
+        semester: "2026秋季",
+      },
     ]),
     loadBlackboardDeadlines: async () => ({
       generatedAt: "2026-08-26T10:00:00.000Z",
@@ -114,9 +144,10 @@ test("profile collection chooses the next future exam and treats same-day unknow
   });
 
   assert.equal(report.sources.tisNextExam.status, "partial");
-  assert.equal(report.academics.nextExam?.code, "PH101");
+  assert.equal(report.academics.nextExam?.code, "EE101");
   assert.equal(report.academics.nextExam?.date, "2026-08-27");
   assert.equal(report.sources.tisNextExam.failures[0]?.code, "EXAM_TIME_UNKNOWN_TODAY");
+  assert.equal(report.sources.tisNextExam.failures[1]?.code, "EXAM_TIME_UNKNOWN");
 });
 
 test("profile source failures redact secrets before surfacing them", async () => {
@@ -147,6 +178,10 @@ test("profile exports save exclusively, keep private permissions, and reject sym
   const destination = join(directory, "profile.json");
   const target = join(directory, "target.json");
   const linkPath = join(directory, "link.json");
+  const brokenLinkPath = join(directory, "broken-link.json");
+  const parentTarget = join(directory, "parent-target");
+  const parentLink = join(directory, "parent-link");
+  const nestedDestination = join(parentLink, "nested.json");
   const report = sampleReport();
 
   try {
@@ -164,8 +199,23 @@ test("profile exports save exclusively, keep private permissions, and reject sym
 
     await writeFile(target, "protected", "utf8");
     await symlink(target, linkPath);
+    await symlink(join(directory, "missing-target.json"), brokenLinkPath);
     await assert.rejects(
       saveStudentProfile(linkPath, report, { overwrite: true }),
+      (error: unknown) => error instanceof CliError && error.code === "UNSAFE_LOCAL_PATH",
+    );
+    await assert.rejects(
+      saveStudentProfile(linkPath, report),
+      (error: unknown) => error instanceof CliError && error.code === "UNSAFE_LOCAL_PATH",
+    );
+    await assert.rejects(
+      saveStudentProfile(brokenLinkPath, report),
+      (error: unknown) => error instanceof CliError && error.code === "UNSAFE_LOCAL_PATH",
+    );
+    await mkdir(parentTarget);
+    await symlink(parentTarget, parentLink);
+    await assert.rejects(
+      saveStudentProfile(nestedDestination, report),
       (error: unknown) => error instanceof CliError && error.code === "UNSAFE_LOCAL_PATH",
     );
     assert.equal(await readFile(target, "utf8"), "protected");

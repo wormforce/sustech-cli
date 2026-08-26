@@ -78,7 +78,7 @@ import {
   formatTimetables,
   formatVersion,
 } from "./core/text.js";
-import { collectStudentProfile, saveStudentProfile } from "./profile/report.js";
+import { collectStudentProfile, hasExportableProfileData, saveStudentProfile } from "./profile/report.js";
 import { auditDegreeRequirements, loadDegreeRequirements } from "./tis/degree-audit.js";
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
@@ -2352,29 +2352,31 @@ async function runProfile(
   } catch (error) {
     credentialError = error;
   }
+  const tisSession = credentials ? new TisSession(credentials) : undefined;
+  const tis = tisSession ? new TisClient(tisSession) : undefined;
+  const blackboardSession = credentials ? new CasSession(credentials, casServiceConfig("bb")) : undefined;
 
   const report = await collectStudentProfile({
     semester,
     generatedAt,
     loadTisUserMe: async () => {
-      if (!credentials) throw credentialError;
-      return new TisSession(credentials).getJson("/user/me");
+      if (!tisSession) throw credentialError;
+      return tisSession.getJson("/user/me");
     },
     loadCurrentCourses: async () => {
-      if (!credentials) throw credentialError;
-      return new TisClient(new TisSession(credentials)).enrolled(semester);
+      if (!tis) throw credentialError;
+      return tis.enrolled(semester);
     },
     loadExams: async () => {
-      if (!credentials) throw credentialError;
-      return new TisClient(new TisSession(credentials)).exams();
+      if (!tis) throw credentialError;
+      return tis.exams();
     },
     loadBlackboardDeadlines: async () => {
-      if (!credentials) throw credentialError;
-      const session = new CasSession(credentials, casServiceConfig("bb"));
+      if (!blackboardSession) throw credentialError;
       const adapter: ServiceAdapter = {
         name: "bb",
         fetch(input: string, init?: RequestInit): Promise<Response> {
-          return session.fetch(input, init);
+          return blackboardSession.fetch(input, init);
         },
       };
       return listBlackboardDeadlines(adapter, { now: generatedAt });
@@ -2394,6 +2396,19 @@ async function runProfile(
     return;
   }
 
+  if (!hasExportableProfileData(report)) {
+    throw new CliError(
+      "No profile data could be collected; no export was written.",
+      "PROFILE_NO_DATA",
+      1,
+      {
+        destination,
+        sources: Object.fromEntries(
+          Object.entries(report.sources).map(([name, source]) => [name, source.status]),
+        ),
+      },
+    );
+  }
   const path = await saveStudentProfile(destination!, report, { overwrite: values.overwrite });
   writeSuccess({
     command: "profile export",

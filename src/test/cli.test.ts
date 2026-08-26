@@ -686,6 +686,23 @@ test("profile commands remain machine-readable when credentials are unavailable"
   assert.equal(JSON.parse(exportMissingDestination.stdout).error.code, "USAGE");
 });
 
+test("profile export refuses to write an all-error empty report", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-profile-export-"));
+  const filePath = join(tempDir, "profile.json");
+  try {
+    const result = runWithoutCredentials(["profile", "export", "--destination", filePath, "--json"]);
+    assert.equal(result.status, 1);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.command, "profile export");
+    assert.equal(envelope.error.code, "PROFILE_NO_DATA");
+    assert.equal(envelope.error.details.destination, filePath);
+    assert.equal(envelope.error.details.sources.tisIdentity, "error");
+    assert.equal(exists(filePath), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("PMS upload preview validates the local file before requiring credentials", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-pms-upload-"));
   const filePath = join(tempDir, "report final.pdf");
@@ -766,4 +783,8 @@ function runWithoutCredentials(args: string[]): { status: number | null; stdout:
     },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function exists(path: string): boolean {
+  return spawnSync(process.execPath, ["-e", `require('node:fs').accessSync(${JSON.stringify(path)})`], { encoding: "utf8" }).status === 0;
 }

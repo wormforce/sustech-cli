@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, stat, unlink } from "node:fs/promises";
+import { copyFile, lstat, stat, unlink } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { CliError } from "../core/errors.js";
 import { maskSid } from "../core/keyring.js";
@@ -182,10 +182,10 @@ export async function saveStudentProfile(
 
 export function tisIdentityFromUserMe(raw: unknown): TisIdentitySummary | null {
   const record = objectValue(raw);
-  const studentId = firstScalar(record, "studentId", "sid", "xh", "yhdm");
-  const name = firstScalar(record, "name", "xm", "trueName");
-  const department = firstScalar(record, "department", "szmc", "deptName", "ssmc");
-  const studentType = firstScalar(record, "pylx", "pylxmc", "studentType");
+  const studentId = firstScalar(record, "studentId");
+  const name = firstScalar(record, "name");
+  const department = firstScalar(record, "department");
+  const studentType = firstScalar(record, "pylx");
   const identity: TisIdentitySummary = {
     ...(studentId ? { studentIdMasked: maskSid(studentId) } : {}),
     ...(name ? { name } : {}),
@@ -374,12 +374,20 @@ function resolveRequiredPath(path: string, label: string): string {
 }
 
 async function rejectExistingDestination(path: string): Promise<void> {
-  let metadata: Awaited<ReturnType<typeof stat>>;
+  let metadata: Awaited<ReturnType<typeof lstat>>;
   try {
-    metadata = await stat(path);
+    metadata = await lstat(path);
   } catch (error) {
     if (isNodeError(error, "ENOENT")) return;
     throw error;
+  }
+  if (metadata.isSymbolicLink()) {
+    throw new CliError(
+      `Refusing to write through a symbolic link: ${path}`,
+      "UNSAFE_LOCAL_PATH",
+      2,
+      { path, symlink: path },
+    );
   }
   if (!metadata.isFile()) {
     throw new CliError("Profile export destination must be a regular file path.", "PROFILE_EXPORT_INVALID_DESTINATION", 2, { path });
@@ -430,11 +438,19 @@ function examFutureCandidate(
   if (examDate < current.date) return {};
   const timeWindow = parseExamTimeWindow(exam.time);
   if (examDate > current.date) {
+    if (!timeWindow) {
+      return {
+        failure: {
+          code: "EXAM_TIME_UNKNOWN",
+          message: `Exam ${exam.code || exam.name || "(unnamed)"} on ${examDate} was omitted because TIS did not provide a parseable time.`,
+        },
+      };
+    }
     return {
       exam: {
         exam,
         sortDate: examDate,
-        sortMinutes: timeWindow?.start ?? 0,
+        sortMinutes: timeWindow.start,
       },
     };
   }
