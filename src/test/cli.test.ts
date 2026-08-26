@@ -279,6 +279,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
   const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
   const tisIcal = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis ical");
+  const profileShow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "profile show");
+  const profileExport = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "profile export");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -322,6 +324,10 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(snapshotDiff.network, false);
   assert.equal(tisIcal.kind, "mutation");
   assert.equal(tisIcal.authentication, "selected-service");
+  assert.equal(profileShow.kind, "read");
+  assert.equal(profileShow.authentication, "sustech-cas");
+  assert.equal(profileExport.kind, "mutation");
+  assert.equal(profileExport.authentication, "sustech-cas");
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -663,6 +669,21 @@ test("context live degrades gracefully when Blackboard credentials are unavailab
   assert.equal(envelope.data.liveSources.tisSchedule.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.tisExams.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
+});
+
+test("profile commands remain machine-readable when credentials are unavailable", () => {
+  const show = runWithoutCredentials(["profile", "show", "--json"]);
+  assert.equal(show.status, 0);
+  const showEnvelope = JSON.parse(show.stdout);
+  assert.equal(showEnvelope.command, "profile show");
+  assert.equal(showEnvelope.data.summary.errorSources, 4);
+  assert.equal(showEnvelope.data.sources.tisIdentity.failures[0].code, "CREDENTIALS_REQUIRED");
+  assert.doesNotMatch(JSON.stringify(showEnvelope.data), /password|token|cookie|authorization/i);
+
+  const exportMissingDestination = runWithoutCredentials(["profile", "export", "--json"]);
+  assert.equal(exportMissingDestination.status, 2);
+  assert.equal(JSON.parse(exportMissingDestination.stdout).command, "profile export");
+  assert.equal(JSON.parse(exportMissingDestination.stdout).error.code, "USAGE");
 });
 
 test("PMS upload preview validates the local file before requiring credentials", () => {

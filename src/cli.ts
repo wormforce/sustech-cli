@@ -66,6 +66,7 @@ import {
   formatAuthCheck,
   formatAvailableCourses,
   formatCourseSearch,
+  formatStudentProfile,
   formatEnrolledCourses,
   formatEnrollPreview,
   formatEnrollSuccess,
@@ -77,6 +78,7 @@ import {
   formatTimetables,
   formatVersion,
 } from "./core/text.js";
+import { collectStudentProfile, saveStudentProfile } from "./profile/report.js";
 import { auditDegreeRequirements, loadDegreeRequirements } from "./tis/degree-audit.js";
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
@@ -280,6 +282,8 @@ Usage:
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
   sustech context [--date YYYY-MM-DD] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
+  sustech profile show [--profile NAME] [--credentials-file PATH]
+  sustech profile export --destination PATH [--overwrite] [--profile NAME] [--credentials-file PATH]
   sustech resources list [--category CATEGORY]
   sustech resources search QUERY [--category CATEGORY]
   sustech wifi status
@@ -370,6 +374,7 @@ Usage:
 Output:
   Text is the default for people. Agents should pass --json; bulk consumers can pass --jsonl.
   --output text|json|jsonl is the long form. --pretty formats JSON for review.
+  profile export writes a versioned JSON report to the explicit destination path.
 
 Credentials:
   'sustech auth login' verifies credentials, then stores the password in the operating-system credential store.
@@ -497,6 +502,8 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "faculty list": ["full", "limit"],
   "faculty search": ["department", "limit"],
   context: ["date", "level", "live", "credentials-file"],
+  "profile show": ["credentials-file", "profile"],
+  "profile export": ["credentials-file", "profile", "destination", "overwrite"],
   "resources list": ["category"],
   "resources search": ["category"],
   "wifi events": ["minutes"],
@@ -787,6 +794,10 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "context") {
     await runContext(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "profile") {
+    await runProfile(parsed.positionals, values, output);
     return;
   }
   if (group === "resources") {
@@ -2319,6 +2330,81 @@ async function runFaculty(
     return;
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runProfile(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const command = positionals[1];
+  if ((command !== "show" && command !== "export") || positionals.length !== 2) {
+    throw usageError(`Unknown command: ${positionals.join(" ")}`);
+  }
+
+  const destination = command === "export" ? required(values.destination, "--destination") : undefined;
+  const semester = parseSemester(undefined);
+  const generatedAt = new Date();
+  let credentials: Credentials | null = null;
+  let credentialError: unknown;
+  try {
+    credentials = await resolvedCredentials(values);
+  } catch (error) {
+    credentialError = error;
+  }
+
+  const report = await collectStudentProfile({
+    semester,
+    generatedAt,
+    loadTisUserMe: async () => {
+      if (!credentials) throw credentialError;
+      return new TisSession(credentials).getJson("/user/me");
+    },
+    loadCurrentCourses: async () => {
+      if (!credentials) throw credentialError;
+      return new TisClient(new TisSession(credentials)).enrolled(semester);
+    },
+    loadExams: async () => {
+      if (!credentials) throw credentialError;
+      return new TisClient(new TisSession(credentials)).exams();
+    },
+    loadBlackboardDeadlines: async () => {
+      if (!credentials) throw credentialError;
+      const session = new CasSession(credentials, casServiceConfig("bb"));
+      const adapter: ServiceAdapter = {
+        name: "bb",
+        fetch(input: string, init?: RequestInit): Promise<Response> {
+          return session.fetch(input, init);
+        },
+      };
+      return listBlackboardDeadlines(adapter, { now: generatedAt });
+    },
+  });
+
+  if (command === "show") {
+    writeSuccess({
+      command: "profile show",
+      data: report,
+      text: formatStudentProfile(report),
+      summary: {
+        semester: report.semester,
+        ...report.summary,
+      },
+    }, output);
+    return;
+  }
+
+  const path = await saveStudentProfile(destination!, report, { overwrite: values.overwrite });
+  writeSuccess({
+    command: "profile export",
+    data: { path, profile: report, localMutation: true, remoteMutation: false },
+    text: formatStudentProfile(report, { path }),
+    summary: {
+      path,
+      semester: report.semester,
+      ...report.summary,
+    },
+  }, output);
 }
 
 async function runAcademic(

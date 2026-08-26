@@ -1,4 +1,5 @@
 import type { Semester } from "./semester.js";
+import type { StudentProfileReport } from "../profile/report.js";
 import type { TimetableResult } from "../tis/planner.js";
 import type { DegreeAuditResult } from "../tis/degree-audit.js";
 import type { TisPlanView } from "../tis/plan.js";
@@ -255,6 +256,72 @@ export function formatDegreeAudit(result: DegreeAuditResult, requirementsPath: s
   } else {
     lines.push("  (none)");
   }
+  return lines.join("\n");
+}
+
+export function formatStudentProfile(
+  report: StudentProfileReport,
+  options: { path?: string } = {},
+): string {
+  const lines = [
+    `Student profile${options.path ? " export" : ""}`,
+    `Schema: ${report.schemaVersion} · ${report.kind}`,
+    `Generated: ${report.generatedAt}`,
+    `Semester: ${report.semester}`,
+  ];
+
+  if (options.path) {
+    lines.push(`Path: ${options.path}`, "Format: versioned JSON");
+  }
+
+  lines.push("", "Identity");
+  if (report.identity) {
+    lines.push(
+      `  Name: ${report.identity.name ?? "(not available)"}`,
+      `  Student ID: ${report.identity.studentIdMasked ?? "(not available)"}`,
+      `  Department: ${report.identity.department ?? "(not available)"}`,
+      `  Student type: ${report.identity.studentType ?? "(not available)"}`,
+    );
+  } else {
+    lines.push("  (not available)");
+  }
+
+  lines.push("", "Academic summary");
+  if (report.academics.currentCourses) {
+    lines.push(
+      `  Current semester courses: ${report.academics.currentCourses.courseCount} distinct course(s) from ${report.academics.currentCourses.sourceRows} TIS row(s)`,
+      `  Omitted course rows without stable identity: ${report.academics.currentCourses.omittedRows}`,
+    );
+  } else {
+    lines.push("  Current semester courses: (not available)");
+  }
+  if (report.academics.nextExam) {
+    const exam = report.academics.nextExam;
+    const location = [exam.campus, exam.building, exam.room].filter(Boolean).join(" / ") || "TBA";
+    lines.push(`  Next exam: ${exam.code || "(no code)"} ${exam.name} · ${exam.date} ${exam.time || "TBA"} · ${location}`);
+  } else {
+    lines.push("  Next exam: (not available)");
+  }
+  if (report.academics.nextBlackboardDeadline) {
+    const deadline = report.academics.nextBlackboardDeadline;
+    lines.push(
+      `  Next Blackboard deadline: ${deadline.courseCode} · ${deadline.title} · due ${deadline.dueAt} (${deadline.daysLeft} day(s) left)`,
+    );
+  } else {
+    lines.push("  Next Blackboard deadline: (not available)");
+  }
+
+  lines.push("", "Sources");
+  for (const [name, source] of Object.entries(report.sources)) {
+    lines.push(`  ${name}: ${source.status}`);
+    for (const failure of source.failures) {
+      lines.push(`    - ${failure.code}: ${failure.message}`);
+    }
+  }
+  lines.push(
+    "",
+    `Summary: ok ${report.summary.okSources} · partial ${report.summary.partialSources} · missing ${report.summary.missingSources} · error ${report.summary.errorSources}`,
+  );
   return lines.join("\n");
 }
 
