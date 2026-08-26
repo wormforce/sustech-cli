@@ -147,6 +147,11 @@ test("blackboard content attachment commands keep selection and local writes exp
   assert.equal(JSON.parse(list.stdout).command, "bb attachments");
   assert.equal(JSON.parse(list.stdout).error.code, "CREDENTIALS_REQUIRED");
 
+  const deadlines = runWithoutCredentials(["bb", "deadlines", "--json"]);
+  assert.equal(deadlines.status, 2);
+  assert.equal(JSON.parse(deadlines.stdout).command, "bb deadlines");
+  assert.equal(JSON.parse(deadlines.stdout).error.code, "CREDENTIALS_REQUIRED");
+
   const missingDestination = runWithoutCredentials([
     "bb", "download", "_8537_1", "_629896_1", "_42588_1", "--json",
   ]);
@@ -160,6 +165,19 @@ test("blackboard content attachment commands keep selection and local writes exp
   ]);
   assert.equal(irrelevantOverwrite.status, 2);
   assert.match(JSON.parse(irrelevantOverwrite.stdout).error.message, /not valid for 'bb attachments'/);
+
+  const syncMissingDestination = runWithoutCredentials([
+    "bb", "sync", "_8537_1", "--json",
+  ]);
+  assert.equal(syncMissingDestination.status, 2);
+  assert.equal(JSON.parse(syncMissingDestination.stdout).command, "bb sync");
+  assert.equal(JSON.parse(syncMissingDestination.stdout).error.code, "USAGE");
+
+  const syncNeedsCredentials = runWithoutCredentials([
+    "bb", "sync", "_8537_1", "--destination", "/tmp/bb-sync", "--json",
+  ]);
+  assert.equal(syncNeedsCredentials.status, 2);
+  assert.equal(JSON.parse(syncNeedsCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
 });
 
 test("capabilities exposes safety metadata without requiring help-text parsing", () => {
@@ -183,6 +201,9 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const bidApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis bid apply");
   const classroomLive = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom live");
   const classroomNow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom now");
+  const bbDeadlines = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb deadlines");
+  const bbSearch = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb search");
+  const bbSync = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb sync");
   assert.equal(apply.kind, "mutation");
   assert.equal(apply.confirmation, "required");
   assert.equal(preview.network, false);
@@ -207,6 +228,12 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(bidApply.confirmation, "required");
   assert.equal(classroomLive.kind, "read");
   assert.equal(classroomNow.kind, "read");
+  assert.equal(bbDeadlines.kind, "read");
+  assert.equal(bbDeadlines.authentication, "bb");
+  assert.equal(bbSearch.kind, "read");
+  assert.equal(bbSearch.authentication, "bb");
+  assert.equal(bbSync.kind, "mutation");
+  assert.equal(bbSync.authentication, "bb");
 });
 
 test("auth profile commands are machine-readable without exposing or inventing credentials", () => {
@@ -331,6 +358,10 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["doctor", "--service", "tis,not-a-service", "--json"], "USAGE"],
     [["papers", "fetch-oa", "not-a-doi", "--destination", "/tmp/paper.pdf", "--json"], "USAGE"],
     [["bb", "submit", "apply", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--expected-sha256", "not-a-sha", "--confirm", "--json"], "USAGE"],
+    [["bb", "search", "hw", "--attachments", "bad", "--json"], "USAGE"],
+    [["bb", "search", "hw", "--kind", "bad", "--json"], "USAGE"],
+    [["bb", "search", "hw", "--page-size", "0", "--json"], "USAGE"],
+    [["bb", "deadlines", "--days", "0", "--json"], "USAGE"],
   ] as const) {
     const result = runWithoutCredentials([...args]);
     assert.equal(result.status, 2);
@@ -355,6 +386,14 @@ test("selection and bid apply require --confirm before any credential lookup or 
   ]);
   assert.equal(bid.status, 3);
   assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
+});
+
+test("context live degrades gracefully when Blackboard credentials are unavailable", () => {
+  const result = runWithoutCredentials(["context", "--live", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
+  assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
 });
 
 function run(args: string[]): { status: number | null; stdout: string; stderr: string } {

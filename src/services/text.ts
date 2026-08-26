@@ -3,10 +3,15 @@ import type {
   BlackboardAttempt,
   BlackboardAttemptFile,
   BlackboardCourse,
+  BlackboardDeadline,
+  BlackboardDeadlineReport,
   BlackboardContentAttachment,
   BlackboardContentAttachmentDownload,
   BlackboardContentItem,
+  BlackboardSearchMatch,
+  BlackboardSearchReport,
   BlackboardSubmissionFile,
+  BlackboardSyncReport,
   BlackboardUser,
 } from "./blackboard.js";
 import type { BookingUserProfile } from "./booking-auth.js";
@@ -253,6 +258,46 @@ export function formatBlackboardAssignments(items: readonly BlackboardAssignment
   ].join("\n");
 }
 
+export function formatBlackboardDeadlines(report: BlackboardDeadlineReport): string {
+  if (report.deadlines.length === 0) {
+    const partial = report.failures.length > 0 ? ` (${report.failures.length} failure${report.failures.length === 1 ? "" : "s"})` : "";
+    return `Blackboard deadlines${partial}\nNo upcoming assignment deadlines.`;
+  }
+  return [
+    `Blackboard deadlines · ${report.deadlines.length}${report.days !== undefined ? ` within ${report.days} day(s)` : ""}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
+    ...report.deadlines.map((item) => formatBlackboardDeadlineLine(item)),
+  ].join("\n");
+}
+
+export function formatBlackboardSearch(report: BlackboardSearchReport): string {
+  if (report.results.length === 0) {
+    return `Blackboard search · ${report.query}\nNo matching content.${report.failures.length > 0 ? ` ${report.failures.length} failure(s) recorded.` : ""}`;
+  }
+  return [
+    `Blackboard search · ${report.query} · ${report.returned}/${report.totalMatches}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
+    ...report.results.map((result) => [
+      `${result.courseCode.padEnd(12)} ${result.kind.padEnd(11)} ${result.title}`,
+      `  ${result.path}`,
+      `  matched ${result.matchReasons.join("+")}${result.attachmentMatches.length > 0 ? ` · attachments: ${result.attachmentMatches.map((attachment) => attachment.fileName).join(", ")}` : ""}`,
+    ].join("\n")),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardSync(report: BlackboardSyncReport): string {
+  const header = report.partial
+    ? `Blackboard sync partial · ${report.downloadedFiles}/${report.plannedFiles} downloaded`
+    : `Blackboard sync complete · ${report.downloadedFiles}/${report.plannedFiles} downloaded`;
+  if (report.files.length === 0) {
+    return `${header}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}\nNo files were written.`;
+  }
+  return [
+    `${header}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
+    `Destination: ${report.destination}`,
+    ...report.files.map((file) => `${file.relativePath}\n  ${file.size} bytes · sha256 ${file.sha256}${file.overwritten ? " · overwritten" : ""}`),
+  ].join("\n");
+}
+
 export function formatBlackboardAttempts(
   assignment: BlackboardAssignment,
   attempts: readonly BlackboardAttempt[],
@@ -334,6 +379,13 @@ export function formatBlackboardSubmissionSuccess(input: {
       : []),
     `Verification: ${input.verification.status} — ${input.verification.message}`,
     ...(input.verification.status === "confirmed" ? [] : ["Do not retry automatically; inspect Blackboard before another write."]),
+  ].join("\n");
+}
+
+function formatBlackboardDeadlineLine(item: BlackboardDeadline): string {
+  return [
+    `${item.courseCode.padEnd(12)} ${item.title}`,
+    `  due ${item.dueAt} · in ${item.daysLeft} day(s) · content ${item.contentId} · column ${item.columnId}`,
   ].join("\n");
 }
 

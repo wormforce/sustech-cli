@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fileSystemConstants } from "node:fs";
-import { copyFile, link, lstat, open, readFile, rename, rm, stat } from "node:fs/promises";
-import { basename, dirname, join, resolve as resolvePath } from "node:path";
+import { copyFile, link, lstat, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { CliError } from "../core/errors.js";
 import {
   arrayValue,
@@ -191,6 +191,120 @@ export interface BlackboardSubmissionPreflight {
 export interface BlackboardSubmissionPayload {
   file: BlackboardSubmissionFile;
   bytes: Uint8Array;
+}
+
+export type BlackboardFailureStage =
+  | "courses"
+  | "assignments"
+  | "content"
+  | "content-item"
+  | "attachments"
+  | "download"
+  | "destination";
+
+export interface BlackboardOperationFailure {
+  stage: BlackboardFailureStage;
+  message: string;
+  code?: string;
+  status?: number;
+  courseId?: string;
+  courseCode?: string;
+  courseName?: string;
+  parentId?: string;
+  contentId?: string;
+  attachmentId?: string;
+  path?: string;
+}
+
+export interface BlackboardDeadline {
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  columnId: string;
+  contentId: string;
+  title: string;
+  dueAt: string;
+  daysLeft: number;
+  availability: string;
+  scorePossible?: number;
+  attemptsAllowed?: number;
+}
+
+export interface BlackboardDeadlineReport {
+  generatedAt: string;
+  courseQuery?: string;
+  days?: number;
+  coursesMatched: number;
+  coursesScanned: number;
+  deadlines: BlackboardDeadline[];
+  failures: BlackboardOperationFailure[];
+}
+
+export type BlackboardSearchAttachmentMode = "include" | "only" | "none";
+
+export interface BlackboardSearchMatch {
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  contentId: string;
+  parentId: string;
+  title: string;
+  kind: BlackboardContentItem["kind"];
+  handler: string;
+  hasChildren: boolean;
+  path: string;
+  matchReasons: readonly ("title" | "attachment")[];
+  attachmentMatches: readonly BlackboardContentAttachment[];
+}
+
+export interface BlackboardSearchReport {
+  generatedAt: string;
+  query: string;
+  courseQuery?: string;
+  kind?: BlackboardContentItem["kind"];
+  attachments: BlackboardSearchAttachmentMode;
+  page: number;
+  pageSize: number;
+  coursesMatched: number;
+  coursesScanned: number;
+  contentsScanned: number;
+  attachmentsScanned: number;
+  totalMatches: number;
+  returned: number;
+  hasMore: boolean;
+  nextPage?: number;
+  results: BlackboardSearchMatch[];
+  failures: BlackboardOperationFailure[];
+}
+
+export interface BlackboardSyncFile {
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  contentId: string;
+  attachmentId: string;
+  contentPath: string;
+  relativePath: string;
+  destination: string;
+  source: BlackboardContentAttachmentSource;
+  size: number;
+  sha256: string;
+  contentType: string;
+  overwritten: boolean;
+}
+
+export interface BlackboardSyncReport {
+  generatedAt: string;
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  destination: string;
+  rootContentId?: string;
+  plannedFiles: number;
+  downloadedFiles: number;
+  partial: boolean;
+  files: BlackboardSyncFile[];
+  failures: BlackboardOperationFailure[];
 }
 
 export async function getBlackboardUser(adapter: ServiceAdapter): Promise<BlackboardUser> {
@@ -491,6 +605,351 @@ export async function readBlackboardSubmissionPayload(path: string): Promise<Bla
     },
     bytes: buffer,
   };
+}
+
+export async function listBlackboardDeadlines(
+  adapter: ServiceAdapter,
+  options: { now?: Date; days?: number; courseQuery?: string } = {},
+): Promise<BlackboardDeadlineReport> {
+  const now = options.now ?? new Date();
+  const report: BlackboardDeadlineReport = {
+    generatedAt: now.toISOString(),
+    ...(options.courseQuery ? { courseQuery: options.courseQuery } : {}),
+    ...(options.days !== undefined ? { days: options.days } : {}),
+    coursesMatched: 0,
+    coursesScanned: 0,
+    deadlines: [],
+    failures: [],
+  };
+  const courses = await listBlackboardCoursesForAggregation(adapter, report.failures, options.courseQuery);
+  report.coursesMatched = courses.length;
+  for (const course of courses) {
+    report.coursesScanned += 1;
+    let assignments: BlackboardAssignment[];
+    try {
+      assignments = await listBlackboardAssignments(adapter, course.id);
+    } catch (error) {
+      report.failures.push(
+        blackboardOperationFailure(error, {
+          stage: "assignments",
+          courseId: course.id,
+          courseCode: course.courseCode,
+          courseName: course.name,
+        }),
+      );
+      continue;
+    }
+    for (const assignment of assignments) {
+      const dueAt = assignment.grading.due;
+      if (!dueAt) continue;
+      const dueTime = Date.parse(dueAt);
+      if (!Number.isFinite(dueTime)) {
+        report.failures.push({
+          stage: "assignments",
+          courseId: course.id,
+          courseCode: course.courseCode,
+          courseName: course.name,
+          contentId: assignment.contentId,
+          message: `Assignment "${assignment.title}" returned an unparseable due date: ${dueAt}`,
+        });
+        continue;
+      }
+      const due = new Date(dueTime);
+      if (due.getTime() < now.getTime()) continue;
+      const daysLeft = blackboardDaysLeft(now, due);
+      if (options.days !== undefined && daysLeft > options.days) continue;
+      report.deadlines.push({
+        courseId: course.id,
+        courseCode: course.courseCode,
+        courseName: course.name,
+        columnId: assignment.id,
+        contentId: assignment.contentId,
+        title: assignment.title,
+        dueAt,
+        daysLeft,
+        availability: assignment.availability,
+        ...(assignment.scorePossible !== undefined ? { scorePossible: assignment.scorePossible } : {}),
+        ...(assignment.grading.attemptsAllowed !== undefined ? { attemptsAllowed: assignment.grading.attemptsAllowed } : {}),
+      });
+    }
+  }
+  report.deadlines.sort((left, right) =>
+    Date.parse(left.dueAt) - Date.parse(right.dueAt)
+    || left.courseCode.localeCompare(right.courseCode)
+    || left.title.localeCompare(right.title),
+  );
+  return report;
+}
+
+export function nextBlackboardDeadline(report: BlackboardDeadlineReport): BlackboardDeadline | null {
+  return report.deadlines[0] ?? null;
+}
+
+export async function searchBlackboardContentTree(
+  adapter: ServiceAdapter,
+  options: {
+    query: string;
+    courseQuery?: string;
+    kind?: BlackboardContentItem["kind"];
+    attachments?: BlackboardSearchAttachmentMode;
+    page?: number;
+    pageSize?: number;
+  },
+): Promise<BlackboardSearchReport> {
+  const query = options.query.trim();
+  const needle = query.toLowerCase();
+  const attachmentsMode = options.attachments ?? "none";
+  const page = options.page ?? 1;
+  const pageSize = options.pageSize ?? 25;
+  const failures: BlackboardOperationFailure[] = [];
+  const courses = await listBlackboardCoursesForAggregation(adapter, failures, options.courseQuery);
+  const matches: BlackboardSearchMatch[] = [];
+  const maxContents = 2_000;
+  const maxAttachmentLookups = 200;
+  let coursesScanned = 0;
+  let contentsScanned = 0;
+  let attachmentsScanned = 0;
+  let attachmentLookups = 0;
+  let traversalTruncated = false;
+  let attachmentLookupsTruncated = false;
+
+  for (const course of courses) {
+    if (traversalTruncated) break;
+    coursesScanned += 1;
+    await walkBlackboardCourseContents(adapter, course, {
+      shouldContinue(): boolean {
+        return !traversalTruncated;
+      },
+      onFailure(failure): void {
+        failures.push(failure);
+      },
+      async visit(entry): Promise<void> {
+        if (contentsScanned >= maxContents) {
+          if (!traversalTruncated) {
+            traversalTruncated = true;
+            failures.push({
+              stage: "content",
+              courseId: course.id,
+              courseCode: course.courseCode,
+              courseName: course.name,
+              message: `Blackboard search stopped after ${maxContents} content items to keep traversal bounded.`,
+            });
+          }
+          return;
+        }
+        contentsScanned += 1;
+        const titleMatched = entry.item.title.toLowerCase().includes(needle);
+        let attachmentMatches: BlackboardContentAttachment[] = [];
+        if (attachmentsMode !== "none" && entry.item.kind !== "folder") {
+          if (attachmentLookups >= maxAttachmentLookups) {
+            if (!attachmentLookupsTruncated) {
+              attachmentLookupsTruncated = true;
+              failures.push({
+                stage: "attachments",
+                courseId: course.id,
+                courseCode: course.courseCode,
+                courseName: course.name,
+                message: `Blackboard search stopped attachment-name lookups after ${maxAttachmentLookups} items; use --course or --kind to narrow the crawl.`,
+              });
+            }
+          } else {
+            attachmentLookups += 1;
+            try {
+              const attachments = await listBlackboardContentAttachments(adapter, course.id, entry.item.id);
+              attachmentsScanned += attachments.length;
+              attachmentMatches = attachments.filter((attachment) => attachment.fileName.toLowerCase().includes(needle));
+            } catch (error) {
+              failures.push(
+                blackboardOperationFailure(error, {
+                  stage: "attachments",
+                  courseId: course.id,
+                  courseCode: course.courseCode,
+                  courseName: course.name,
+                  contentId: entry.item.id,
+                  path: entry.path,
+                }),
+              );
+            }
+          }
+        }
+        const matchReasons = [
+          ...(titleMatched ? ["title" as const] : []),
+          ...(attachmentMatches.length > 0 ? ["attachment" as const] : []),
+        ];
+        if (matchReasons.length === 0) return;
+        if (attachmentsMode === "only" && attachmentMatches.length === 0) return;
+        if (options.kind && entry.item.kind !== options.kind) return;
+        matches.push({
+          courseId: course.id,
+          courseCode: course.courseCode,
+          courseName: course.name,
+          contentId: entry.item.id,
+          parentId: entry.item.parentId,
+          title: entry.item.title,
+          kind: entry.item.kind,
+          handler: entry.item.handler,
+          hasChildren: entry.item.hasChildren,
+          path: entry.path,
+          matchReasons,
+          attachmentMatches,
+        });
+      },
+    });
+  }
+
+  const totalMatches = matches.length;
+  const startIndex = (page - 1) * pageSize;
+  const paged = matches.slice(startIndex, startIndex + pageSize);
+  return {
+    generatedAt: new Date().toISOString(),
+    query,
+    ...(options.courseQuery ? { courseQuery: options.courseQuery } : {}),
+    ...(options.kind ? { kind: options.kind } : {}),
+    attachments: attachmentsMode,
+    page,
+    pageSize,
+    coursesMatched: courses.length,
+    coursesScanned,
+    contentsScanned,
+    attachmentsScanned,
+    totalMatches,
+    returned: paged.length,
+    hasMore: startIndex + paged.length < totalMatches,
+    ...(startIndex + paged.length < totalMatches ? { nextPage: page + 1 } : {}),
+    results: paged,
+    failures,
+  };
+}
+
+export async function syncBlackboardAttachments(
+  adapter: ServiceAdapter,
+  options: {
+    courseId: string;
+    destination: string;
+    contentId?: string;
+    overwrite?: boolean;
+  },
+): Promise<BlackboardSyncReport> {
+  const destination = await ensureBlackboardDirectoryRoot(options.destination);
+  const courseId = canonicalCourseId(options.courseId);
+  let course = {
+    id: courseId,
+    courseCode: courseId,
+    courseName: courseId,
+  };
+  try {
+    const matched = await listBlackboardCourses(adapter, { query: courseId });
+    const resolved = matched.find((entry) => canonicalCourseId(entry.id) === courseId) ?? matched[0];
+    if (resolved) {
+      course = {
+        id: resolved.id,
+        courseCode: resolved.courseCode,
+        courseName: resolved.name,
+      };
+    }
+  } catch {
+    // Best effort only; sync should still proceed against the explicit course ID.
+  }
+
+  const report: BlackboardSyncReport = {
+    generatedAt: new Date().toISOString(),
+    courseId: course.id,
+    courseCode: course.courseCode,
+    courseName: course.courseName,
+    destination,
+    ...(options.contentId ? { rootContentId: canonicalIdBody(options.contentId) } : {}),
+    plannedFiles: 0,
+    downloadedFiles: 0,
+    partial: false,
+    files: [],
+    failures: [],
+  };
+
+  await walkBlackboardCourseContents(
+    adapter,
+    {
+      id: course.id,
+      numericId: numericIdFromBlackboardId(course.id),
+      name: course.courseName,
+      courseCode: course.courseCode,
+      externalId: "",
+      roleId: "",
+      availability: "",
+    },
+    {
+      ...(options.contentId ? { rootContentId: options.contentId } : {}),
+      onFailure(failure): void {
+        report.failures.push(failure);
+      },
+      async visit(entry): Promise<void> {
+        if (entry.item.kind === "folder") return;
+        let attachments: BlackboardContentAttachment[];
+        try {
+          attachments = await listBlackboardContentAttachments(adapter, course.id, entry.item.id);
+        } catch (error) {
+          report.failures.push(
+            blackboardOperationFailure(error, {
+              stage: "attachments",
+              courseId: course.id,
+              courseCode: course.courseCode,
+              courseName: course.courseName,
+              contentId: entry.item.id,
+              path: entry.path,
+            }),
+          );
+          return;
+        }
+        if (attachments.length === 0) return;
+        for (const attachment of attachments) {
+          report.plannedFiles += 1;
+          const relativePath = buildBlackboardSyncRelativePath(entry.pathTitles, entry.item.id, attachment);
+          const absolutePath = resolvePath(destination, relativePath);
+          assertBlackboardSyncPathWithinRoot(destination, absolutePath);
+          try {
+            await ensureBlackboardDirectoryWithinRoot(destination, dirname(absolutePath));
+            const downloaded = await downloadBlackboardContentAttachment(
+              adapter,
+              course.id,
+              entry.item.id,
+              attachment.id,
+              absolutePath,
+              { overwrite: options.overwrite === true },
+            );
+            report.files.push({
+              courseId: course.id,
+              courseCode: course.courseCode,
+              courseName: course.courseName,
+              contentId: entry.item.id,
+              attachmentId: attachment.id,
+              contentPath: entry.path,
+              relativePath,
+              destination: downloaded.destination,
+              source: attachment.source,
+              size: downloaded.size,
+              sha256: downloaded.sha256,
+              contentType: downloaded.contentType,
+              overwritten: downloaded.overwritten,
+            });
+            report.downloadedFiles += 1;
+          } catch (error) {
+            report.failures.push(
+              blackboardOperationFailure(error, {
+                stage: "download",
+                courseId: course.id,
+                courseCode: course.courseCode,
+                courseName: course.courseName,
+                contentId: entry.item.id,
+                attachmentId: attachment.id,
+                path: absolutePath,
+              }),
+            );
+          }
+        }
+      },
+    },
+  );
+  report.partial = report.failures.length > 0;
+  return report;
 }
 
 export function selectBlackboardAssignment(
@@ -1175,6 +1634,308 @@ function blackboardFileSystemError(message: string, path: string, error: unknown
     path,
     cause: error instanceof Error ? error.message : String(error),
   });
+}
+
+interface BlackboardTraversalEntry {
+  item: BlackboardContentItem;
+  pathTitles: readonly string[];
+  path: string;
+}
+
+async function listBlackboardCoursesForAggregation(
+  adapter: ServiceAdapter,
+  failures: BlackboardOperationFailure[],
+  courseQuery?: string,
+): Promise<BlackboardCourse[]> {
+  let user: BlackboardUser;
+  try {
+    user = await getBlackboardUser(adapter);
+  } catch (error) {
+    failures.push(blackboardOperationFailure(error, { stage: "courses" }));
+    return [];
+  }
+  let page: { results: unknown[] };
+  try {
+    page = await fetchBlackboardPage(adapter, `/learn/api/public/v1/users/${encodeURIComponent(user.id)}/courses`);
+  } catch (error) {
+    failures.push(blackboardOperationFailure(error, { stage: "courses" }));
+    return [];
+  }
+  const query = courseQuery?.trim().toLowerCase();
+  const courses: BlackboardCourse[] = [];
+  for (const item of page.results) {
+    const enrollment = recordValue(item);
+    const courseId = stringValue(enrollment.courseId);
+    const fallback = normaliseBlackboardCourse(enrollment);
+    let course = fallback;
+    if (courseId) {
+      try {
+        const detail = await fetchJson<unknown>(adapter, buildBlackboardUrl(`/learn/api/public/v1/courses/${canonicalCourseId(courseId)}`));
+        course = normaliseBlackboardCourse(enrollment, detail);
+      } catch (error) {
+        failures.push(blackboardOperationFailure(error, {
+          stage: "courses",
+          courseId: fallback.id || canonicalCourseId(courseId),
+          courseCode: fallback.courseCode,
+          courseName: fallback.name,
+        }));
+      }
+    }
+    if (!query || blackboardCourseMatchesQuery(course, query)) courses.push(course);
+  }
+  return courses;
+}
+
+async function walkBlackboardCourseContents(
+  adapter: ServiceAdapter,
+  course: BlackboardCourse,
+  options: {
+    rootContentId?: string;
+    visit(entry: BlackboardTraversalEntry): Promise<void> | void;
+    onFailure(failure: BlackboardOperationFailure): void;
+    shouldContinue?(): boolean;
+  },
+): Promise<void> {
+  const visited = new Set<string>();
+
+  const descend = async (parentId: string | undefined, ancestors: readonly string[]): Promise<void> => {
+    if (options.shouldContinue && !options.shouldContinue()) return;
+    let items: BlackboardContentItem[];
+    try {
+      items = await listBlackboardContent(adapter, course.id, parentId);
+    } catch (error) {
+      options.onFailure(
+        blackboardOperationFailure(error, {
+          stage: "content",
+          courseId: course.id,
+          courseCode: course.courseCode,
+          courseName: course.name,
+          ...(parentId ? { parentId } : {}),
+        }),
+      );
+      return;
+    }
+    for (const item of items) {
+      if (options.shouldContinue && !options.shouldContinue()) return;
+      if (visited.has(item.id)) continue;
+      visited.add(item.id);
+      const pathTitles = [...ancestors, item.title || item.id];
+      const entry: BlackboardTraversalEntry = {
+        item,
+        pathTitles,
+        path: blackboardContentPath(course, pathTitles),
+      };
+      await options.visit(entry);
+      if (options.shouldContinue && !options.shouldContinue()) return;
+      if (item.hasChildren) await descend(item.id, pathTitles);
+    }
+  };
+
+  if (options.rootContentId) {
+    let rootItem: BlackboardContentItem;
+    try {
+      rootItem = await getBlackboardContentItem(adapter, course.id, options.rootContentId);
+    } catch (error) {
+      options.onFailure(
+        blackboardOperationFailure(error, {
+          stage: "content-item",
+          courseId: course.id,
+          courseCode: course.courseCode,
+          courseName: course.name,
+          contentId: canonicalIdBody(options.rootContentId),
+        }),
+      );
+      return;
+    }
+    visited.add(rootItem.id);
+    const rootPathTitles = [rootItem.title || rootItem.id];
+    if (options.shouldContinue && !options.shouldContinue()) return;
+    await options.visit({
+      item: rootItem,
+      pathTitles: rootPathTitles,
+      path: blackboardContentPath(course, rootPathTitles),
+    });
+    if (rootItem.hasChildren) await descend(rootItem.id, rootPathTitles);
+    return;
+  }
+
+  await descend(undefined, []);
+}
+
+function blackboardOperationFailure(
+  error: unknown,
+  context: Omit<BlackboardOperationFailure, "message" | "code" | "status">,
+): BlackboardOperationFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ...context,
+    message,
+    ...(error instanceof CliError && error.code ? { code: error.code } : {}),
+    ...(error instanceof CliError && Number.isFinite(Number(error.details?.status)) ? { status: Number(error.details?.status) } : {}),
+  };
+}
+
+function blackboardContentPath(course: BlackboardCourse, pathTitles: readonly string[]): string {
+  const courseLabel = [course.courseCode, course.name].filter(Boolean).join(" · ") || course.id;
+  return [courseLabel, ...pathTitles].join(" / ");
+}
+
+function blackboardCourseMatchesQuery(course: BlackboardCourse, query: string): boolean {
+  return course.id.toLowerCase().includes(query)
+    || course.numericId.toLowerCase().includes(query)
+    || course.name.toLowerCase().includes(query)
+    || course.courseCode.toLowerCase().includes(query);
+}
+
+function blackboardDaysLeft(now: Date, due: Date): number {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const finish = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+  return Math.round((finish - start) / 86_400_000);
+}
+
+async function ensureBlackboardDirectoryRoot(destination: string): Promise<string> {
+  const absolute = resolvePath(destination);
+  let info;
+  try {
+    info = await lstat(absolute);
+  } catch (error) {
+    if (nodeErrorCode(error) !== "ENOENT") {
+      throw new CliError(
+        "The Blackboard sync destination could not be inspected.",
+        "BLACKBOARD_SYNC_DESTINATION_INVALID",
+        2,
+        { path: absolute, cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    try {
+      await mkdir(absolute, { recursive: true, mode: 0o700 });
+      info = await lstat(absolute);
+    } catch (mkdirError) {
+      throw new CliError(
+        "The Blackboard sync destination directory could not be created.",
+        "BLACKBOARD_SYNC_DESTINATION_INVALID",
+        2,
+        { path: absolute, cause: mkdirError instanceof Error ? mkdirError.message : String(mkdirError) },
+      );
+    }
+  }
+  if (info.isSymbolicLink()) {
+    throw new CliError(
+      "The Blackboard sync destination must not use symbolic links.",
+      "BLACKBOARD_SYNC_DESTINATION_INVALID",
+      2,
+      { path: absolute },
+    );
+  }
+  if (!info.isDirectory()) {
+    throw new CliError(
+      "The Blackboard sync destination path must be a directory.",
+      "BLACKBOARD_SYNC_DESTINATION_INVALID",
+      2,
+      { path: absolute },
+    );
+  }
+  return absolute;
+}
+
+async function ensureBlackboardDirectoryWithinRoot(root: string, path: string): Promise<void> {
+  const absoluteRoot = resolvePath(root);
+  const absolute = resolvePath(path);
+  assertBlackboardSyncPathWithinRoot(absoluteRoot, absolute);
+  const relativePath = relative(absoluteRoot, absolute);
+  if (!relativePath || relativePath === ".") return;
+  let current = absoluteRoot;
+  for (const segment of relativePath.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (nodeErrorCode(error) !== "ENOENT") {
+        throw new CliError(
+          "The Blackboard sync destination could not be inspected.",
+          "BLACKBOARD_SYNC_DESTINATION_INVALID",
+          2,
+          { path: current, cause: error instanceof Error ? error.message : String(error) },
+        );
+      }
+      try {
+        await mkdir(current, { mode: 0o700 });
+        continue;
+      } catch (mkdirError) {
+        throw new CliError(
+          "The Blackboard sync destination directory could not be created.",
+          "BLACKBOARD_SYNC_DESTINATION_INVALID",
+          2,
+          { path: current, cause: mkdirError instanceof Error ? mkdirError.message : String(mkdirError) },
+        );
+      }
+    }
+    if (info.isSymbolicLink()) {
+      throw new CliError(
+        "The Blackboard sync destination must not use symbolic links.",
+        "BLACKBOARD_SYNC_DESTINATION_INVALID",
+        2,
+        { path: current },
+      );
+    }
+    if (!info.isDirectory()) {
+      throw new CliError(
+        "The Blackboard sync destination path must be a directory.",
+        "BLACKBOARD_SYNC_DESTINATION_INVALID",
+        2,
+        { path: current },
+      );
+    }
+  }
+}
+
+function buildBlackboardSyncRelativePath(
+  pathTitles: readonly string[],
+  contentId: string,
+  attachment: BlackboardContentAttachment,
+): string {
+  const directoryParts = pathTitles.map((title, index, parts) => {
+    if (index === parts.length - 1) {
+      return sanitiseBlackboardPathSegment(`${title} [content-${contentId}]`, `content-${contentId}`);
+    }
+    return sanitiseBlackboardPathSegment(title, "content");
+  });
+  const fileName = sanitiseBlackboardAttachmentFileName(attachment.fileName, attachment.id);
+  return join(...directoryParts, fileName);
+}
+
+function sanitiseBlackboardPathSegment(value: string, fallback: string): string {
+  const cleaned = value
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+/g, "")
+    .replace(/\.+$/g, "")
+    .trim();
+  return cleaned || fallback;
+}
+
+function sanitiseBlackboardAttachmentFileName(value: string, attachmentId: string): string {
+  const safeAttachmentId = sanitiseBlackboardPathSegment(attachmentId, "attachment");
+  const suffix = ` [${safeAttachmentId}]`;
+  const extension = extname(value).slice(0, 32);
+  const stem = extension ? value.slice(0, -extension.length) : value;
+  const cleanStem = sanitiseBlackboardPathSegment(stem, "attachment");
+  const cleanExtension = extension.replace(/[^.\w-]/g, "");
+  return `${cleanStem}${suffix}${cleanExtension}`;
+}
+
+function assertBlackboardSyncPathWithinRoot(root: string, destination: string): void {
+  const relativePath = relative(root, destination);
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new CliError(
+      "The Blackboard sync target escaped the requested destination root.",
+      "BLACKBOARD_SYNC_DESTINATION_INVALID",
+      2,
+      { root, destination },
+    );
+  }
 }
 
 function nodeErrorCode(error: unknown): string {

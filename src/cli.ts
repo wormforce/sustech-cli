@@ -31,7 +31,7 @@ import { CalendarClient } from "./calendar/client.js";
 import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
 import type { CalendarLevel } from "./calendar/types.js";
 import { ContextService } from "./context/service.js";
-import type { ContextLevel } from "./context/types.js";
+import type { ContextLevel, DeadlineSummary } from "./context/types.js";
 import {
   DOCTOR_SERVICES,
   buildDoctorReport,
@@ -126,11 +126,14 @@ import {
   getWsProgramDetail,
   getWsToken,
   listBlackboardAssignments,
+  listBlackboardDeadlines,
   listBlackboardContentAttachments,
   listBlackboardAttemptFiles,
   listBlackboardAttempts,
   listBlackboardContent,
   listBlackboardCourses,
+  nextBlackboardDeadline,
+  searchBlackboardContentTree,
   listBookingRooms,
   listLibraryLabs,
   listLibraryReservationsPage,
@@ -148,6 +151,7 @@ import {
   searchCrossref,
   searchNces,
   serviceStatus,
+  syncBlackboardAttachments,
   updateBlackboardAttempt,
   uploadBlackboardTemporaryFile,
   type BlackboardAttempt,
@@ -166,8 +170,11 @@ import {
   formatBlackboardAttempts,
   formatBlackboardContent,
   formatBlackboardCourses,
+  formatBlackboardDeadlines,
+  formatBlackboardSearch,
   formatBlackboardSubmissionSuccess,
   formatBlackboardSubmitPreview,
+  formatBlackboardSync,
   formatBlackboardUser,
   formatNcesCourses,
   formatNcesDetail,
@@ -207,7 +214,7 @@ Usage:
   sustech faculty get SLUG
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
-  sustech context [--date YYYY-MM-DD] [--level terse|normal|verbose]
+  sustech context [--date YYYY-MM-DD] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
   sustech resources list [--category CATEGORY]
   sustech resources search QUERY [--category CATEGORY]
   sustech wifi status
@@ -224,6 +231,9 @@ Usage:
   sustech bb attachments COURSE_ID CONTENT_ID
   sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite]
   sustech bb assignments COURSE_ID
+  sustech bb deadlines [--days N] [--course QUERY]
+  sustech bb search QUERY [--course QUERY] [--kind file|folder|assignment|document|unknown] [--attachments include|only|none] [--page N] [--page-size N]
+  sustech bb sync COURSE_ID --destination DIR [--content-id CONTENT_ID] [--overwrite]
   sustech bb attempts COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] [--status InProgress|NeedsGrading|Completed]
   sustech bb submit preview --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH [--comment TEXT]
   sustech bb submit apply --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH --expected-sha256 HEX [--comment TEXT] [--allow-late] --confirm
@@ -311,6 +321,11 @@ type Values = OutputFlags & {
   "expected-sha256"?: string;
   destination?: string;
   overwrite?: boolean;
+  days?: string;
+  course?: string;
+  kind?: string;
+  attachments?: string;
+  live?: boolean;
   "allow-late"?: boolean;
   "period-start"?: string;
   "period-end"?: string;
@@ -352,7 +367,6 @@ type Values = OutputFlags & {
   profile?: string;
   sid?: string;
   "password-stdin"?: boolean;
-  live?: boolean;
   help?: boolean;
 };
 
@@ -369,7 +383,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "calendar day": ["date", "calendar-level"],
   "faculty list": ["full", "limit"],
   "faculty search": ["department", "limit"],
-  context: ["date", "level"],
+  context: ["date", "level", "live", "credentials-file"],
   "resources list": ["category"],
   "resources search": ["category"],
   "wifi events": ["minutes"],
@@ -382,6 +396,9 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "bb attachments": ["credentials-file"],
   "bb download": ["credentials-file", "destination", "overwrite"],
   "bb assignments": ["credentials-file"],
+  "bb deadlines": ["credentials-file", "days", "course"],
+  "bb search": ["credentials-file", "course", "kind", "attachments", "page", "page-size"],
+  "bb sync": ["credentials-file", "content-id", "destination", "overwrite"],
   "bb attempts": ["credentials-file", "content-id", "column-id", "status"],
   "bb submit preview": ["credentials-file", "course-id", "content-id", "column-id", "file", "comment"],
   "bb submit apply": ["credentials-file", "course-id", "content-id", "column-id", "file", "expected-sha256", "comment", "allow-late", "confirm"],
@@ -461,6 +478,11 @@ async function main(argv: string[]): Promise<void> {
         "expected-sha256": { type: "string" },
         destination: { type: "string" },
         overwrite: { type: "boolean", default: false },
+        days: { type: "string" },
+        course: { type: "string" },
+        kind: { type: "string" },
+        attachments: { type: "string" },
+        live: { type: "boolean", default: false },
         "allow-late": { type: "boolean", default: false },
         "period-start": { type: "string" },
         "period-end": { type: "string" },
@@ -502,7 +524,6 @@ async function main(argv: string[]): Promise<void> {
         profile: { type: "string" },
         sid: { type: "string" },
         "password-stdin": { type: "boolean", default: false },
-        live: { type: "boolean", default: false },
         output: { type: "string" },
         json: { type: "boolean", default: false },
         jsonl: { type: "boolean", default: false },
@@ -1808,8 +1829,97 @@ async function runContext(
   const calendar = await new CalendarClient().loadYear(year, calendarLevel(values["calendar-level"]));
   const level = contextLevel(values.level);
   const service = new ContextService();
-  const snapshot = service.build({ now: `${date}T12:00:00+08:00`, calendar }, level);
-  writeSuccess({ command: "context", data: service.toRecord(snapshot), text: service.toText(snapshot) }, output);
+  const live = values.live ? await loadLiveContext(date, values) : undefined;
+  const snapshot = service.build({
+    now: `${date}T12:00:00+08:00`,
+    calendar,
+    ...(live?.nextDeadline ? { nextDeadline: live.nextDeadline } : {}),
+  }, level);
+  const liveText = live ? formatContextLiveSources(live.liveSources) : [];
+  writeSuccess({
+    command: "context",
+    data: {
+      ...service.toRecord(snapshot),
+      ...(live ? { liveSources: live.liveSources } : {}),
+    },
+    text: [...snapshot.lines, ...liveText].join("\n"),
+    ...(live ? { meta: { liveSources: live.liveSources } } : {}),
+  }, output);
+}
+
+type ContextLiveSourceState = "provided" | "missing" | "partial" | "credentials-missing" | "error";
+
+interface ContextLiveSourceStatus {
+  state: ContextLiveSourceState;
+  generatedAt?: string;
+  failureCount?: number;
+  message?: string;
+}
+
+async function loadLiveContext(
+  date: string,
+  values: Values,
+): Promise<{ nextDeadline?: DeadlineSummary; liveSources: { blackboardDeadlines: ContextLiveSourceStatus } }> {
+  const now = new Date(`${date}T12:00:00+08:00`);
+  try {
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardDeadlines(adapter, { now });
+    const deadline = nextBlackboardDeadline(report);
+    return {
+      ...(deadline ? { nextDeadline: contextDeadlineSummary(deadline) } : {}),
+      liveSources: {
+        blackboardDeadlines: {
+          state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "missing",
+          generatedAt: report.generatedAt,
+          ...(report.failures.length > 0 ? { failureCount: report.failures.length, message: report.failures[0]?.message } : {}),
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof CliError && error.code === "CREDENTIALS_REQUIRED") {
+      return {
+        liveSources: {
+          blackboardDeadlines: {
+            state: "credentials-missing",
+            message,
+          },
+        },
+      };
+    }
+    return {
+      liveSources: {
+        blackboardDeadlines: {
+          state: "error",
+          message,
+        },
+      },
+    };
+  }
+}
+
+function contextDeadlineSummary(input: {
+  title: string;
+  courseCode: string;
+  courseName: string;
+  dueAt: string;
+  daysLeft: number;
+}): DeadlineSummary {
+  return {
+    name: `${input.courseCode} · ${input.title}`,
+    course: input.courseName || input.courseCode,
+    dueAt: input.dueAt,
+    daysLeft: input.daysLeft,
+  };
+}
+
+function formatContextLiveSources(sources: { blackboardDeadlines: ContextLiveSourceStatus }): string[] {
+  const details = [
+    `Blackboard deadlines: ${sources.blackboardDeadlines.state}`,
+    ...(sources.blackboardDeadlines.failureCount ? [`${sources.blackboardDeadlines.failureCount} failure(s)`] : []),
+    ...(sources.blackboardDeadlines.message ? [sources.blackboardDeadlines.message] : []),
+  ].join(" · ");
+  return [`Live sources: ${details}`];
 }
 
 function runResources(
@@ -2078,6 +2188,95 @@ async function runBlackboard(
       text: formatBlackboardAssignments(assignments),
       items: assignments,
       summary: { courseId, total: assignments.length },
+    }, output);
+    return;
+  }
+  if (command === "deadlines" && positionals.length === 2) {
+    const days = values.days === undefined ? undefined : parsePositiveInteger(values.days, 1, "--days");
+    const courseQuery = values.course?.trim() || undefined;
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardDeadlines(adapter, {
+      now: new Date(),
+      ...(days !== undefined ? { days } : {}),
+      ...(courseQuery ? { courseQuery } : {}),
+    });
+    writeSuccess({
+      command: "bb deadlines",
+      data: report,
+      text: formatBlackboardDeadlines(report),
+      items: report.deadlines,
+      summary: {
+        ...(days !== undefined ? { days } : {}),
+        ...(courseQuery ? { courseQuery } : {}),
+        coursesMatched: report.coursesMatched,
+        coursesScanned: report.coursesScanned,
+        total: report.deadlines.length,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
+  if (command === "search") {
+    const query = positionals.slice(2).join(" ").trim();
+    if (!query) throw usageError("A Blackboard search query is required.");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard search.");
+    const courseQuery = values.course?.trim() || undefined;
+    const kind = values.kind ? blackboardContentKind(values.kind) : undefined;
+    const attachments = blackboardSearchAttachmentMode(values.attachments);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await searchBlackboardContentTree(adapter, {
+      query,
+      ...(courseQuery ? { courseQuery } : {}),
+      ...(kind ? { kind } : {}),
+      attachments,
+      page,
+      pageSize,
+    });
+    writeSuccess({
+      command: "bb search",
+      data: report,
+      text: formatBlackboardSearch(report),
+      items: report.results,
+      summary: {
+        query,
+        page: report.page,
+        pageSize: report.pageSize,
+        totalMatches: report.totalMatches,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
+  if (command === "sync" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const destination = required(values.destination, "--destination");
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await syncBlackboardAttachments(adapter, {
+      courseId,
+      destination,
+      ...(values["content-id"] ? { contentId: opaqueToken(values["content-id"], "--content-id") } : {}),
+      overwrite: values.overwrite === true,
+    });
+    writeSuccess({
+      command: "bb sync",
+      data: report,
+      text: formatBlackboardSync(report),
+      items: report.files,
+      summary: {
+        courseId: report.courseId,
+        destination: report.destination,
+        plannedFiles: report.plannedFiles,
+        downloadedFiles: report.downloadedFiles,
+        partial: report.partial,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
     }, output);
     return;
   }
@@ -2984,6 +3183,20 @@ function ncesSort(value: string | undefined): "rating" | "reviews" | "name" {
   if (value === undefined || value === "rating") return "rating";
   if (value === "reviews" || value === "name") return value;
   throw usageError("--sort must be rating, reviews, or name for NCES.");
+}
+
+function blackboardContentKind(value: string): "file" | "folder" | "assignment" | "document" | "unknown" {
+  if (value === "file" || value === "folder" || value === "assignment" || value === "document" || value === "unknown") {
+    return value;
+  }
+  throw usageError("--kind must be file, folder, assignment, document, or unknown.");
+}
+
+function blackboardSearchAttachmentMode(value: string | undefined): "include" | "only" | "none" {
+  if (value === undefined || value === "none") return "none";
+  if (value === "include") return value;
+  if (value === "only" || value === "none") return value;
+  throw usageError("--attachments must be include, only, or none.");
 }
 
 function authServiceValue(value: string | undefined, fallback: AuthService = "tis"): AuthService {
