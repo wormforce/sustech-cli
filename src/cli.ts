@@ -281,7 +281,7 @@ Usage:
   sustech faculty get SLUG
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
-  sustech context [--date YYYY-MM-DD] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
+  sustech context [--date YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
   sustech profile show [--profile NAME] [--credentials-file PATH]
   sustech profile export --destination PATH [--overwrite] [--profile NAME] [--credentials-file PATH]
   sustech resources list [--category CATEGORY]
@@ -501,7 +501,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "academic snapshot diff": [],
   "faculty list": ["full", "limit"],
   "faculty search": ["department", "limit"],
-  context: ["date", "level", "live", "credentials-file"],
+  context: ["date", "calendar-level", "level", "live", "credentials-file"],
   "profile show": ["credentials-file", "profile"],
   "profile export": ["credentials-file", "profile", "destination", "overwrite"],
   "resources list": ["category"],
@@ -2555,7 +2555,7 @@ async function runContext(
 ): Promise<void> {
   if (positionals.length !== 1) throw usageError(`Unknown command: ${positionals.join(" ")}`);
   const date = isoDate(values.date ?? todayInShenzhen(), "--date");
-  const year = values.year === undefined ? Number(date.slice(0, 4)) : parsePositiveInteger(values.year, Number(date.slice(0, 4)), "--year");
+  const year = Number(date.slice(0, 4));
   const calendar = await new CalendarClient().loadYear(year, calendarLevel(values["calendar-level"]));
   const level = contextLevel(values.level);
   const service = new ContextService();
@@ -3391,7 +3391,7 @@ async function runBlackboard(
       throw new CliError(
         "The selected file no longer matches the reviewed preview hash. Re-run preview before submitting.",
         "BLACKBOARD_FILE_HASH_MISMATCH",
-        2,
+        4,
         {
           file: file.absolutePath,
           expectedSha256,
@@ -3992,7 +3992,7 @@ async function runPms(
       throw new CliError(
         "The selected file no longer matches the reviewed preview hash. Re-run preview before uploading.",
         "PMS_UPLOAD_FILE_HASH_MISMATCH",
-        2,
+        4,
         {
           file: file.absolutePath,
           expectedSha256,

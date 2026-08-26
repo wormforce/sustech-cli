@@ -4,9 +4,22 @@ import { homedir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { CliError } from "./errors.js";
 
-export function defaultConfigDirectory(): string {
-  const base = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), "Library", "Application Support");
-  return join(base, "sustech-cli");
+export interface ConfigDirectoryOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDirectory?: string;
+}
+
+export function defaultConfigDirectory(options: ConfigDirectoryOptions = {}): string {
+  const env = options.env ?? process.env;
+  const xdgConfigHome = env.XDG_CONFIG_HOME?.trim();
+  if (xdgConfigHome) return join(xdgConfigHome, "sustech-cli");
+  const platform = options.platform ?? process.platform;
+  const appData = env.APPDATA?.trim();
+  if (platform === "win32" && appData) return join(appData, "sustech-cli");
+  const userHome = options.homeDirectory ?? homedir();
+  if (platform === "darwin") return join(userHome, "Library", "Application Support", "sustech-cli");
+  return join(userHome, ".config", "sustech-cli");
 }
 
 export function resolveLocalDataPath(path: string | undefined, defaultFileName: string): string {

@@ -203,7 +203,7 @@ test("blackboard apply requires both the preview hash and explicit confirmation 
       "--confirm",
       "--json",
     ]);
-    assert.equal(mismatched.status, 2);
+    assert.equal(mismatched.status, 4);
     assert.equal(JSON.parse(mismatched.stdout).error.code, "BLACKBOARD_FILE_HASH_MISMATCH");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -659,8 +659,8 @@ test("selection and bid apply require --confirm before any credential lookup or 
   assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
-test("context live degrades gracefully when Blackboard credentials are unavailable", () => {
-  const result = runWithoutCredentials(["context", "--live", "--json"]);
+test("context live supports calendar level and degrades gracefully when credentials are unavailable", () => {
+  const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"]);
   assert.equal(result.status, 0);
   const envelope = JSON.parse(result.stdout);
   assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
@@ -752,7 +752,7 @@ test("PMS upload apply requires both the preview hash and explicit confirmation 
       "--confirm",
       "--json",
     ]);
-    assert.equal(mismatched.status, 2);
+    assert.equal(mismatched.status, 4);
     assert.equal(JSON.parse(mismatched.stdout).error.code, "PMS_UPLOAD_FILE_HASH_MISMATCH");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

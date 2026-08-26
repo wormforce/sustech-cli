@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { CliError } from "./errors.js";
+import { defaultConfigDirectory } from "./local-store.js";
 
 export const DEFAULT_CREDENTIAL_PROFILE = "default";
 export const SUSTECH_CREDENTIAL_SERVICE = "cn.edu.sustech.cli.cas";
@@ -678,12 +678,8 @@ function credentialConfigPath(options: CredentialStoreOptions): string {
 function credentialConfigDirectory(options: CredentialStoreOptions): string {
   if (options.configDir) return options.configDir;
   const env = options.env ?? process.env;
-  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, "sustech-cli");
   const platform = options.platform ?? process.platform;
-  if (platform === "win32" && env.APPDATA) return join(env.APPDATA, "sustech-cli");
-  const userHome = homedir();
-  if (platform === "darwin") return join(userHome, "Library", "Application Support", "sustech-cli");
-  return join(userHome, ".config", "sustech-cli");
+  return defaultConfigDirectory({ env, platform });
 }
 
 function isCredentialConfig(value: unknown): value is CredentialConfig {
