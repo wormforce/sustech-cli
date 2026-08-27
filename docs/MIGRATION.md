@@ -46,7 +46,7 @@ no real account mutation was attempted while completing this expansion.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-preview v0.6.0, guarded remote mutations include TIS enroll/cart/drop/bid,
+preview v0.7.0, guarded remote mutations include TIS enroll/cart/drop/bid,
 Blackboard submission, eHall and library booking create/cancel, and PMS queue
 upload/delete. They require an exact typed target, fresh preflight, explicit
 `--confirm`, and operation-specific read-back; an ambiguous result exits 5 with

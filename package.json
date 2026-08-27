@@ -1,6 +1,6 @@
 {
   "name": "sustech-cli",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
@@ -29,6 +29,7 @@
     "dist/wifi",
     "docs",
     "skills",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE",
     "NOTICE.md"

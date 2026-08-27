@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1",
+  "kind": "tis-degree-requirements",
+  "title": "Example CS Degree Requirements",
+  "requirements": [
+    {
+      "id": "cs-core",
+      "title": "CS Core",
+      "minCourses": 3,
+      "match": {
+        "codes": ["CS101", "CS102", "CS201"]
+      }
+    },
+    {
+      "id": "math-foundation",
+      "title": "Math Foundation",
+      "minCredits": 8,
+      "match": {
+        "prefixes": ["MA"],
+        "departments": ["数学系"]
+      }
+    },
+    {
+      "id": "ai-electives",
+      "title": "AI Electives",
+      "minCredits": 6,
+      "match": {
+        "prefixes": ["CS", "AI"],
+        "departments": ["计算机科学与工程系"],
+        "nameIncludes": ["machine learning", "人工智能", "机器学习"],
+        "minScore": 60
+      }
+    },
+    {
+      "id": "pe-pass",
+      "title": "PE",
+      "minCourses": 1,
+      "match": {
+        "codes": ["PE101", "PE102"],
+        "letterGrades": ["P", "PASS", "通过"]
+      }
+    }
+  ]
+}

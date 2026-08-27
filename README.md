@@ -10,7 +10,7 @@ JSONL are available for software. Python is not required at runtime.
 
 > [!WARNING]
 > This is an independent community project, not an official SUSTech service.
-> The npm `0.6.0` release is a preview, and `main` may contain additional
+> The npm `0.7.0` release is a preview, and `main` may contain additional
 > next-release work. Inspect `sustech version` and `sustech capabilities` on the
 > installed copy before relying on a command or allowing it to change state.
 
@@ -122,6 +122,9 @@ version's exact command, authentication, network, and confirmation metadata.
 | Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
 
+For the `tis degree audit` requirements-file format, matching semantics, and
+current runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
+
 Remote-state mutations are deliberately limited to these apply commands, all
 of which require an exact target plus `--confirm`:
 
@@ -160,7 +163,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.6.0",
+    "version": "0.7.0",
     "runtime": "node v22.19.0"
   }
 }

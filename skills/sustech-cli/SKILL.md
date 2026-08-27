@@ -68,6 +68,13 @@ Some useful routing hints:
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
+- For degree audits, require a user-supplied local JSON requirements file. Do
+  not invent an official curriculum, auto-resolve ambiguous course matches, or
+  present the CLI's conservative result as an official graduation decision.
+- Distinguish calendar export from subscription: `tis ical` produces a static
+  ICS snapshot. The CLI does not currently expose Blackboard's native shared
+  calendar URL. If the user obtains that URL in Blackboard, treat it as a
+  long-lived secret and do not echo or store it without explicit direction.
 - For room availability, distinguish catalog-backed `tis classroom *` from
   live `tis classroom live/now`.
 - `library search-url` is only a browser handoff; do not fabricate library
