@@ -17,7 +17,9 @@ const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.8\.3/);
+  assert.match(text.stdout, /:\*##: :#######:/);
+  assert.match(text.stdout, /sustech-cli 0\.8\.3/);
+  assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -27,6 +29,20 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     command: "version",
     data: { version: "0.8.3", runtime: `node ${process.version}` },
   });
+});
+
+test("bare invocation shows a local account dashboard while explicit help stays complete", () => {
+  const welcome = runWithoutCredentials([]);
+  assert.equal(welcome.status, 0);
+  assert.match(welcome.stdout, /:\*##: :#######:/);
+  assert.match(welcome.stdout, /Credentials  not configured/);
+  assert.match(welcome.stdout, /sustech auth login/);
+  assert.doesNotMatch(welcome.stdout, /Usage:/);
+
+  const help = run(["--help"]);
+  assert.equal(help.status, 0);
+  assert.doesNotMatch(help.stdout, /:\*##: :#######:/);
+  assert.match(help.stdout, /^sustech — SUSTech services/);
 });
 
 test("compiled CLI keeps parse and output-conflict errors machine-readable", () => {

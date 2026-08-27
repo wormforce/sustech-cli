@@ -20,9 +20,11 @@ import {
   shellQuote,
 } from "./cli-confirmations.js";
 import { inferCommandName } from "./core/argv.js";
+import { formatBrandArt, shouldUseBrandColor } from "./core/branding.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
 import { CONSEQUENCES, consequenceByOperation, formatConsequences } from "./core/consequences.js";
 import { resolveCredentials, type Credentials } from "./core/credentials.js";
+import { formatDashboard } from "./core/dashboard.js";
 import { CliError, ConfirmationRequiredError } from "./core/errors.js";
 import {
   DEFAULT_CREDENTIAL_PROFILE,
@@ -517,6 +519,11 @@ type Values = OutputFlags & {
 type AuthService = "tis" | "bb" | "ws" | "booking" | "lib-booking" | "pms";
 
 const SHARED_OUTPUT_OPTIONS = new Set(["output", "json", "jsonl", "pretty"]);
+
+function brandArt(): string {
+  return formatBrandArt(shouldUseBrandColor(process.stdout.isTTY));
+}
+
 const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "auth login": ["profile", "sid", "service", "password-stdin"],
   "auth status": ["profile"],
@@ -760,8 +767,19 @@ async function main(argv: string[]): Promise<void> {
     });
   }
   const values = parsed.values as Values;
-  if (values.help || parsed.positionals.length === 0) {
+  if (values.help) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (parsed.positionals.length === 0) {
+    const credentials = await getCredentialStatus(values.profile);
+    process.stdout.write(`${formatDashboard({
+      version: VERSION,
+      runtime: `node ${process.version}`,
+      credentials,
+      brandArt: brandArt(),
+      terminalColumns: process.stdout.isTTY ? process.stdout.columns : undefined,
+    })}\n`);
     return;
   }
   const output = resolveOutputOptions(values);
@@ -770,7 +788,11 @@ async function main(argv: string[]): Promise<void> {
 
   if (group === "version" && command === undefined) {
     const data = { version: VERSION, runtime: `node ${process.version}` };
-    writeSuccess({ command: "version", data, text: formatVersion(VERSION, data.runtime) }, output);
+    writeSuccess({
+      command: "version",
+      data,
+      text: `${brandArt()}\n\n${formatVersion(VERSION, data.runtime)}`,
+    }, output);
     return;
   }
   if (group === "capabilities" && command === undefined) {
