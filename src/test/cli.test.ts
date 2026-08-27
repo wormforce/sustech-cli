@@ -17,7 +17,7 @@ const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.8\.0/);
+  assert.match(text.stdout, /^sustech-cli 0\.8\.1/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -25,7 +25,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.8.0", runtime: `node ${process.version}` },
+    data: { version: "0.8.1", runtime: `node ${process.version}` },
   });
 });
 
@@ -221,6 +221,7 @@ test("context accepts calendar-level and help documents it", () => {
   const help = run(["--help"]);
   assert.equal(help.status, 0);
   assert.match(help.stdout, /sustech context \[--date YYYY-MM-DD\] \[--calendar-level undergraduate\|graduate\] \[--level terse\|normal\|verbose\] \[--live\] \[--credentials-file PATH\]/);
+  assert.match(help.stdout, /sustech tis degree missing \[--semester YYYY-YYYY-N\]/);
 });
 
 test("blackboard content attachment commands keep selection and local writes explicit", () => {
@@ -282,6 +283,11 @@ test("Blackboard calendar commands expose strict options without requiring crede
   assert.equal(wrongProgressOption.status, 2);
   assert.equal(JSON.parse(wrongProgressOption.stdout).command, "tis degree progress");
   assert.equal(JSON.parse(wrongProgressOption.stdout).error.code, "USAGE");
+
+  const wrongMissingOption = runWithoutCredentials(["tis", "degree", "missing", "--details", "--json"]);
+  assert.equal(wrongMissingOption.status, 2);
+  assert.equal(JSON.parse(wrongMissingOption.stdout).command, "tis degree missing");
+  assert.equal(JSON.parse(wrongMissingOption.stdout).error.code, "USAGE");
 });
 
 test("capabilities exposes safety metadata without requiring help-text parsing", () => {
@@ -315,6 +321,7 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const planSolve = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan solve");
   const degreeAudit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree audit");
   const degreeProgress = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree progress");
+  const degreeMissing = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree missing");
   const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
   const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
   const tisIcal = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis ical");
@@ -364,6 +371,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(degreeAudit.authentication, "tis");
   assert.equal(degreeProgress.kind, "read");
   assert.equal(degreeProgress.authentication, "tis");
+  assert.equal(degreeMissing.kind, "plan");
+  assert.equal(degreeMissing.authentication, "tis");
   assert.equal(snapshotSave.kind, "mutation");
   assert.equal(snapshotSave.authentication, "sustech-cas");
   assert.equal(snapshotSave.confirmation, "none");
@@ -543,6 +552,22 @@ test("degree-audit validates local requirements format before credential lookup"
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("degree-missing validates optional semester locally and otherwise requires TIS credentials", () => {
+  const invalidSemester = runWithoutCredentials([
+    "tis", "degree", "missing",
+    "--semester", "2026/2027/1",
+    "--json",
+  ]);
+  assert.equal(invalidSemester.status, 2);
+  assert.equal(JSON.parse(invalidSemester.stdout).command, "tis degree missing");
+  assert.equal(JSON.parse(invalidSemester.stdout).error.code, "INVALID_SEMESTER");
+
+  const missingCredentials = runWithoutCredentials(["tis", "degree", "missing", "--json"]);
+  assert.equal(missingCredentials.status, 2);
+  assert.equal(JSON.parse(missingCredentials.stdout).command, "tis degree missing");
+  assert.equal(JSON.parse(missingCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
 });
 
 test("academic snapshot CLI validates save destinations before auth and diffs verified files offline", () => {

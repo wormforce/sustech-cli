@@ -108,6 +108,7 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("tis ical", "Read TIS, Blackboard, and academic-calendar sources, then optionally write a guarded local iCalendar file to an explicit destination.", "mutation", { authentication: "selected-service", status: "preview" }),
   capability("tis timetable", "Solve non-conflicting section combinations locally after catalog fetch.", "plan", { authentication: "tis", status: "preview" }),
   capability("tis degree progress", "Read the authenticated student's TIS-reported cultivation-plan credits, category constraints, module gaps, and optional course details.", "read", { authentication: "tis", status: "preview" }),
+  capability("tis degree missing", "Derive a conservative graduation-gap report from TIS degree progress, grade history, and current enrolled courses.", "plan", { authentication: "tis", status: "preview" }),
   capability("tis degree audit", "Audit live grade records against a local JSON requirement file without auto-resolving ambiguous matches.", "plan", { authentication: "tis", status: "preview" }),
   capability("tis enroll preview", "Build an exact enrollment action without network or mutation.", "plan", { network: false, status: "preview" }),
   capability("tis selection preview", "Build typed enroll, drop, cart, or bid payloads without sending them, with optional exact RWH handoff for apply.", "plan", { network: false, status: "preview" }),

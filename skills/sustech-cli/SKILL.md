@@ -48,7 +48,8 @@ includes these high-value areas:
   `tis enrolled`, `tis schedule`, `tis grades`, `tis exams`,
   `tis timetable`, `tis plan init/show/add/remove/solve`,
   `tis classroom rooms/occupancy/free/live/now`, `tis evals`,
-  `tis ical`, `tis degree progress`, `tis degree audit`.
+  `tis ical`, `tis degree progress`, `tis degree missing`,
+  `tis degree audit`.
 - TIS writes: `tis selection preview/apply` for `cart`, `drop`, and `bid`
   style operations, `tis bid plan`, `tis bid apply`, `tis enroll preview`,
   `tis enroll apply`.
@@ -71,11 +72,13 @@ Some useful routing hints:
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
-- For “how close am I to graduation”, prefer `tis degree progress` for the
-  official personalized TIS result. `tis degree audit` requires a user-supplied
-  local JSON requirements file; do not invent an official curriculum,
-  auto-resolve ambiguous course matches, or present that conservative audit as
-  an official graduation decision.
+- For “how close am I to graduation”, use `tis degree progress` for the
+  official personalized TIS summary. For “which courses am I still missing”,
+  use `tis degree missing --json`, preserve its separation between definite
+  required courses, in-progress courses, choice gaps, and `manualReview`, and
+  never turn a choice gap into a unique course recommendation. `tis degree
+  audit` instead requires a user-supplied local JSON requirements file. None of
+  these commands is an official graduation decision.
 - Distinguish calendar export from subscription: `tis ical` produces a static
   ICS snapshot; `bb calendar` is an authenticated REST read; and
   `bb calendar-link` manages Blackboard's native shared ICS link, which is a

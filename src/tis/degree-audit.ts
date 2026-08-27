@@ -385,7 +385,7 @@ function evaluateGrade(grade: GradeRecord, requirements: readonly DegreeRequirem
   };
 }
 
-function classifyGradeCompletion(grade: GradeRecord): { completion: DegreeGradeCompletion; detail: string } {
+export function classifyGradeCompletion(grade: GradeRecord): { completion: DegreeGradeCompletion; detail: string } {
   if (grade.numericScore !== undefined) {
     return grade.numericScore >= 60
       ? { completion: "passed", detail: `numeric score ${grade.numericScore} indicates pass` }

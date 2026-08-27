@@ -96,14 +96,30 @@ post-submit read-back of both attempt status and filename. Existing in-progress
 attempts are not silently resumed. An uncertain write returns exit code 5 with
 `DO_NOT_RETRY_AUTOMATICALLY`; the CLI never falls back to the legacy HTML form.
 
+## TIS degree surfaces
+
+The degree commands intentionally expose three different levels of authority:
+
+- `tis degree progress` preserves the personalized result calculated by TIS.
+- `tis degree missing` is a derived planning report that joins progress,
+  grades, and current enrollment. It separates definite required-course gaps,
+  in-progress courses, elective/module deficits, and manual-review cases.
+- `tis degree audit` evaluates grades against a user-supplied local JSON rule
+  file and is not an official curriculum source.
+
+The missing-course evaluator fails conservatively: unknown grade tokens,
+conditional category notes, overlapping constraints, and unavailable secondary
+sources are surfaced for review instead of being converted into exact courses.
+
 ## Verification boundary
 
 The authenticated transports are covered by protocol/mock fixtures and
 request-guard logic. On 2026-08-26, opt-in read-only live smoke tests passed for
 TIS enrollment reads, Blackboard courses, WS programs, eHall rooms, and
 library-booking identity, summary, labs, and reservation count. Blackboard
-calendar-link storage/fetch and TIS degree progress are covered by dedicated
-fixtures, but no Blackboard write path was exercised.
+calendar-link storage/fetch, TIS degree progress, and the derived degree-missing
+classification are covered by dedicated fixtures, but no Blackboard write path
+was exercised.
 
 On 2026-08-27, fresh TIS and Blackboard CAS authentication instead encountered
 the interactive slide CAPTCHA. The CLI reports

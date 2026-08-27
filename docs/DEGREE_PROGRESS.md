@@ -33,13 +33,49 @@ If every downstream source returns no usable plan data, the command fails with
 `TIS_DEGREE_PROGRESS_NO_DATA` instead of presenting an empty object as official
 progress. Per-source failures remain visible in `sourceStatuses`.
 
+## One-command missing-course report
+
+`sustech tis degree missing` combines the official structured progress view,
+grade history, and the current enrolled-course list into one conservative
+advisory report:
+
+```bash
+sustech tis degree missing
+sustech tis degree missing --json --pretty
+sustech tis degree missing --semester 2026-2027-1 --json --pretty
+```
+
+The report separates four concepts that must not be collapsed:
+
+- `definiteMissingRequiredCourses` contains only plan rows explicitly marked
+  required for which no passing attempt is known and no matching current
+  enrollment was found;
+- `inProgressRequiredCourses` contains required courses currently enrolled,
+  which are not counted as completed before a passing result is posted;
+- `choiceGaps` preserves TIS credit-category and module deficits without
+  inventing a unique elective course choice;
+- `manualReview` contains unknown grades, conditional notes, overlapping
+  categories, source failures, and other cases the CLI intentionally refuses
+  to guess.
+
+When `--semester` is omitted, the CLI first asks TIS for its current term. It
+falls back to the date-derived semester only if that metadata is unavailable,
+and records the fallback in `manualReview` and `sourceStatuses`. Failures in
+the grade or current-enrollment source degrade the exact course classification
+instead of turning unknown courses into confirmed gaps.
+
+The JSON document has `kind: "tis-degree-missing"` and `schemaVersion: "1"`.
+It is a derived planning result, not an official graduation decision. Always
+inspect `manualReview` before treating an empty exact-course list as complete.
+
 ## Progress versus local audit
 
-`tis degree progress` and the existing local JSON command `tis degree audit`
-answer different questions:
+The three degree commands answer different questions:
 
 - `degree progress` reports the personalized result calculated by TIS from the
   student's assigned cultivation plan.
+- `degree missing` conservatively joins that result with grades and current
+  enrollment to classify exact required-course candidates and choice gaps.
 - `degree audit --requirements FILE` applies a user-maintained local JSON rules
   file to live grade records. It remains useful for proposed rules, offline
   checking, or curricula not represented correctly in TIS.
@@ -50,7 +86,7 @@ conditions, and free-text exceptions that the current flat audit schema cannot
 represent losslessly. The local audit is therefore a separate conservative tool,
 not a hidden serialization of the personalized TIS result.
 
-Neither command is a final graduation determination. Confirm unusual results in
+None of these commands is a final graduation determination. Confirm unusual results in
 TIS and with the Teaching Affairs office.
 
 ## Authentication note

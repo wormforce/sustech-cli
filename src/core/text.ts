@@ -2,6 +2,7 @@ import type { Semester } from "./semester.js";
 import type { StudentProfileReport } from "../profile/report.js";
 import type { TimetableResult } from "../tis/planner.js";
 import type { DegreeAuditResult } from "../tis/degree-audit.js";
+import type { TisDegreeMissing } from "../tis/degree-missing.js";
 import type { TisDegreeProgress } from "../tis/degree-progress.js";
 import type { TisPlanView } from "../tis/plan.js";
 import type { Course, ExamRecord, GpaSummary, GradeRecord, PersonalScheduleEntry } from "../tis/types.js";
@@ -314,6 +315,82 @@ export function formatDegreeProgress(progress: TisDegreeProgress): string {
   return lines.join("\n");
 }
 
+export function formatDegreeMissing(report: TisDegreeMissing): string {
+  const context = [
+    report.context.cohort ? `cohort ${report.context.cohort}` : "",
+    report.context.major,
+    report.officialSummary.majorTrack && report.officialSummary.majorTrack !== "无"
+      ? `track ${report.officialSummary.majorTrack}`
+      : "",
+  ].filter(Boolean).join(" · ");
+  const enrolled = report.enrolledSemester
+    ? `${report.enrolledSemester.value} via ${report.enrolledSemester.source}`
+    : "not checked";
+  const lines = [
+    `TIS degree missing${context ? ` · ${context}` : ""}`,
+    "Derived from official TIS degree progress, grade history, and enrolled-course matching; not a final graduation decision.",
+    `Official credits: ${progressRatio(report.officialSummary.completedCredits, report.officialSummary.requiredCredits, report.officialSummary.remainingCredits, "credits")}`,
+    `Official courses: ${progressRatio(report.officialSummary.completedCourses, report.officialSummary.requiredCourses, report.officialSummary.remainingCourses, "courses")}`,
+    `Sources: details ${report.sourceStatuses.progressDetails.state} · grades ${report.sourceStatuses.grades.state} · enrolled ${report.sourceStatuses.enrolled.state} (${enrolled})`,
+  ];
+
+  lines.push("", `Definite missing required courses (${report.definiteMissingRequiredCourses.length})`);
+  if (report.definiteMissingRequiredCourses.length === 0) {
+    lines.push("  (none identified from the available sources; inspect Manual review below)");
+  } else {
+    lines.push(...report.definiteMissingRequiredCourses.map((entry) => {
+      const extras = [
+        entry.credits !== undefined ? `${entry.credits} credits` : "",
+        entry.reason,
+        entry.latestAttempt ? formatAttempt(entry.latestAttempt) : "",
+      ].filter(Boolean).join(" · ");
+      return `  - ${formatCourseIdentity(entry.code, entry.name)}${extras ? ` · ${extras}` : ""}`;
+    }));
+  }
+
+  lines.push("", `Required courses currently in progress (${report.inProgressRequiredCourses.length})`);
+  if (report.inProgressRequiredCourses.length === 0) {
+    lines.push("  (none detected from the inspected enrollment source)");
+  } else {
+    lines.push(...report.inProgressRequiredCourses.map((entry) => {
+      const extras = [
+        entry.credits !== undefined ? `${entry.credits} credits` : "",
+        entry.reason,
+        entry.previousAttempt ? `previous ${formatAttempt(entry.previousAttempt)}` : "",
+      ].filter(Boolean).join(" · ");
+      return `  - ${formatCourseIdentity(entry.code, entry.name)}${extras ? ` · ${extras}` : ""}`;
+    }));
+  }
+
+  lines.push("", `Remaining category or module gaps (${report.choiceGaps.length})`);
+  if (report.choiceGaps.length === 0) {
+    lines.push("  (none reported)");
+  } else {
+    lines.push(...report.choiceGaps.map((entry) => {
+      const body = entry.scope === "credit-category"
+        ? progressRatio(entry.completedCredits, entry.requiredCredits, entry.remainingCredits, "credits")
+        : [
+            entry.remainingCredits !== undefined ? `${entry.remainingCredits} credits` : "",
+            entry.remainingCourses !== undefined ? `${entry.remainingCourses} courses` : "",
+            entry.remainingHours !== undefined ? `${entry.remainingHours} hours` : "",
+          ].filter(Boolean).join(", ");
+      return `  - [${entry.scope}] ${entry.name}${body ? ` · ${body}` : ""}${entry.note ? ` · ${entry.note}` : ""}`;
+    }));
+  }
+
+  lines.push("", `Manual review (${report.manualReview.length})`);
+  if (report.manualReview.length === 0) {
+    lines.push("  (none)");
+  } else {
+    lines.push(...report.manualReview.map((entry) => `  - ${entry.message}`));
+  }
+
+  if (report.warnings.length > 0) {
+    lines.push("", "Notes", ...report.warnings.map((warning) => `  - ${warning.message}`));
+  }
+  return lines.join("\n");
+}
+
 function formatProgressCredits(progress: TisDegreeProgress): string {
   const { completedCredits, requiredCredits, remainingCredits } = progress.summary;
   if (completedCredits === undefined && requiredCredits === undefined && remainingCredits === undefined) {
@@ -345,6 +422,18 @@ function progressRatio(
         : "";
   const gap = remaining !== undefined ? `${remaining} remaining` : "";
   return [ratio, gap].filter(Boolean).join(" · ") || "not returned";
+}
+
+function formatCourseIdentity(code: string | undefined, name: string | undefined): string {
+  if (code && name) return `${code} ${name}`;
+  return code || name || "Unnamed course";
+}
+
+function formatAttempt(attempt: { semester?: string; letterGrade?: string; numericScore?: number }): string {
+  const score = attempt.numericScore !== undefined ? String(attempt.numericScore) : "";
+  const grade = attempt.letterGrade || "";
+  const status = [grade, score].filter(Boolean).join("/");
+  return [attempt.semester, status].filter(Boolean).join(" ");
 }
 
 export function formatStudentProfile(

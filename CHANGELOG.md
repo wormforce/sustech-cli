@@ -2,6 +2,34 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [0.8.1] - 2026-08-27
+
+### Added
+
+- Added `tis degree missing`, a one-command advisory report derived from the
+  authenticated student's structured TIS degree progress, grade history, and
+  current enrollment.
+- Added explicit result groups for definite missing required courses,
+  in-progress required courses, category/module choice gaps, and manual-review
+  cases.
+
+### Changed
+
+- Current enrollment defaults to TIS current-term metadata, with an explicit
+  date-based fallback status and optional `--semester` override.
+- Unknown grades, conditional notes, overlapping requirements, and unavailable
+  secondary sources now remain unresolved instead of being forced into an
+  exact missing-course list.
+- Updated the repository skill and degree-progress documentation to route
+  exact-course questions to the new command while preserving the authority
+  boundary between TIS progress, derived guidance, and local JSON audits.
+
+### Notes
+
+- The classifier is covered by fixtures for retakes, current enrollment,
+  name fallback, unknown results, and partial sources. Fresh live TIS QA remains
+  subject to the interactive CAS challenge described in the 0.8.0 notes.
+
 ## [0.8.0] - 2026-08-27
 
 ### Added

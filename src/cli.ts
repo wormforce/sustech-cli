@@ -77,6 +77,7 @@ import {
   formatEnrollSuccess,
   formatExams,
   formatDegreeAudit,
+  formatDegreeMissing,
   formatDegreeProgress,
   formatGrades,
   formatScheduleEntries,
@@ -89,6 +90,7 @@ import { auditDegreeRequirements, loadDegreeRequirements } from "./tis/degree-au
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
 import { TisClient, type TisSelectionState } from "./tis/client.js";
+import { deriveTisDegreeMissing } from "./tis/degree-missing.js";
 import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
 import { addPlanEntries, createPlanDocument, loadPlan, removePlanEntries, savePlan } from "./tis/plan.js";
 import {
@@ -377,6 +379,7 @@ Usage:
   sustech tis evals [--semester YYYY-YYYY-N] [--status all|pending|draft|submitted]
   sustech tis ical [--include schedule|exams|deadlines|holidays ...] [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--calendar-name NAME] [--destination PATH [--overwrite]]
   sustech tis degree progress [--details]
+  sustech tis degree missing [--semester YYYY-YYYY-N]
   sustech tis degree audit --requirements FILE [--semester YYYY-YYYY-N]
   sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
   sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
@@ -622,6 +625,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
   "tis degree audit": ["credentials-file", "semester", "requirements"],
   "tis degree progress": ["credentials-file", "details"],
+  "tis degree missing": ["credentials-file", "semester"],
   "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
   "tis selection preview": ["semester", "course-id", "rwh", "round", "bid", "where", "cultivation"],
   "tis selection apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "where", "cultivation", "confirm"],
@@ -1862,6 +1866,29 @@ async function main(argv: string[]): Promise<void> {
       meta: {
         sourceStatuses: progress.sourceStatuses,
         warnings: progress.warnings,
+      },
+    }, output);
+    return;
+  }
+  if (command === "degree" && operation === "missing" && parsed.positionals.length === 3) {
+    const semester = values.semester ? parseSemester(values.semester) : undefined;
+    const client = await tisClient(values);
+    const report = await deriveTisDegreeMissing(client, { semester });
+    writeSuccess({
+      command: "tis degree missing",
+      data: report,
+      text: formatDegreeMissing(report),
+      summary: {
+        definiteMissingRequiredCourses: report.counts.definiteMissingRequiredCourses,
+        inProgressRequiredCourses: report.counts.inProgressRequiredCourses,
+        choiceGaps: report.counts.choiceGaps,
+        manualReview: report.counts.manualReview,
+        ...(report.officialSummary.remainingCredits !== undefined ? { remainingCredits: report.officialSummary.remainingCredits } : {}),
+        ...(report.officialSummary.remainingCourses !== undefined ? { remainingCourses: report.officialSummary.remainingCourses } : {}),
+      },
+      meta: {
+        sourceStatuses: report.sourceStatuses,
+        warnings: report.warnings,
       },
     }, output);
     return;

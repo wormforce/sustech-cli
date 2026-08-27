@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentSemester, parseSemester } from "../core/semester.js";
+import { currentSemester, parseSemester, semesterFromCurrentTerm } from "../core/semester.js";
 import { buildWritePayload } from "../tis/client.js";
 import { normaliseCourse, parseScheduleLine } from "../tis/normalise.js";
 
@@ -20,6 +20,24 @@ test("currentSemester follows the SUSTech fall, spring, summer term convention",
     xq: "3",
     value: "2025-2026-3",
   });
+});
+
+test("semesterFromCurrentTerm accepts exact TIS current-term fields and rejects malformed values", () => {
+  assert.deepEqual(
+    semesterFromCurrentTerm({ p_dqxn: "2026-2027", p_dqxq: "1" }),
+    { xn: "2026-2027", xq: "1", value: "2026-2027-1" },
+  );
+  assert.deepEqual(
+    semesterFromCurrentTerm({ DQXN: "2025-2026", DQXQ: "3" }),
+    { xn: "2025-2026", xq: "3", value: "2025-2026-3" },
+  );
+  assert.throws(
+    () => semesterFromCurrentTerm({ p_dqxn: "2026/2027", p_dqxq: "fall" }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "TIS_CURRENT_TERM_INVALID");
+      return true;
+    },
+  );
 });
 
 test("normaliseCourse emits Agent-ready schedule data without leaking kcxx HTML", () => {
