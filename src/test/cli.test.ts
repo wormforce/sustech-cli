@@ -210,6 +210,19 @@ test("blackboard apply requires both the preview hash and explicit confirmation 
   }
 });
 
+test("context accepts calendar-level and help documents it", () => {
+  const invalid = run(["context", "--calendar-level", "doctoral", "--json"]);
+  assert.equal(invalid.status, 2);
+  const envelope = JSON.parse(invalid.stdout);
+  assert.equal(envelope.command, "context");
+  assert.equal(envelope.error.code, "USAGE");
+  assert.match(envelope.error.message, /--calendar-level must be undergraduate or graduate/);
+
+  const help = run(["--help"]);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /sustech context \[--date YYYY-MM-DD\] \[--calendar-level undergraduate\|graduate\] \[--level terse\|normal\|verbose\] \[--live\] \[--credentials-file PATH\]/);
+});
+
 test("blackboard content attachment commands keep selection and local writes explicit", () => {
   const list = runWithoutCredentials(["bb", "attachments", "_8537_1", "_629896_1", "--json"]);
   assert.equal(list.status, 2);
