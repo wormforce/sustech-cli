@@ -43,7 +43,12 @@ import {
   type OutputFlags,
   type OutputOptions,
 } from "./core/output.js";
-import { promptHiddenPassword, promptLoginSid, readPasswordFromStdin } from "./core/prompt.js";
+import {
+  promptHiddenPassword,
+  promptLoginSid,
+  readCalendarLinkFromStdin,
+  readPasswordFromStdin,
+} from "./core/prompt.js";
 import { parseSemester, type Semester } from "./core/semester.js";
 import { CLI_VERSION } from "./core/version.js";
 import { AcademicCalendar, CalendarClient } from "./calendar/client.js";
@@ -72,6 +77,7 @@ import {
   formatEnrollSuccess,
   formatExams,
   formatDegreeAudit,
+  formatDegreeProgress,
   formatGrades,
   formatScheduleEntries,
   formatTisPlan,
@@ -167,6 +173,7 @@ import {
   getWsProgramDetail,
   getWsToken,
   listBlackboardAssignments,
+  listBlackboardCalendarItems,
   listBlackboardDeadlines,
   listBlackboardContentAttachments,
   listBlackboardAttemptFiles,
@@ -204,8 +211,14 @@ import {
   uploadBlackboardTemporaryFile,
   verifyPmsPrintDeletion,
   verifyPmsPrintUpload,
+  deleteBlackboardCalendarLink,
+  fetchBlackboardCalendarFeed,
+  fetchStoredBlackboardCalendarFeed,
+  loadBlackboardCalendarLink,
+  saveBlackboardCalendarLink,
   type BlackboardAttempt,
   type BlackboardAttemptFile,
+  type BlackboardCalendarItemType,
   type BlackboardDeadline,
   type BlackboardSubmissionFile,
   type BlackboardSubmissionPreflight as BlackboardSubmissionAssessment,
@@ -221,6 +234,7 @@ import {
   formatBookingProfile,
   formatBookingRooms,
   formatBlackboardAssignments,
+  formatBlackboardCalendar,
   formatBlackboardAttachmentDownload,
   formatBlackboardAttachments,
   formatBlackboardAttempts,
@@ -301,6 +315,11 @@ Usage:
   sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite]
   sustech bb assignments COURSE_ID
   sustech bb deadlines [--days N] [--course QUERY]
+  sustech bb calendar [--since ISO-DATETIME] [--until ISO-DATETIME] [--type Course|GradebookColumn|Institution|OfficeHours|Personal] [--course-id COURSE_ID]
+  sustech bb calendar-link set --url-stdin [--profile NAME]
+  sustech bb calendar-link show [--reveal] [--profile NAME]
+  sustech bb calendar-link fetch [--destination PATH [--overwrite]] [--profile NAME]
+  sustech bb calendar-link delete [--profile NAME]
   sustech bb search QUERY [--course QUERY] [--kind file|folder|assignment|document|unknown] [--attachments include|only|none] [--page N] [--page-size N]
   sustech bb sync COURSE_ID --destination DIR [--content-id CONTENT_ID] [--overwrite]
   sustech bb attempts COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] [--status InProgress|NeedsGrading|Completed]
@@ -357,6 +376,7 @@ Usage:
   sustech tis classroom now ROOM [--semester YYYY-YYYY-N]
   sustech tis evals [--semester YYYY-YYYY-N] [--status all|pending|draft|submitted]
   sustech tis ical [--include schedule|exams|deadlines|holidays ...] [--semester YYYY-YYYY-N] [--week-one-monday YYYY-MM-DD|--teaching-start YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--calendar-name NAME] [--destination PATH [--overwrite]]
+  sustech tis degree progress [--details]
   sustech tis degree audit --requirements FILE [--semester YYYY-YYYY-N]
   sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
   sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
@@ -476,6 +496,11 @@ type Values = OutputFlags & {
   "password-stdin"?: boolean;
   path?: string;
   requirements?: string;
+  details?: boolean;
+  since?: string;
+  until?: string;
+  "url-stdin"?: boolean;
+  reveal?: boolean;
   "include-blackboard"?: boolean;
   "early-period-threshold"?: string;
   "weight-early-session"?: string;
@@ -517,6 +542,11 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "bb download": ["credentials-file", "destination", "overwrite"],
   "bb assignments": ["credentials-file"],
   "bb deadlines": ["credentials-file", "days", "course"],
+  "bb calendar": ["credentials-file", "course-id", "type", "since", "until"],
+  "bb calendar-link set": ["profile", "url-stdin"],
+  "bb calendar-link show": ["profile", "reveal"],
+  "bb calendar-link fetch": ["profile", "destination", "overwrite"],
+  "bb calendar-link delete": ["profile"],
   "bb search": ["credentials-file", "course", "kind", "attachments", "page", "page-size"],
   "bb sync": ["credentials-file", "content-id", "destination", "overwrite"],
   "bb attempts": ["credentials-file", "content-id", "column-id", "status"],
@@ -591,6 +621,7 @@ const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-level", "calendar-name", "include", "destination", "overwrite"],
   "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
   "tis degree audit": ["credentials-file", "semester", "requirements"],
+  "tis degree progress": ["credentials-file", "details"],
   "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
   "tis selection preview": ["semester", "course-id", "rwh", "round", "bid", "where", "cultivation"],
   "tis selection apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "where", "cultivation", "confirm"],
@@ -700,6 +731,11 @@ async function main(argv: string[]): Promise<void> {
         "password-stdin": { type: "boolean", default: false },
         path: { type: "string" },
         requirements: { type: "string" },
+        details: { type: "boolean", default: false },
+        since: { type: "string" },
+        until: { type: "string" },
+        "url-stdin": { type: "boolean", default: false },
+        reveal: { type: "boolean", default: false },
         "include-blackboard": { type: "boolean", default: false },
         "early-period-threshold": { type: "string" },
         "weight-early-session": { type: "string" },
@@ -1803,6 +1839,30 @@ async function main(argv: string[]): Promise<void> {
       data: { ...(semester ? { semester } : {}), requirementsPath, ...audit },
       text: formatDegreeAudit(audit, requirementsPath),
       meta: { requirementsPath },
+    }, output);
+    return;
+  }
+  if (command === "degree" && operation === "progress" && parsed.positionals.length === 3) {
+    const client = await tisClient(values);
+    const progress = await client.degreeProgress({ details: values.details === true });
+    writeSuccess({
+      command: "tis degree progress",
+      data: progress,
+      text: formatDegreeProgress(progress),
+      ...(progress.detailsIncluded && progress.courses ? { items: progress.courses } : {}),
+      summary: {
+        dataAvailable: progress.dataAvailable,
+        detailsRequested: progress.detailsRequested,
+        detailsIncluded: progress.detailsIncluded,
+        creditCategories: progress.creditCategories.length,
+        moduleGaps: progress.moduleGaps.length,
+        ...(progress.courseCount !== undefined ? { courseCount: progress.courseCount } : {}),
+        ...progress.summary,
+      },
+      meta: {
+        sourceStatuses: progress.sourceStatuses,
+        warnings: progress.warnings,
+      },
     }, output);
     return;
   }
@@ -3172,6 +3232,99 @@ async function runBlackboard(
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
   const command = positionals[1];
+  if (command === "calendar-link" && positionals.length === 3) {
+    const operation = positionals[2];
+    if (operation === "set") {
+      if (values["url-stdin"] !== true) {
+        throw usageError("bb calendar-link set requires --url-stdin so the private feed token is not placed in shell history.");
+      }
+      const url = await readCalendarLinkFromStdin();
+      const verified = await fetchBlackboardCalendarFeed(url);
+      const saved = await saveBlackboardCalendarLink({ profile: values.profile, url });
+      writeSuccess({
+        command: "bb calendar-link set",
+        data: {
+          ...saved,
+          verified: true,
+          feedSize: verified.size,
+          contentType: verified.contentType,
+        },
+        text: [
+          "Blackboard calendar subscription saved in the operating-system credential store.",
+          `Profile: ${saved.profile}`,
+          `Link: ${saved.maskedUrl}`,
+          `Verified feed: ${verified.size} bytes · ${verified.contentType}`,
+          "Treat the subscription link as a password; it grants calendar access without CAS login.",
+        ].join("\n"),
+      }, output);
+      return;
+    }
+    if (operation === "show") {
+      const stored = await loadBlackboardCalendarLink(values.profile);
+      const reveal = values.reveal === true;
+      writeSuccess({
+        command: "bb calendar-link show",
+        data: {
+          profile: stored.profile,
+          backend: stored.backend,
+          maskedUrl: stored.maskedUrl,
+          revealed: reveal,
+          ...(reveal ? { url: stored.url } : {}),
+        },
+        text: [
+          `Blackboard calendar subscription · ${stored.profile}`,
+          reveal ? stored.url : stored.maskedUrl,
+          reveal
+            ? "Private link revealed by explicit request. Do not share or log it."
+            : "Masked by default. Pass --reveal only when the full private link is required.",
+        ].join("\n"),
+      }, output);
+      return;
+    }
+    if (operation === "fetch") {
+      const feed = await fetchStoredBlackboardCalendarFeed({ profile: values.profile });
+      if (values.destination) {
+        const written = await writeIcsFile(feed.content, values.destination, { overwrite: values.overwrite === true });
+        writeSuccess({
+          command: "bb calendar-link fetch",
+          data: {
+            profile: feed.profile,
+            maskedUrl: feed.maskedUrl,
+            contentType: feed.contentType,
+            redirects: feed.redirects,
+            ...written,
+          },
+          text: [
+            "Blackboard calendar subscription fetched.",
+            `Profile: ${feed.profile ?? "default"}`,
+            `Link: ${feed.maskedUrl}`,
+            `Saved to: ${written.destination}`,
+            `Size: ${written.size} bytes`,
+            `SHA-256: ${written.sha256}`,
+            `Overwritten: ${written.overwritten ? "yes" : "no"}`,
+          ].join("\n"),
+        }, output);
+      } else {
+        writeSuccess({
+          command: "bb calendar-link fetch",
+          data: feed,
+          text: feed.content,
+        }, output);
+      }
+      return;
+    }
+    if (operation === "delete") {
+      const removed = await deleteBlackboardCalendarLink(values.profile);
+      writeSuccess({
+        command: "bb calendar-link delete",
+        data: removed,
+        text: removed.removed
+          ? `Blackboard calendar subscription removed from profile ${removed.profile}.`
+          : `No Blackboard calendar subscription was stored for profile ${removed.profile}.`,
+      }, output);
+      return;
+    }
+  }
   if (command === "submit" && positionals[2] === "preview" && positionals.length === 3) {
     const target = blackboardSubmissionTarget(values);
     const file = await inspectBlackboardSubmissionFile(required(values.file, "--file"));
@@ -3288,6 +3441,36 @@ async function runBlackboard(
         coursesMatched: report.coursesMatched,
         coursesScanned: report.coursesScanned,
         total: report.deadlines.length,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
+  if (command === "calendar" && positionals.length === 2) {
+    const type = blackboardCalendarItemType(values.type);
+    const courseId = values["course-id"]
+      ? opaqueToken(values["course-id"], "--course-id")
+      : undefined;
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardCalendarItems(adapter, {
+      ...(values.since ? { since: values.since } : {}),
+      ...(values.until ? { until: values.until } : {}),
+      ...(type ? { type } : {}),
+      ...(courseId ? { courseId } : {}),
+    });
+    writeSuccess({
+      command: "bb calendar",
+      data: report,
+      text: formatBlackboardCalendar(report),
+      items: report.items,
+      summary: {
+        since: report.since,
+        until: report.until,
+        ...(report.type ? { type: report.type } : {}),
+        ...(report.courseId ? { courseId: report.courseId } : {}),
+        total: report.totalItems,
+        partial: report.partial,
         failures: report.failures.length,
       },
       ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
@@ -4962,6 +5145,23 @@ function blackboardContentKind(value: string): "file" | "folder" | "assignment" 
     return value;
   }
   throw usageError("--kind must be file, folder, assignment, document, or unknown.");
+}
+
+function blackboardCalendarItemType(value: string | undefined): BlackboardCalendarItemType | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  const types: Readonly<Record<string, BlackboardCalendarItemType>> = {
+    course: "Course",
+    gradebookcolumn: "GradebookColumn",
+    institution: "Institution",
+    officehours: "OfficeHours",
+    personal: "Personal",
+  };
+  const type = types[normalized];
+  if (!type) {
+    throw usageError("--type must be Course, GradebookColumn, Institution, OfficeHours, or Personal.");
+  }
+  return type;
 }
 
 function blackboardSearchAttachmentMode(value: string | undefined): "include" | "only" | "none" {

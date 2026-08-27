@@ -8,6 +8,7 @@ import { defaultConfigDirectory } from "./local-store.js";
 
 export const DEFAULT_CREDENTIAL_PROFILE = "default";
 export const SUSTECH_CREDENTIAL_SERVICE = "cn.edu.sustech.cli.cas";
+export const BLACKBOARD_CALENDAR_LINK_SERVICE = "cn.edu.sustech.cli.bb-calendar-link";
 
 export type CredentialBackend =
   | "macos-keychain"
@@ -74,6 +75,21 @@ interface BackendResolution extends CredentialBackendStatus {
   store?: SecretStore;
 }
 
+interface SecretNamespace {
+  service: string;
+  linuxLabel: string;
+}
+
+const CREDENTIAL_SECRET_NAMESPACE: SecretNamespace = {
+  service: SUSTECH_CREDENTIAL_SERVICE,
+  linuxLabel: "SUSTech CLI CAS",
+};
+
+const BLACKBOARD_CALENDAR_LINK_NAMESPACE: SecretNamespace = {
+  service: BLACKBOARD_CALENDAR_LINK_SERVICE,
+  linuxLabel: "SUSTech CLI Blackboard calendar",
+};
+
 export async function loadStoredCredentials(
   requestedProfile?: string,
   options: CredentialStoreOptions = {},
@@ -90,13 +106,13 @@ export async function loadStoredCredentials(
     );
   }
 
-  const resolution = await resolveBackend(options);
+  const resolution = await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
   const store = requireMatchingStore(resolution, stored.backend);
   let password: string | undefined;
   try {
     password = await store.get(stored.account);
   } catch (error) {
-    throw credentialStoreError("read", store.backend, error);
+    throw storeAccessError("credentials", "read", store.backend, error);
   }
   if (!password) {
     throw new CliError(
@@ -128,7 +144,7 @@ export async function saveStoredCredentials(
     );
   }
 
-  const resolution = await resolveBackend(options);
+  const resolution = await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
   const store = requireAvailableStore(resolution);
   if (existing && existing.backend !== store.backend) {
     throw new CliError(
@@ -145,7 +161,7 @@ export async function saveStoredCredentials(
     previousPassword = await store.get(account);
     await store.set(account, password);
   } catch (error) {
-    throw credentialStoreError("write", store.backend, error);
+    throw storeAccessError("credentials", "write", store.backend, error);
   }
 
   const next: CredentialConfig = {
@@ -180,7 +196,7 @@ export async function deleteStoredCredentials(
   const existing = config.profiles[profile];
   if (!existing) return { profile, removed: false, backend: "unavailable" };
 
-  const resolution = await resolveBackend(options);
+  const resolution = await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
   const store = requireMatchingStore(resolution, existing.backend);
   let previousPassword: string | undefined;
   try {
@@ -193,7 +209,7 @@ export async function deleteStoredCredentials(
       throw new Error("Credential deletion could not be verified.");
     }
   } catch (error) {
-    throw credentialStoreError("delete", store.backend, error);
+    throw storeAccessError("credentials", "delete", store.backend, error);
   }
 
   const profiles = { ...config.profiles };
@@ -222,7 +238,7 @@ export async function getCredentialStatus(
   const profile = selectedProfile(requestedProfile, options.env);
   const stored = config.profiles[profile];
   const profiles = Object.keys(config.profiles).sort();
-  const resolution = await resolveBackend(options);
+  const resolution = await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
   if (!stored) {
     return {
       profile,
@@ -286,8 +302,66 @@ export async function getCredentialStatus(
 export async function getCredentialBackendStatus(
   options: CredentialStoreOptions = {},
 ): Promise<CredentialBackendStatus> {
-  const { store: _store, ...status } = await resolveBackend(options);
+  const { store: _store, ...status } = await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
   return status;
+}
+
+export async function loadStoredBlackboardCalendarLink(
+  requestedProfile?: string,
+  options: CredentialStoreOptions = {},
+): Promise<{ profile: string; url: string; backend: CredentialBackend }> {
+  const profile = selectedProfile(requestedProfile, options.env);
+  const resolution = await resolveBackendForNamespace(options, BLACKBOARD_CALENDAR_LINK_NAMESPACE);
+  const store = requireAvailableStore(resolution);
+  let url: string | undefined;
+  try {
+    url = await store.get(profileSecretAccount(profile));
+  } catch (error) {
+    throw storeAccessError("Blackboard calendar link", "read", store.backend, error);
+  }
+  if (!url) {
+    throw new CliError(
+      `Blackboard calendar link profile '${profile}' is not configured.`,
+      "BLACKBOARD_CALENDAR_LINK_NOT_FOUND",
+      2,
+      { profile },
+    );
+  }
+  return { profile, url, backend: store.backend };
+}
+
+export async function saveStoredBlackboardCalendarLink(
+  input: { profile?: string; url: string },
+  options: CredentialStoreOptions = {},
+): Promise<{ profile: string; backend: CredentialBackend; persistent: true }> {
+  const profile = validateProfileName(input.profile ?? DEFAULT_CREDENTIAL_PROFILE);
+  const url = validateStoredSecret(input.url, "Calendar link", "INVALID_BLACKBOARD_CALENDAR_LINK");
+  const resolution = await resolveBackendForNamespace(options, BLACKBOARD_CALENDAR_LINK_NAMESPACE);
+  const store = requireAvailableStore(resolution);
+  try {
+    await store.set(profileSecretAccount(profile), url);
+  } catch (error) {
+    throw storeAccessError("Blackboard calendar link", "write", store.backend, error);
+  }
+  return { profile, backend: store.backend, persistent: true };
+}
+
+export async function deleteStoredBlackboardCalendarLink(
+  requestedProfile?: string,
+  options: CredentialStoreOptions = {},
+): Promise<{ profile: string; removed: boolean; backend: CredentialBackend | "unavailable" }> {
+  const profile = selectedProfile(requestedProfile, options.env);
+  const resolution = await resolveBackendForNamespace(options, BLACKBOARD_CALENDAR_LINK_NAMESPACE);
+  const store = requireAvailableStore(resolution);
+  try {
+    const removed = await store.delete(profileSecretAccount(profile));
+    if (removed && await store.get(profileSecretAccount(profile)) !== undefined) {
+      throw new Error("Secret deletion could not be verified.");
+    }
+    return { profile, removed, backend: store.backend };
+  } catch (error) {
+    throw storeAccessError("Blackboard calendar link", "delete", store.backend, error);
+  }
 }
 
 export function validateProfileName(value: string): string {
@@ -308,14 +382,7 @@ export function maskSid(value: string): string {
 }
 
 export function validateCredentialPassword(value: string): string {
-  if (!value || /[\r\n]/.test(value) || Buffer.byteLength(value, "utf8") > 16 * 1024) {
-    throw new CliError(
-      "Password must be one non-empty line no larger than 16 KiB.",
-      "INVALID_CREDENTIAL_PASSWORD",
-      2,
-    );
-  }
-  return value;
+  return validateStoredSecret(value, "Password", "INVALID_CREDENTIAL_PASSWORD");
 }
 
 export function validateCredentialSid(value: string): string {
@@ -340,6 +407,13 @@ function selectedProfile(
 }
 
 async function resolveBackend(options: CredentialStoreOptions): Promise<BackendResolution> {
+  return await resolveBackendForNamespace(options, CREDENTIAL_SECRET_NAMESPACE);
+}
+
+async function resolveBackendForNamespace(
+  options: CredentialStoreOptions,
+  namespace: SecretNamespace,
+): Promise<BackendResolution> {
   if (options.store) {
     return {
       backend: options.store.backend,
@@ -349,9 +423,9 @@ async function resolveBackend(options: CredentialStoreOptions): Promise<BackendR
     };
   }
   const platform = options.platform ?? process.platform;
-  if (platform === "darwin") return await resolveMacosKeychain(options.env);
-  if (platform === "win32") return await resolveWindowsCredentialManager();
-  if (platform === "linux") return await resolveLinuxSecretService(options.env);
+  if (platform === "darwin") return await resolveMacosKeychain(options.env, namespace);
+  if (platform === "win32") return await resolveWindowsCredentialManager(namespace);
+  if (platform === "linux") return await resolveLinuxSecretService(options.env, namespace);
   return {
     backend: "unavailable",
     available: false,
@@ -361,7 +435,10 @@ async function resolveBackend(options: CredentialStoreOptions): Promise<BackendR
   };
 }
 
-async function resolveMacosKeychain(customEnv?: NodeJS.ProcessEnv): Promise<BackendResolution> {
+async function resolveMacosKeychain(
+  customEnv: NodeJS.ProcessEnv | undefined,
+  namespace: SecretNamespace,
+): Promise<BackendResolution> {
   const backend = "macos-keychain" as const;
   const executable = "/usr/bin/security";
   const env = customEnv ?? process.env;
@@ -369,22 +446,22 @@ async function resolveMacosKeychain(customEnv?: NodeJS.ProcessEnv): Promise<Back
     await access(executable, constants.X_OK);
     const { AsyncEntry } = await import("@napi-rs/keyring");
     // Construction initializes the native Security-framework store without reading or writing a credential.
-    new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, "availability-probe");
+    new AsyncEntry(namespace.service, "availability-probe");
     const store: SecretStore = {
       backend,
       persistent: true,
       async get(account) {
-        const password = await new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, account).getPassword() ?? undefined;
+        const password = await new AsyncEntry(namespace.service, account).getPassword() ?? undefined;
         if (password !== undefined) return password;
-        if (!await macosCredentialExists(executable, account, env)) return undefined;
+        if (!await macosCredentialExists(executable, namespace.service, account, env)) return undefined;
         throw new Error("macOS Keychain item exists, but its secret could not be read.");
       },
       async set(account, password) {
-        await new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, account).setPassword(password);
+        await new AsyncEntry(namespace.service, account).setPassword(password);
       },
       async delete(account) {
-        const deleted = await new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, account).deleteCredential();
-        if (await macosCredentialExists(executable, account, env)) {
+        const deleted = await new AsyncEntry(namespace.service, account).deleteCredential();
+        if (await macosCredentialExists(executable, namespace.service, account, env)) {
           throw new Error("macOS Keychain delete could not be verified.");
         }
         return deleted;
@@ -404,11 +481,12 @@ async function resolveMacosKeychain(customEnv?: NodeJS.ProcessEnv): Promise<Back
 
 async function macosCredentialExists(
   executable: string,
+  service: string,
   account: string,
   env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
   const result = await runCredentialCommand(executable, [
-    "find-generic-password", "-s", SUSTECH_CREDENTIAL_SERVICE, "-a", account,
+    "find-generic-password", "-s", service, "-a", account,
   ], undefined, env);
   if (macosItemNotFound(result)) return false;
   if (result.code !== 0) throw new Error("macOS Keychain metadata lookup failed.");
@@ -420,25 +498,25 @@ function macosItemNotFound(result: { code: number; stderr: string }): boolean {
     && /(?:specified item could not be found|errSecItemNotFound|-25300)/i.test(result.stderr);
 }
 
-async function resolveWindowsCredentialManager(): Promise<BackendResolution> {
+async function resolveWindowsCredentialManager(namespace: SecretNamespace): Promise<BackendResolution> {
   const backend = "windows-credential-manager" as const;
   try {
     const { AsyncEntry, findCredentialsAsync } = await import("@napi-rs/keyring");
-    new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, "availability-probe");
+    new AsyncEntry(namespace.service, "availability-probe");
     const store: SecretStore = {
       backend,
       persistent: true,
       async get(account) {
-        const matches = (await findCredentialsAsync(SUSTECH_CREDENTIAL_SERVICE))
+        const matches = (await findCredentialsAsync(namespace.service))
           .filter((credential) => credential.account === account);
         if (matches.length > 1) throw new Error("Windows Credential Manager returned an ambiguous credential.");
         return matches[0]?.password;
       },
       async set(account, password) {
-        await new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, account).setPassword(password);
+        await new AsyncEntry(namespace.service, account).setPassword(password);
       },
       async delete(account) {
-        return await new AsyncEntry(SUSTECH_CREDENTIAL_SERVICE, account).deleteCredential();
+        return await new AsyncEntry(namespace.service, account).deleteCredential();
       },
     };
     return { backend, available: true, persistent: true, store };
@@ -453,7 +531,10 @@ async function resolveWindowsCredentialManager(): Promise<BackendResolution> {
   }
 }
 
-async function resolveLinuxSecretService(customEnv?: NodeJS.ProcessEnv): Promise<BackendResolution> {
+async function resolveLinuxSecretService(
+  customEnv: NodeJS.ProcessEnv | undefined,
+  namespace: SecretNamespace,
+): Promise<BackendResolution> {
   const env = customEnv ?? process.env;
   if (!env.DBUS_SESSION_BUS_ADDRESS) {
     return {
@@ -479,7 +560,7 @@ async function resolveLinuxSecretService(customEnv?: NodeJS.ProcessEnv): Promise
     persistent: true,
     async get(account) {
       const result = await runCredentialCommand(executable, [
-        "lookup", "service", SUSTECH_CREDENTIAL_SERVICE, "account", account,
+        "lookup", "service", namespace.service, "account", account,
       ], undefined, env);
       if (result.code === 1 && !result.stdout.trim() && !result.stderr.trim()) return undefined;
       if (result.code !== 0) throw new Error("Secret Service lookup failed.");
@@ -488,15 +569,15 @@ async function resolveLinuxSecretService(customEnv?: NodeJS.ProcessEnv): Promise
     async set(account, password) {
       const result = await runCredentialCommand(executable, [
         "store",
-        `--label=SUSTech CLI CAS (${account.split(":", 1)[0]})`,
-        "service", SUSTECH_CREDENTIAL_SERVICE,
+        `--label=${namespace.linuxLabel} (${account.split(":", 1)[0]})`,
+        "service", namespace.service,
         "account", account,
       ], `${password}\n`, env);
       if (result.code !== 0) throw new Error("Secret Service write failed.");
     },
     async delete(account) {
       const result = await runCredentialCommand(executable, [
-        "clear", "service", SUSTECH_CREDENTIAL_SERVICE, "account", account,
+        "clear", "service", namespace.service, "account", account,
       ], undefined, env);
       if (result.code === 1 && !result.stderr.trim()) return false;
       if (result.code !== 0) throw new Error("Secret Service delete failed.");
@@ -581,13 +662,24 @@ function requireMatchingStore(resolution: BackendResolution, expected: Credentia
   return store;
 }
 
-function credentialStoreError(operation: string, backend: CredentialBackend, error: unknown): CliError {
+function storeAccessError(subject: string, operation: string, backend: CredentialBackend, error: unknown): CliError {
   return new CliError(
-    `Could not ${operation} credentials using ${backend}.`,
+    `Could not ${operation} ${subject} using ${backend}.`,
     "CREDENTIAL_STORE_ERROR",
     2,
     { backend, operation, reason: safeStoreReason(error) },
   );
+}
+
+function validateStoredSecret(value: string, subject: string, code: string): string {
+  if (!value || /[\r\n]/.test(value) || Buffer.byteLength(value, "utf8") > 16 * 1024) {
+    throw new CliError(
+      `${subject} must be one non-empty line no larger than 16 KiB.`,
+      code,
+      2,
+    );
+  }
+  return value;
 }
 
 async function restoreSecret(
@@ -680,6 +772,10 @@ function credentialConfigDirectory(options: CredentialStoreOptions): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   return defaultConfigDirectory({ env, platform });
+}
+
+function profileSecretAccount(profile: string): string {
+  return profile;
 }
 
 function isCredentialConfig(value: unknown): value is CredentialConfig {

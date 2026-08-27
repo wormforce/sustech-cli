@@ -97,6 +97,18 @@ export class CasSession {
         service: this.config.name,
       });
     }
+    if (requiresInteractiveCaptcha(page)) {
+      throw new CliError(
+        "CAS currently requires an interactive CAPTCHA that the CLI will not bypass.",
+        "CAS_INTERACTIVE_CHALLENGE_REQUIRED",
+        2,
+        {
+          service: this.config.name,
+          remediation: "Sign in through the official SUSTech browser page. Password-only CLI authentication is unavailable while this challenge is enabled.",
+          passwordSubmitted: false,
+        },
+      );
+    }
 
     const form = new URLSearchParams({
       username: this.credentials.sid,
@@ -286,6 +298,11 @@ export class CasSession {
       service: this.config.name,
     });
   }
+}
+
+function requiresInteractiveCaptcha(page: string): boolean {
+  return /name=["']g-recaptcha-response["']/i.test(page)
+    && /(?:slideVerify|captchaVerification|su-recaptcha)/i.test(page);
 }
 
 function singleSetCookie(headers: Headers): string[] {

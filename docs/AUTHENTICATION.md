@@ -1,9 +1,10 @@
 # Authentication and credential storage
 
 `sustech-cli` separates long-lived account credentials from short-lived service
-sessions. A password may be persisted only in the operating system's credential
-store; CAS cookies, bearer tokens, PMS session IDs, nonces, and submission
-state remain in memory.
+sessions. An account password may be persisted only in the operating system's
+credential store. Blackboard's native calendar subscription link is handled as
+a separate secret. CAS cookies, bearer tokens, PMS session IDs, nonces, and
+submission state remain in memory.
 
 ## Local desktop login
 
@@ -27,6 +28,11 @@ sustech auth login --sid 12410000 --password-stdin --service bb
 ```
 
 Do not place a literal password in shell history.
+
+Fresh CAS login is not always password-only. If CAS serves an interactive slide
+CAPTCHA, the CLI stops before password submission and returns
+`CAS_INTERACTIVE_CHALLENGE_REQUIRED`. It does not attempt to bypass that
+challenge.
 
 ## Platform backends
 
@@ -67,6 +73,50 @@ exist. `XDG_CONFIG_HOME` takes precedence; otherwise the path is:
 This file contains the SID, credential reference, selected backend, and storage
 timestamp. It never contains the password.
 
+## Blackboard calendar links
+
+Blackboard's native shared calendar link is not part of `auth login`. It is a
+bearer-like secret in its own operating-system credential-store namespace and
+is stored without on-disk profile metadata. The current namespace is
+`cn.edu.sustech.cli.bb-calendar-link`, separate from the CAS credential entry.
+
+The CLI intentionally refuses a URL command argument for this workflow. Save the
+link through stdin only:
+
+```bash
+# macOS
+pbpaste | sustech bb calendar-link set --url-stdin
+# Windows PowerShell
+Get-Clipboard | sustech bb calendar-link set --url-stdin
+```
+
+`bb calendar-link set` validates that the link is a supported Learn ICS feed on
+`bb.sustech.edu.cn` before storing it. `show` masks the token by default and
+requires `--reveal` to print the full link. `fetch` reads the stored secret and
+either prints ICS content or writes it to an explicit destination, with
+`--overwrite` required to replace an existing file. `delete` removes the stored
+link for that profile.
+
+```bash
+sustech bb calendar-link show
+sustech bb calendar-link show --reveal
+sustech bb calendar-link fetch
+sustech bb calendar-link fetch --destination ./blackboard.ics
+sustech bb calendar-link delete
+```
+
+The CLI normalizes and stores the native Learn feed URL copied from Blackboard.
+In practice this is usually the account-level shared calendar feed, so treat it as
+an all-courses subscription for that Blackboard account unless Blackboard
+itself issued a narrower feed. Because the feed is a direct secret link,
+`bb calendar-link fetch` can work even when a fresh CAS login would currently
+stop at `CAS_INTERACTIVE_CHALLENGE_REQUIRED`.
+
+For the upstream UI flow, see the
+[SUSTech-specific calendar-link guide](https://sustech.online/service/blackboard/retrive-ics-url/)
+and Anthology's official
+[Blackboard calendar documentation](https://help.anthology.com/blackboard/student/en/getting-started/calendar.html).
+
 ## Resolution precedence
 
 Authenticated commands resolve credentials in this order:
@@ -90,5 +140,7 @@ external runner already protects that file.
   an unverifiable rollback fails closed with `CREDENTIAL_STORE_ROLLBACK_FAILED`.
 - Keyring and session values are excluded from text, JSON, JSONL, errors, and
   capability output.
+- Blackboard calendar-link storage never writes the link token into
+  `credentials.json`.
 - `auth logout` deletes the system-store item and its local profile metadata;
   it does not alter the SUSTech account itself.

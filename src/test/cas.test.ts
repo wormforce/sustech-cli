@@ -39,6 +39,37 @@ test("generic CAS session rejects non-HTTPS service configuration", () => {
   );
 });
 
+test("generic CAS session stops before submitting a password when an interactive CAPTCHA is required", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (input) => {
+    calls += 1;
+    return responseWithUrl(`
+      <form>
+        <input name="execution" value="e1">
+        <input name="g-recaptcha-response" required>
+        <div id="su-recaptcha"></div>
+        <script>document.querySelector('#su-recaptcha').slideVerify({});</script>
+      </form>
+    `, 200, String(input));
+  };
+  try {
+    const session = new CasSession(credentials, {
+      name: "TIS",
+      baseUrl: "https://tis.sustech.edu.cn",
+      serviceUrl: "https://tis.sustech.edu.cn/cas",
+    });
+    await assert.rejects(session.login(), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "CAS_INTERACTIVE_CHALLENGE_REQUIRED");
+      assert.equal((error as { details?: { passwordSubmitted?: boolean } }).details?.passwordSubmitted, false);
+      return true;
+    });
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("generic CAS session safely follows a same-host Blackboard attachment redirect", async () => {
   const originalFetch = globalThis.fetch;
   const serviceUrl = "https://bb.sustech.edu.cn/webapps/bb-sso-BBLEARN/index.jsp";

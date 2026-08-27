@@ -5,6 +5,16 @@ import { CliError } from "../core/errors.js";
 import type { Semester } from "../core/semester.js";
 import { TisSession } from "./auth.js";
 import {
+  degreeProgressErrorMessage,
+  degreeProgressPage,
+  normaliseTisDegreeProgress,
+  progressRows,
+  unwrapDegreeProgressPayload,
+  type DegreeProgressSourceName,
+  type DegreeProgressSourceStatus,
+  type TisDegreeProgress,
+} from "./degree-progress.js";
+import {
   normaliseCourse,
   normaliseExam,
   normaliseGrade,
@@ -20,6 +30,8 @@ import type {
 } from "./types.js";
 
 const CATALOG_TTL_MS = 60 * 60 * 1000;
+const DEGREE_PROGRESS_PAGE = "/cjgl/grcjcx/cjxqList";
+const DEGREE_PROGRESS_API = "/cjgl/cjzhtjcx/cjcx";
 
 interface CatalogCache {
   savedAt: number;
@@ -182,6 +194,92 @@ export class TisClient {
       .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
   }
 
+  public async degreeProgress(options: { details?: boolean } = {}): Promise<TisDegreeProgress> {
+    await this.session.getText(DEGREE_PROGRESS_PAGE);
+
+    let pylx = "1";
+    try {
+      const me = asRecord(await this.session.getJson("/user/me"));
+      pylx = firstString(me, "pylx", "PYLX", "pylxdm", "PYLXDM")
+        || (firstString(me, "pyccm", "PYCCM") === "2" ? "2" : "1");
+    } catch {
+      // The progress context endpoint can still resolve an undergraduate plan without /user/me.
+    }
+
+    const contextPayload = unwrapDegreeProgressPayload(
+      await this.session.postJson(`${DEGREE_PROGRESS_API}/getXss`, { pylx }),
+    );
+    const contextRows = progressRows(contextPayload);
+    const selected = contextRows.find((row) => firstString(row, "fah", "FAH", "xjid", "XJID"))
+      ?? contextRows[0];
+    if (!selected) {
+      throw new CliError(
+        "TIS did not return a cultivation-plan context for this account.",
+        "TIS_DEGREE_PROGRESS_CONTEXT_UNAVAILABLE",
+        1,
+      );
+    }
+    const context = lowerCaseKeys(selected);
+    if (!firstString(context, "pylx")) context.pylx = pylx;
+
+    const sourceStatuses = initialDegreeProgressStatuses(options.details === true);
+    const read = async (
+      source: DegreeProgressSourceName,
+      operation: () => Promise<unknown>,
+    ): Promise<unknown> => {
+      try {
+        const payload = unwrapDegreeProgressPayload(await operation());
+        const count = degreeProgressPayloadCount(payload);
+        sourceStatuses[source] = {
+          state: count > 0 ? "available" : "empty",
+          count,
+        };
+        return payload;
+      } catch (error) {
+        sourceStatuses[source] = {
+          state: "error",
+          message: degreeProgressErrorMessage(error),
+        };
+        return undefined;
+      }
+    };
+
+    const [graduationRequirements, requirementSummary, creditCategories, moduleRequirements] = await Promise.all([
+      read("graduationRequirements", () => this.session.postJson(`${DEGREE_PROGRESS_API}/querybyyq`, { ...context })),
+      read("requirementSummary", () => this.session.postJson(`${DEGREE_PROGRESS_API}/queryBxkqk`, { ...context })),
+      read("creditCategories", () => this.fetchDegreeProgressPages(`${DEGREE_PROGRESS_API}/queryXflbyq`, context, 200)),
+      read("moduleRequirements", () => this.session.postJson(`${DEGREE_PROGRESS_API}/queryMkyq`, { ...context })),
+    ]);
+    const courses = options.details
+      ? await read("courses", () => this.fetchDegreeProgressPages(`${DEGREE_PROGRESS_API}/queryFaKzkc`, context, 500))
+      : undefined;
+
+    const progress = normaliseTisDegreeProgress({
+      context,
+      graduationRequirements,
+      requirementSummary,
+      creditCategories,
+      moduleRequirements,
+      courses,
+      detailsIncluded: options.details === true,
+      sourceStatuses,
+    });
+    const availableSources = Object.values(sourceStatuses)
+      .filter((status) => status.state === "available" || status.state === "empty").length;
+    if (!progress.dataAvailable) {
+      const unavailable = availableSources === 0;
+      throw new CliError(
+        unavailable
+          ? "TIS degree-progress sources could not be read."
+          : "TIS degree-progress sources returned no usable plan data for this account.",
+        unavailable ? "TIS_DEGREE_PROGRESS_UNAVAILABLE" : "TIS_DEGREE_PROGRESS_NO_DATA",
+        1,
+        { sourceStatuses },
+      );
+    }
+    return progress;
+  }
+
   public async addCourse(input: {
     semester: Semester;
     courseId: string;
@@ -246,6 +344,37 @@ export class TisClient {
       await delay(550);
     }
     return courses;
+  }
+
+  private async fetchDegreeProgressPages(
+    path: string,
+    context: Record<string, unknown>,
+    pageSize: number,
+  ): Promise<Record<string, unknown>[]> {
+    const rows: Record<string, unknown>[] = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const payload = await this.session.postJson(path, {
+        ...context,
+        pageNum: page,
+        pageSize,
+      });
+      const result = degreeProgressPage(payload);
+      rows.push(...result.rows);
+      if (
+        result.rows.length < pageSize
+        || (result.total !== undefined && rows.length >= result.total)
+      ) return rows;
+      if (page === 20) {
+        throw new CliError(
+          "TIS degree-progress data exceeded the safe pagination limit.",
+          "TIS_PAGINATION_LIMIT",
+          1,
+          { path, fetched: rows.length, declaredTotal: result.total },
+        );
+      }
+      await delay(250);
+    }
+    return rows;
   }
 }
 
@@ -358,6 +487,44 @@ function stringValue(value: unknown): string {
 function numberValue(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function firstString(record: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const direct = stringValue(record[key]).trim();
+    if (direct) return direct;
+    const candidate = Object.keys(record).find((entry) => entry.toLowerCase() === key.toLowerCase());
+    const matched = candidate ? stringValue(record[candidate]).trim() : "";
+    if (matched) return matched;
+  }
+  return "";
+}
+
+function lowerCaseKeys(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key.toLowerCase(), value]),
+  );
+}
+
+function initialDegreeProgressStatuses(
+  detailsIncluded: boolean,
+): Record<DegreeProgressSourceName, DegreeProgressSourceStatus> {
+  return {
+    graduationRequirements: { state: "not_requested" },
+    requirementSummary: { state: "not_requested" },
+    creditCategories: { state: "not_requested" },
+    moduleRequirements: { state: "not_requested" },
+    courses: { state: detailsIncluded ? "not_requested" : "not_requested" },
+  };
+}
+
+function degreeProgressPayloadCount(payload: unknown): number {
+  const rows = progressRows(payload);
+  if (rows.length > 0) return rows.length;
+  const value = asRecord(payload);
+  return Object.keys(value).length > 0 ? 1 : 0;
 }
 
 function delay(milliseconds: number): Promise<void> {

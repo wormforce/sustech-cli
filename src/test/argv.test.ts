@@ -16,6 +16,9 @@ test("command inference skips option values in machine-readable errors", () => {
     "tis plan add",
   );
   assert.equal(inferCommandName(["tis", "degree", "audit", "--requirements", "/tmp/req.json", "--json"]), "tis degree audit");
+  assert.equal(inferCommandName(["tis", "degree", "progress", "--details", "--json"]), "tis degree progress");
+  assert.equal(inferCommandName(["bb", "calendar", "--since", "2026-08-01T00:00:00Z", "--json"]), "bb calendar");
+  assert.equal(inferCommandName(["bb", "calendar-link", "show", "--reveal", "--json"]), "bb calendar-link show");
   assert.equal(inferCommandName(["academic", "snapshot", "save", "--destination", "/tmp/state.json", "--json"]), "academic snapshot save");
   assert.equal(inferCommandName(["academic", "snapshot", "diff", "before.json", "after.json", "--json"]), "academic snapshot diff");
   assert.equal(inferCommandName(["profile", "show", "--profile", "personal", "--json"]), "profile show");

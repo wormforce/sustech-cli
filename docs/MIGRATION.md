@@ -12,11 +12,11 @@ no real account mutation was attempted while completing this expansion.
 | --- | --- | --- | --- | --- |
 | Core CLI | text/JSON/JSONL, typed errors, exit codes, capabilities, consequences, structured doctor, cross-platform system credential profiles | local credential login/logout, guarded file writes, confirmation policy | Implemented | P0 |
 | CI | cross-platform check/test/pack workflow | none | Active at `.github/workflows/ci.yml` | P0 |
-| SSO/CAS | shared CAS sessions for TIS, Blackboard, and WS | none | Implemented; opt-in live login smoke passed for all three | P0 |
+| SSO/CAS | shared CAS sessions for TIS, Blackboard, and WS | none | Implemented; opt-in live login smoke passed for all three on 2026-08-26, while fresh login on 2026-08-27 was blocked before password submission by the current interactive slide CAPTCHA | P0 |
 | TIS catalog | search, normalized schedules, cache | none | Implemented | P0 |
 | TIS personal | selectable courses, normalized enrolled/week schedule | enroll | Enrolled read live-smoked; other reads still need targeted live QA | P0 |
-| TIS academics | grades/GPA, exams | none | Implemented; live QA pending | P1 |
-| TIS planning | persistent week-aware timetable plans, scored solver, blocked periods, conservative degree audit | guarded local plan files | Implemented with fixtures | P1 |
+| TIS academics | grades/GPA, exams, official structured degree progress | none | Implemented with fixtures; live QA pending | P1 |
+| TIS planning | persistent week-aware timetable plans, scored solver, blocked periods, conservative local degree audit | guarded local plan files | Implemented with fixtures | P1 |
 | TIS remaining | catalog and live classroom views, evaluation status, multi-source iCalendar export, selection previews, bid planning | enroll, cart, drop, single and batch bids | Implemented with explicit confirmation and exact post-readback for remote writes; live QA pending | P1 |
 | Calendar | academic terms, holidays, date intelligence | local override not ported | Read paths implemented | P1 |
 | Transit | facilities, search, lines, schedules, stops, live GPS | none | Implemented and live-smoked; routing not ported | P1 |
@@ -25,7 +25,7 @@ no real account mutation was attempted while completing this expansion.
 | Academic snapshots | normalized TIS state with optional Blackboard deadlines; verified offline diff | guarded versioned snapshot files | Implemented with digest verification and no-overwrite defaults | P1 |
 | Resources | built-in campus resource registry and search | none | Implemented | P1 |
 | Wi-Fi | current association and recent macOS SUSTC Wi-Fi events | none | Implemented on macOS only | P1 |
-| Blackboard | courses, content, teacher-provided attachment listing/download, assignments, deadlines, search, attempts | guarded local sync; Classic assignment submission | CLI CAS login and courses read live-smoked; local download/sync and the hash-bound submission workflow use official Learn REST/BBML paths and remain fixture-tested | P2 |
+| Blackboard | courses, content, teacher-provided attachment listing/download, assignments, deadlines, calendar REST reads, search, attempts, native calendar-link storage/fetch | guarded local sync, optional ICS write, Classic assignment submission | CLI CAS login and courses read live-smoked; calendar reads, native feed-link storage/fetch, local download/sync, and the hash-bound submission workflow use official Learn REST/BBML paths or keyring fixtures and remain conservatively documented | P2 |
 | Library catalog | Primo browser handoff URL | none | URL builder only; browser-backed fetch still unavailable | P2 |
 | Library booking | account state, idle summary, labs, rooms, reservation counts, reservations | guarded create/cancel | Login, account, summary, labs, and count live-smoked; room/reservation reads and writes remain fixture-only | P2 |
 | E-Hall booking | redacted user profile, rooms, meetings | guarded create/cancel | Login and rooms read live-smoked; meeting reads and writes remain fixture-only | P2 |
@@ -46,7 +46,7 @@ no real account mutation was attempted while completing this expansion.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-preview v0.7.0, guarded remote mutations include TIS enroll/cart/drop/bid,
+preview v0.8.0, guarded remote mutations include TIS enroll/cart/drop/bid,
 Blackboard submission, eHall and library booking create/cancel, and PMS queue
 upload/delete. They require an exact typed target, fresh preflight, explicit
 `--confirm`, and operation-specific read-back; an ambiguous result exits 5 with

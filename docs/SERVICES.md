@@ -21,7 +21,7 @@ while the CLI already supplies that transport for a specific command family.
 
 | Service | Availability | Auth | CLI surface today | Notes |
 | --- | --- | --- | --- | --- |
-| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb attachments`, `bb download`, `bb assignments`, `bb deadlines`, `bb search`, `bb sync`, `bb attempts`, `bb submit preview`, `bb submit apply` | CLI CAS login and courses read passed an opt-in live smoke test on 2026-08-26. Content download/sync supports the official Original endpoint and embedded BBML links. Assignment submission is fixture-tested against the official Learn REST attempt/upload/file flow and currently targets Classic/Original assignments. |
+| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb attachments`, `bb download`, `bb assignments`, `bb deadlines`, `bb calendar`, `bb search`, `bb sync`, `bb attempts`, `bb submit preview`, `bb submit apply`, `bb calendar-link set/show/fetch/delete` | CLI CAS login and courses read passed an opt-in live smoke test on 2026-08-26. Content download/sync supports the official Original endpoint and embedded BBML links. Calendar-item reads and native calendar-link handling are implemented with fixtures and keyring tests. Assignment submission is fixture-tested against the official Learn REST attempt/upload/file flow and currently targets Classic/Original assignments. |
 | `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings`, `booking create preview/apply`, `booking cancel preview/apply` | CLI login and room-list read passed an opt-in live smoke test on 2026-08-26. Mutation paths are fixture-tested only, explicitly warn that exact slot availability is not verified, and fail closed on policy blockers or ambiguous read-back. |
 | `library-catalog` | `unavailable` | browser session | `library search-url` | The rewrite only offers a Primo handoff URL builder. It does not fabricate catalog results. |
 | `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations`, `lib-booking create preview/apply`, `lib-booking cancel preview/apply` | Login plus identity, summary, labs, and count reads passed an opt-in live smoke test on 2026-08-26. Mutation paths are fixture-tested only and apply conservative capacity and membership policy checks. |
@@ -54,7 +54,28 @@ be verified, the command exits 5 and emits `DO_NOT_RETRY_AUTOMATICALLY`.
 No real write was used to validate these new paths; current evidence is from
 protocol fixtures and transport-guard tests.
 
-## Blackboard submission boundary
+## Blackboard calendar surfaces
+
+The CLI exposes two different Blackboard calendar paths:
+
+- `bb calendar` is an authenticated REST read over
+  `/learn/api/public/v1/calendars/items`. It accepts `--since`, `--until`,
+  `--type`, and `--course-id` filters and reports partial chunk failures
+  conservatively instead of fabricating a complete view.
+- `bb calendar-link set/show/fetch/delete` manages Blackboard's native Learn
+  ICS feed link. That link is treated like a bearer secret, stored only in the
+  operating-system credential store, masked by default, and never accepted as a
+  visible command-line URL argument.
+
+The native feed and the REST read have different tradeoffs. `bb calendar`
+supports typed filters and requires Blackboard CAS authentication. The stored
+native feed is usually the user's account-level shared subscription, so it
+behaves like an all-courses ICS export for that account. Once stored,
+`bb calendar-link fetch` can refresh it without a fresh CAS login and can
+optionally write it to an explicit `--destination` with `--overwrite` required
+for replacement.
+
+## Blackboard attachment and submission boundary
 
 `bb attachments COURSE_ID CONTENT_ID` discovers files supplied by the teacher,
 using the Learn content-attachment endpoint and same-origin BBML links. It does
@@ -80,8 +101,15 @@ attempts are not silently resumed. An uncertain write returns exit code 5 with
 The authenticated transports are covered by protocol/mock fixtures and
 request-guard logic. On 2026-08-26, opt-in read-only live smoke tests passed for
 TIS enrollment reads, Blackboard courses, WS programs, eHall rooms, and
-library-booking identity, summary, labs, and reservation count. No Blackboard
-write path was exercised.
+library-booking identity, summary, labs, and reservation count. Blackboard
+calendar-link storage/fetch and TIS degree progress are covered by dedicated
+fixtures, but no Blackboard write path was exercised.
+
+On 2026-08-27, fresh TIS and Blackboard CAS authentication instead encountered
+the interactive slide CAPTCHA. The CLI reports
+`CAS_INTERACTIVE_CHALLENGE_REQUIRED` before password submission and does not
+attempt to bypass it; this limits current live QA but does not affect fetching
+an already stored native Blackboard calendar link.
 
 PMS returned its campus-network gate before login in the same test environment.
 The CLI can perform the documented login flow itself, but a campus access path

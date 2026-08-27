@@ -10,7 +10,7 @@ JSONL are available for software. Python is not required at runtime.
 
 > [!WARNING]
 > This is an independent community project, not an official SUSTech service.
-> The npm `0.7.0` release is a preview, and `main` may contain additional
+> The npm `0.8.0` release is a preview, and `main` may contain additional
 > next-release work. Inspect `sustech version` and `sustech capabilities` on the
 > installed copy before relying on a command or allowing it to change state.
 
@@ -48,6 +48,8 @@ Authenticated services use a named local profile:
 ```bash
 sustech auth login
 sustech auth status
+sustech tis degree progress
+sustech bb calendar --type GradebookColumn
 sustech tis schedule
 sustech bb courses
 ```
@@ -116,14 +118,17 @@ version's exact command, authentication, network, and confirmation metadata.
 | --- | --- | --- |
 | Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
 | Academic context | calendar, live context, profile reports, academic snapshots | Public and authenticated reads; guarded local exports |
-| TIS | catalog, schedule, grades, exams, persistent planning, degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
-| Blackboard | courses, deadlines, search, attachment download/sync, attempts, submission | CAS login; local writes are guarded and submission is confirm-gated |
+| TIS | catalog, schedule, grades, exams, official degree progress, persistent planning, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
+| Blackboard | courses, deadlines, calendar reads, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; the native calendar link is a separate stored secret and local writes are guarded |
 | Campus services | WS programs, eHall booking, library booking, PMS jobs and usage | Authenticated reads; booking and queue writes are confirm-gated |
 | Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
 
-For the `tis degree audit` requirements-file format, matching semantics, and
-current runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
+For the official structured `tis degree progress` response and how it differs
+from the local JSON `tis degree audit`, see
+[docs/DEGREE_PROGRESS.md](docs/DEGREE_PROGRESS.md). For the
+`tis degree audit` requirements-file format, matching semantics, and current
+runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
 
 Remote-state mutations are deliberately limited to these apply commands, all
 of which require an exact target plus `--confirm`:
@@ -163,7 +168,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.7.0",
+    "version": "0.8.0",
     "runtime": "node v22.19.0"
   }
 }
@@ -197,6 +202,24 @@ Headless runners can use credentials supplied by their own secret manager via
 the documented environment variables or credentials file. Service sessions and
 cookies remain in memory. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
 for precedence, backend requirements, and non-interactive use.
+
+Blackboard also exposes a private native calendar subscription link. Treat that
+link like a bearer token or password: store it only through stdin, let `show`
+mask it by default, and reveal it only with an explicit `--reveal`:
+
+```bash
+# macOS
+pbpaste | sustech bb calendar-link set --url-stdin
+# Windows PowerShell
+Get-Clipboard | sustech bb calendar-link set --url-stdin
+sustech bb calendar-link show
+sustech bb calendar-link fetch --destination ./blackboard.ics
+```
+
+The link is validated before storage and kept in the operating-system
+credential store under a separate Blackboard-calendar namespace, not in the
+credential metadata file. `bb calendar-link fetch` can later refresh that ICS
+feed without a fresh CAS login.
 
 ## Guarded workflows
 
@@ -239,6 +262,11 @@ and PMS upload/delete actions. An ambiguous remote write result includes
 
 - Blackboard submission follows official Learn REST attempt/upload endpoints
   and is fixture-tested, but it has not yet performed a real Blackboard write.
+- Fresh CAS logins for TIS- and Blackboard-backed commands may stop before
+  password submission with `CAS_INTERACTIVE_CHALLENGE_REQUIRED` when CAS serves
+  an interactive slide CAPTCHA. The CLI will not bypass that challenge. A
+  previously stored Blackboard native calendar link can still be fetched
+  without CAS.
 - The supported submission surface is Classic/Original assignment attempts;
   the CLI does not scrape or silently fall back to the legacy
   `uploadAssignment` HTML form.

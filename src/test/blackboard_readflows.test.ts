@@ -4,12 +4,234 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  listBlackboardCalendarItems,
+  listBlackboardCalendars,
   listBlackboardDeadlines,
   nextBlackboardDeadline,
   searchBlackboardContentTree,
   syncBlackboardAttachments,
 } from "../services/blackboard.js";
 import type { ServiceAdapter } from "../services/base.js";
+
+test("Blackboard calendars and calendar items normalize mixed types", async () => {
+  const since = "2026-08-20T00:00:00.000Z";
+  const until = "2026-08-30T00:00:00.000Z";
+  const adapter = routeAdapter((url) => {
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/calendars") {
+      return jsonResponse({
+        results: [
+          { id: "PERSONAL", name: "My Calendar" },
+          { id: "INSTITUTION", name: "Institution" },
+          { id: "_8343_1", name: "Physical Chemistry" },
+        ],
+      });
+    }
+    if (url === `https://bb.sustech.edu.cn/learn/api/public/v1/calendars/items?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`) {
+      return jsonResponse({
+        results: [
+          {
+            id: "_801_1",
+            type: "Personal",
+            calendarId: "PERSONAL",
+            calendarName: "My Calendar",
+            title: "Advisor Meeting",
+            description: "<p>Bring draft</p>",
+            location: "Office 301",
+            start: "2026-08-22T01:00:00.000Z",
+            end: "2026-08-22T02:00:00.000Z",
+            modified: "2026-08-21T12:00:00.000Z",
+            color: "#2f7ed8",
+            disableResizing: false,
+            createdByUserId: "_2_1",
+          },
+          {
+            id: "_991_1",
+            type: "GradebookColumn",
+            calendarId: "_8343_1",
+            calendarName: "Physical Chemistry",
+            title: "Lab Report 1",
+            start: "2026-08-25T10:00:00.000Z",
+            end: "2026-08-25T10:30:00.000Z",
+            dynamicCalendarItemProps: {
+              attemptable: true,
+              categoryId: "_17_1",
+              dateRangeLimited: false,
+              eventType: "assignment",
+              gradable: true,
+            },
+          },
+          {
+            id: "_992_1",
+            type: "OfficeHours",
+            calendarId: "_8343_1",
+            calendarName: "Physical Chemistry",
+            title: "TA Office Hours",
+            start: "2026-08-26T08:00:00.000Z",
+            end: "2026-08-26T09:00:00.000Z",
+            recurrence: {
+              frequency: "Weekly",
+              interval: 1,
+              repeatBroken: false,
+              weekDays: ["Wednesday"],
+              until: "2026-12-31T00:00:00.000Z",
+            },
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  });
+
+  const calendars = await listBlackboardCalendars(adapter);
+  assert.deepEqual(calendars, [
+    { id: "PERSONAL", name: "My Calendar", kind: "personal" },
+    { id: "INSTITUTION", name: "Institution", kind: "institution" },
+    { id: "_8343_1", name: "Physical Chemistry", kind: "course", courseId: "_8343_1" },
+  ]);
+
+  const report = await listBlackboardCalendarItems(adapter, { since, until });
+  assert.equal(report.totalItems, 3);
+  assert.equal(report.partial, false);
+  assert.equal(report.items[0]?.type, "Personal");
+  assert.equal(report.items[0]?.description, "Bring draft");
+  assert.equal(report.items[1]?.id, "991");
+  assert.equal(report.items[1]?.courseId, "_8343_1");
+  assert.equal(report.items[1]?.dynamicCalendarItemProps?.eventType, "assignment");
+  assert.deepEqual(report.items[2]?.recurrence?.weekDays, ["Wednesday"]);
+  assert.equal(report.items[2]?.recurrence?.frequency, "Weekly");
+});
+
+test("Blackboard calendar items split long windows and deduplicate chunk boundaries", async () => {
+  const seenWindows: string[] = [];
+  const adapter = routeAdapter((url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname !== "/learn/api/public/v1/calendars/items") throw new Error(`Unexpected URL ${url}`);
+    const since = parsed.searchParams.get("since") ?? "";
+    const until = parsed.searchParams.get("until") ?? "";
+    seenWindows.push(`${since}|${until}`);
+    if (since === "2026-01-01T00:00:00.000Z") {
+      return jsonResponse({
+        results: [
+          {
+            id: "_500_1",
+            type: "Course",
+            calendarId: "_8343_1",
+            calendarName: "Physical Chemistry",
+            title: "Boundary Event",
+            start: "2026-04-23T00:00:00.000Z",
+            end: "2026-04-23T01:00:00.000Z",
+          },
+          {
+            id: "_410_1",
+            type: "Personal",
+            calendarId: "PERSONAL",
+            calendarName: "My Calendar",
+            title: "Winter Plan",
+            start: "2026-01-02T09:00:00.000Z",
+            end: "2026-01-02T10:00:00.000Z",
+          },
+        ],
+      });
+    }
+    if (since === "2026-04-23T00:00:00.000Z") {
+      return jsonResponse({
+        results: [
+          {
+            id: "_500_1",
+            type: "Course",
+            calendarId: "_8343_1",
+            calendarName: "Physical Chemistry",
+            title: "Boundary Event",
+            start: "2026-04-23T00:00:00.000Z",
+            end: "2026-04-23T01:00:00.000Z",
+          },
+          {
+            id: "_620_1",
+            type: "Institution",
+            calendarId: "INSTITUTION",
+            calendarName: "Institution",
+            title: "Holiday Notice",
+            start: "2026-05-05T00:00:00.000Z",
+            end: "2026-05-05T23:59:00.000Z",
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected chunk ${since}..${until}`);
+  });
+
+  const report = await listBlackboardCalendarItems(adapter, {
+    since: "2026-01-01T00:00:00.000Z",
+    until: "2026-05-10T00:00:00.000Z",
+  });
+  assert.equal(report.requestedChunks, 2);
+  assert.equal(report.completedChunks, 2);
+  assert.equal(report.partial, false);
+  assert.equal(report.totalItems, 3);
+  assert.deepEqual(report.items.map((item) => item.id), ["410", "500", "620"]);
+  assert.deepEqual(seenWindows, [
+    "2026-01-01T00:00:00.000Z|2026-04-23T00:00:00.000Z",
+    "2026-04-23T00:00:00.000Z|2026-05-10T00:00:00.000Z",
+  ]);
+});
+
+test("Blackboard calendar items reject invalid time windows", async () => {
+  const adapter = routeAdapter((url) => {
+    throw new Error(`Network access should not happen for invalid calendar times: ${url}`);
+  });
+
+  await assert.rejects(
+    listBlackboardCalendarItems(adapter, { since: "not-a-date" }),
+    (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_CALENDAR_TIME_INVALID"),
+  );
+  await assert.rejects(
+    listBlackboardCalendarItems(adapter, {
+      since: "2026-08-30T00:00:00.000Z",
+      until: "2026-08-20T00:00:00.000Z",
+    }),
+    (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_CALENDAR_WINDOW_INVALID"),
+  );
+});
+
+test("Blackboard calendar items keep successful chunks when later chunks fail", async () => {
+  const adapter = routeAdapter((url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname !== "/learn/api/public/v1/calendars/items") throw new Error(`Unexpected URL ${url}`);
+    const since = parsed.searchParams.get("since");
+    if (since === "2026-01-01T00:00:00.000Z") {
+      return jsonResponse({
+        results: [{
+          id: "_700_1",
+          type: "Course",
+          calendarId: "_8343_1",
+          calendarName: "Physical Chemistry",
+          title: "Week 1 Quiz",
+          start: "2026-02-10T08:00:00.000Z",
+          end: "2026-02-10T09:00:00.000Z",
+        }],
+      });
+    }
+    if (since === "2026-04-23T00:00:00.000Z") {
+      return jsonResponse({ message: "upstream unavailable" }, 503);
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  });
+
+  const report = await listBlackboardCalendarItems(adapter, {
+    since: "2026-01-01T00:00:00.000Z",
+    until: "2026-05-10T00:00:00.000Z",
+    type: "Course",
+  });
+  assert.equal(report.requestedChunks, 2);
+  assert.equal(report.completedChunks, 1);
+  assert.equal(report.partial, true);
+  assert.equal(report.totalItems, 1);
+  assert.equal(report.items[0]?.title, "Week 1 Quiz");
+  assert.equal(report.failures.length, 1);
+  assert.equal(report.failures[0]?.stage, "calendar-items");
+  assert.equal(report.failures[0]?.status, 503);
+  assert.equal(report.failures[0]?.calendarItemType, "Course");
+});
 
 test("Blackboard deadlines aggregate future assignments and preserve per-course failures", async () => {
   const adapter = routeAdapter((url) => {

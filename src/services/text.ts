@@ -5,6 +5,7 @@ import type {
   BlackboardCourse,
   BlackboardDeadline,
   BlackboardDeadlineReport,
+  BlackboardCalendarItemsReport,
   BlackboardContentAttachment,
   BlackboardContentAttachmentDownload,
   BlackboardContentItem,
@@ -479,6 +480,27 @@ export function formatBlackboardDeadlines(report: BlackboardDeadlineReport): str
   return [
     `Blackboard deadlines · ${report.deadlines.length}${report.days !== undefined ? ` within ${report.days} day(s)` : ""}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
     ...report.deadlines.map((item) => formatBlackboardDeadlineLine(item)),
+  ].join("\n");
+}
+
+export function formatBlackboardCalendar(report: BlackboardCalendarItemsReport): string {
+  const suffix = [
+    report.type,
+    report.courseId,
+    report.partial ? `${report.failures.length} failure(s)` : undefined,
+  ].filter(Boolean).join(" · ");
+  if (report.items.length === 0) {
+    return [
+      `Blackboard calendar · ${report.since} to ${report.until}${suffix ? ` · ${suffix}` : ""}`,
+      "No calendar items returned.",
+    ].join("\n");
+  }
+  return [
+    `Blackboard calendar · ${report.items.length} · ${report.since} to ${report.until}${suffix ? ` · ${suffix}` : ""}`,
+    ...report.items.map((item) => [
+      `${item.start || "?"} to ${item.end || "?"} · ${item.type || "unknown"} · ${item.title || "Untitled"}`,
+      `  ${item.calendarName || item.calendarId}${item.location ? ` · ${item.location}` : ""}`,
+    ].join("\n")),
   ].join("\n");
 }
 

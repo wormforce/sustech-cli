@@ -5,10 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { CliError } from "../core/errors.js";
 import {
+  deleteStoredBlackboardCalendarLink,
   deleteStoredCredentials,
   getCredentialBackendStatus,
   getCredentialStatus,
+  loadStoredBlackboardCalendarLink,
   loadStoredCredentials,
+  saveStoredBlackboardCalendarLink,
   saveStoredCredentials,
   type SecretStore,
 } from "../core/keyring.js";
@@ -82,6 +85,38 @@ test("saving a named profile never changes the implicit default profile", async 
     const loaded = await loadStoredCredentials(undefined, { configDir, store, env: {} });
     assert.equal(loaded.profile, "default");
     assert.equal(loaded.password, "first");
+  } finally {
+    await rm(configDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard calendar links are stored by profile without on-disk metadata", async () => {
+  const configDir = await mkdtemp(join(tmpdir(), "sustech-cli-bb-calendar-keyring-"));
+  const store = new MemoryStore();
+  const url = "https://bb.sustech.edu.cn/webapps/calendar/calendarFeed/token-123/learn.ics";
+  try {
+    const saved = await saveStoredBlackboardCalendarLink({ profile: "personal", url }, { configDir, store });
+    assert.equal(saved.profile, "personal");
+    assert.equal(saved.backend, "macos-keychain");
+
+    await assert.rejects(readFile(join(configDir, "credentials.json"), "utf8"), (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
+      return true;
+    });
+
+    const loaded = await loadStoredBlackboardCalendarLink("personal", { configDir, store });
+    assert.deepEqual(loaded, {
+      profile: "personal",
+      url,
+      backend: "macos-keychain",
+    });
+
+    const deleted = await deleteStoredBlackboardCalendarLink("personal", { configDir, store });
+    assert.equal(deleted.removed, true);
+    await assert.rejects(
+      loadStoredBlackboardCalendarLink("personal", { configDir, store }),
+      (error: unknown) => error instanceof CliError && error.code === "BLACKBOARD_CALENDAR_LINK_NOT_FOUND",
+    );
   } finally {
     await rm(configDir, { recursive: true, force: true });
   }

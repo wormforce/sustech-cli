@@ -2,6 +2,42 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [0.8.0] - 2026-08-27
+
+### Added
+
+- Added `tis degree progress` for the authenticated student's structured,
+  TIS-calculated cultivation-plan summary, credit-category constraints, module
+  gaps, and optional course-level details.
+- Added `bb calendar` for typed Blackboard calendar-item reads with date,
+  course, and item-type filters, including bounded long-window pagination and
+  partial-failure reporting.
+- Added `bb calendar-link set/show/fetch/delete` for Blackboard's native shared
+  iCalendar feed. Links are accepted only through stdin, validated before
+  storage, kept in a separate operating-system keyring namespace, and masked by
+  default.
+
+### Changed
+
+- Distinguished the official personalized TIS progress snapshot from the
+  existing user-supplied local JSON `tis degree audit` workflow.
+- Added explicit detection of the current interactive CAS slide CAPTCHA. The
+  CLI now returns `CAS_INTERACTIVE_CHALLENGE_REQUIRED` before password
+  submission instead of attempting to bypass the challenge.
+- Hardened Blackboard calendar-feed redirects, size and content validation,
+  token redaction, and machine output; unnecessary internal creator IDs are no
+  longer exposed in normalized calendar items.
+- Updated the repository-shipped `sustech-cli` agent skill and documentation for
+  the new calendar and degree-progress workflows.
+
+### Notes
+
+- TIS degree progress and Blackboard native-feed handling are covered by
+  protocol, normalization, keyring, and CLI fixtures. Fresh live TIS/Blackboard
+  QA was limited on 2026-08-27 by the interactive CAS challenge.
+- The public curriculum PDF mirror remains a historical/offline fallback; PDF
+  rules are not silently substituted for the student's live assigned TIS plan.
+
 ## [0.7.0] - 2026-08-27
 
 ### Added

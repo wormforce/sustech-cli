@@ -61,6 +61,31 @@ export async function readPasswordFromStdin(): Promise<string> {
   return raw;
 }
 
+export async function readCalendarLinkFromStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new CliError(
+      "--url-stdin expects redirected input so the private calendar token is not placed in shell history.",
+      "CALENDAR_URL_STDIN_EXPECTED",
+      2,
+    );
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_INPUT_BYTES) {
+      throw new CliError("Calendar-link input is unexpectedly large.", "INVALID_BLACKBOARD_CALENDAR_LINK", 2);
+    }
+    chunks.push(buffer);
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+  if (!raw || /[\r\n]/.test(raw)) {
+    throw new CliError("--url-stdin must provide exactly one non-empty line.", "INVALID_BLACKBOARD_CALENDAR_LINK", 2);
+  }
+  return raw;
+}
+
 function requireInteractiveTerminal(): void {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
     throw new CliError(

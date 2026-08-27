@@ -74,6 +74,8 @@ const VALUE_OPTIONS = new Set([
   "--sid",
   "--path",
   "--requirements",
+  "--since",
+  "--until",
   "--early-period-threshold",
   "--weight-early-session",
   "--weight-gap-segment",
@@ -101,7 +103,7 @@ export function inferCommandName(argv: string[]): string {
   if (
     (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid", "plan", "degree"].includes(command))
     || (group === "academic" && command === "snapshot")
-    || (group === "bb" && command === "submit")
+    || (group === "bb" && ["submit", "calendar-link"].includes(command))
     || (group === "pms" && (command === "upload" || command === "delete"))
     || (group === "booking" && ["create", "cancel"].includes(command))
     || (group === "lib-booking" && ["create", "cancel"].includes(command))

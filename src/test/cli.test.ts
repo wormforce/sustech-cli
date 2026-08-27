@@ -17,7 +17,7 @@ const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.7\.0/);
+  assert.match(text.stdout, /^sustech-cli 0\.8\.0/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -25,7 +25,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.7.0", runtime: `node ${process.version}` },
+    data: { version: "0.8.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -262,6 +262,28 @@ test("blackboard content attachment commands keep selection and local writes exp
   assert.equal(JSON.parse(syncNeedsCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
 });
 
+test("Blackboard calendar commands expose strict options without requiring credentials to validate input", () => {
+  const calendar = runWithoutCredentials(["bb", "calendar", "--json"]);
+  assert.equal(calendar.status, 2);
+  assert.equal(JSON.parse(calendar.stdout).command, "bb calendar");
+  assert.equal(JSON.parse(calendar.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const invalidType = runWithoutCredentials(["bb", "calendar", "--type", "Deadline", "--json"]);
+  assert.equal(invalidType.status, 2);
+  assert.equal(JSON.parse(invalidType.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(invalidType.stdout).error.message, /GradebookColumn/);
+
+  const missingStdin = runWithoutCredentials(["bb", "calendar-link", "set", "--json"]);
+  assert.equal(missingStdin.status, 2);
+  assert.equal(JSON.parse(missingStdin.stdout).command, "bb calendar-link set");
+  assert.equal(JSON.parse(missingStdin.stdout).error.code, "USAGE");
+
+  const wrongProgressOption = runWithoutCredentials(["tis", "degree", "progress", "--semester", "2026-2027-1", "--json"]);
+  assert.equal(wrongProgressOption.status, 2);
+  assert.equal(JSON.parse(wrongProgressOption.stdout).command, "tis degree progress");
+  assert.equal(JSON.parse(wrongProgressOption.stdout).error.code, "USAGE");
+});
+
 test("capabilities exposes safety metadata without requiring help-text parsing", () => {
   const result = run(["capabilities", "--json"]);
   assert.equal(result.status, 0);
@@ -284,11 +306,15 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const classroomLive = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom live");
   const classroomNow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom now");
   const bbDeadlines = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb deadlines");
+  const bbCalendar = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb calendar");
+  const bbCalendarLinkShow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb calendar-link show");
+  const bbCalendarLinkFetch = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb calendar-link fetch");
   const bbSearch = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb search");
   const bbSync = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb sync");
   const planInit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan init");
   const planSolve = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis plan solve");
   const degreeAudit = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree audit");
+  const degreeProgress = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree progress");
   const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
   const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
   const tisIcal = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis ical");
@@ -320,6 +346,12 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(classroomNow.kind, "read");
   assert.equal(bbDeadlines.kind, "read");
   assert.equal(bbDeadlines.authentication, "bb");
+  assert.equal(bbCalendar.kind, "read");
+  assert.equal(bbCalendar.authentication, "bb");
+  assert.equal(bbCalendarLinkShow.kind, "local");
+  assert.equal(bbCalendarLinkShow.network, false);
+  assert.equal(bbCalendarLinkFetch.kind, "mutation");
+  assert.equal(bbCalendarLinkFetch.authentication, "none");
   assert.equal(bbSearch.kind, "read");
   assert.equal(bbSearch.authentication, "bb");
   assert.equal(bbSync.kind, "mutation");
@@ -330,6 +362,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(planSolve.authentication, "tis");
   assert.equal(degreeAudit.kind, "plan");
   assert.equal(degreeAudit.authentication, "tis");
+  assert.equal(degreeProgress.kind, "read");
+  assert.equal(degreeProgress.authentication, "tis");
   assert.equal(snapshotSave.kind, "mutation");
   assert.equal(snapshotSave.authentication, "sustech-cas");
   assert.equal(snapshotSave.confirmation, "none");

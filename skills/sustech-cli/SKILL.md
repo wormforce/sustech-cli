@@ -41,13 +41,14 @@ includes these high-value areas:
 - Research helpers: `papers search`, `papers fetch-oa`, `nces browse`,
   `nces search`, `nces course`.
 - Blackboard: `bb user`, `bb courses`, `bb content`, `bb attachments`,
-  `bb assignments`, `bb deadlines`, `bb search`, `bb attempts`,
-  `bb download`, `bb sync`, `bb submit preview`, `bb submit apply`.
+  `bb assignments`, `bb deadlines`, `bb calendar`, `bb search`,
+  `bb attempts`, `bb download`, `bb sync`, `bb submit preview`,
+  `bb submit apply`, `bb calendar-link set/show/fetch/delete`.
 - TIS reads and planning: `tis courses search`, `tis courses available`,
   `tis enrolled`, `tis schedule`, `tis grades`, `tis exams`,
   `tis timetable`, `tis plan init/show/add/remove/solve`,
   `tis classroom rooms/occupancy/free/live/now`, `tis evals`,
-  `tis ical`, `tis degree audit`.
+  `tis ical`, `tis degree progress`, `tis degree audit`.
 - TIS writes: `tis selection preview/apply` for `cart`, `drop`, and `bid`
   style operations, `tis bid plan`, `tis bid apply`, `tis enroll preview`,
   `tis enroll apply`.
@@ -65,16 +66,20 @@ includes these high-value areas:
 Some useful routing hints:
 
 - For “what is due soon”, prefer `bb deadlines` and optionally `context --live`.
+- For Blackboard timeline questions, prefer `bb calendar` when you need typed
+  `--since`/`--until`/`--type`/`--course-id` filtering.
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
-- For degree audits, require a user-supplied local JSON requirements file. Do
-  not invent an official curriculum, auto-resolve ambiguous course matches, or
-  present the CLI's conservative result as an official graduation decision.
+- For “how close am I to graduation”, prefer `tis degree progress` for the
+  official personalized TIS result. `tis degree audit` requires a user-supplied
+  local JSON requirements file; do not invent an official curriculum,
+  auto-resolve ambiguous course matches, or present that conservative audit as
+  an official graduation decision.
 - Distinguish calendar export from subscription: `tis ical` produces a static
-  ICS snapshot. The CLI does not currently expose Blackboard's native shared
-  calendar URL. If the user obtains that URL in Blackboard, treat it as a
-  long-lived secret and do not echo or store it without explicit direction.
+  ICS snapshot; `bb calendar` is an authenticated REST read; and
+  `bb calendar-link` manages Blackboard's native shared ICS link, which is a
+  long-lived secret stored in the OS credential store and masked by default.
 - For room availability, distinguish catalog-backed `tis classroom *` from
   live `tis classroom live/now`.
 - `library search-url` is only a browser handoff; do not fabricate library
@@ -94,12 +99,18 @@ Some useful routing hints:
   chat or a visible command argument.
 - On a local desktop, let the user run `sustech auth login`; it uses a hidden
   prompt and the operating system's native credential store.
+- Treat Blackboard calendar links like passwords: use
+  `sustech bb calendar-link set --url-stdin`, keep `show` masked by default,
+  and use `--reveal` only when the full link is explicitly required.
 - In headless automation, use credentials supplied by the user's existing
   secret manager through the documented environment or credentials-file
   mechanism. Never create a plaintext fallback.
 - Use `sustech auth status --json` and the appropriate read-only
   `sustech auth check --service ... --json` before a workflow that needs login.
 - Use `--profile` when the task depends on a specific account identity.
+- If CAS returns `CAS_INTERACTIVE_CHALLENGE_REQUIRED`, report that the password
+  was not submitted and stop. Do not bypass, solve, or repeatedly retry the
+  interactive challenge.
 
 ## Guard remote mutations
 
@@ -157,6 +168,7 @@ post-write verification:
 - `papers fetch-oa`
 - `bb download`
 - `bb sync`
+- `bb calendar-link fetch --destination ...`
 
 For these commands:
 

@@ -2,6 +2,7 @@ import type { Semester } from "./semester.js";
 import type { StudentProfileReport } from "../profile/report.js";
 import type { TimetableResult } from "../tis/planner.js";
 import type { DegreeAuditResult } from "../tis/degree-audit.js";
+import type { TisDegreeProgress } from "../tis/degree-progress.js";
 import type { TisPlanView } from "../tis/plan.js";
 import type { Course, ExamRecord, GpaSummary, GradeRecord, PersonalScheduleEntry } from "../tis/types.js";
 
@@ -257,6 +258,93 @@ export function formatDegreeAudit(result: DegreeAuditResult, requirementsPath: s
     lines.push("  (none)");
   }
   return lines.join("\n");
+}
+
+export function formatDegreeProgress(progress: TisDegreeProgress): string {
+  const context = [
+    progress.context.cohort ? `cohort ${progress.context.cohort}` : "",
+    progress.context.major,
+    progress.summary.majorTrack && progress.summary.majorTrack !== "无"
+      ? `track ${progress.summary.majorTrack}`
+      : "",
+  ].filter(Boolean).join(" · ");
+  const lines = [
+    `TIS degree progress${context ? ` · ${context}` : ""}`,
+    "TIS-reported snapshot; not a final graduation decision.",
+    "",
+    formatProgressCredits(progress),
+    formatProgressCourses(progress),
+  ];
+
+  lines.push("", `Credit categories (${progress.creditCategories.length})`);
+  if (progress.creditCategories.length === 0) {
+    lines.push("  (none returned)");
+  } else {
+    lines.push(...progress.creditCategories.map((entry) => {
+      const credits = progressRatio(entry.completedCredits, entry.requiredCredits, entry.remainingCredits, "credits");
+      const hours = progressRatio(entry.completedHours, entry.requiredHours, entry.remainingHours, "hours");
+      const details = [credits, hours, entry.note].filter(Boolean).join(" · ");
+      return `  - ${entry.name}${details ? ` · ${details}` : ""}`;
+    }));
+  }
+
+  lines.push("", `Module gaps (${progress.moduleGaps.length})`);
+  if (progress.moduleGaps.length === 0) {
+    lines.push("  (none reported)");
+  } else {
+    lines.push(...progress.moduleGaps.map((entry) => {
+      const gaps = [
+        entry.remainingCredits !== undefined ? `${entry.remainingCredits} credits` : "",
+        entry.remainingCourses !== undefined ? `${entry.remainingCourses} courses` : "",
+      ].filter(Boolean).join(", ");
+      return `  - ${entry.name}${gaps ? ` · remaining ${gaps}` : " · not marked passed"}`;
+    }));
+  }
+
+  if (progress.detailsIncluded) {
+    lines.push("", `Course details: ${progress.courseCount ?? 0} row(s) included in structured output.`);
+  } else if (progress.detailsRequested) {
+    lines.push("", "Course details were requested but the TIS course-detail source was unavailable; inspect sourceStatuses.courses.");
+  } else {
+    lines.push("", "Course details omitted; re-run with --details when course-by-course data is needed.");
+  }
+  if (progress.warnings.length > 0) {
+    lines.push("", "Notes", ...progress.warnings.map((warning) => `  - ${warning.message}`));
+  }
+  return lines.join("\n");
+}
+
+function formatProgressCredits(progress: TisDegreeProgress): string {
+  const { completedCredits, requiredCredits, remainingCredits } = progress.summary;
+  if (completedCredits === undefined && requiredCredits === undefined && remainingCredits === undefined) {
+    return "Credits: not returned";
+  }
+  return `Credits: ${progressRatio(completedCredits, requiredCredits, remainingCredits, "credits")}`;
+}
+
+function formatProgressCourses(progress: TisDegreeProgress): string {
+  const { completedCourses, requiredCourses, remainingCourses } = progress.summary;
+  if (completedCourses === undefined && requiredCourses === undefined && remainingCourses === undefined) {
+    return "Courses: not returned";
+  }
+  return `Courses: ${progressRatio(completedCourses, requiredCourses, remainingCourses, "courses")}`;
+}
+
+function progressRatio(
+  completed: number | undefined,
+  required: number | undefined,
+  remaining: number | undefined,
+  unit: string,
+): string {
+  const ratio = completed !== undefined && required !== undefined
+    ? `${completed}/${required} ${unit}`
+    : completed !== undefined
+      ? `${completed} completed ${unit}`
+      : required !== undefined
+        ? `${required} required ${unit}`
+        : "";
+  const gap = remaining !== undefined ? `${remaining} remaining` : "";
+  return [ratio, gap].filter(Boolean).join(" · ") || "not returned";
 }
 
 export function formatStudentProfile(

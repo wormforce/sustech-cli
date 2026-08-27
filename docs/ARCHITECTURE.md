@@ -21,14 +21,17 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/cli.ts` owns command routing, option validation, and user-facing help.
 - `src/core` owns credentials, errors, output contracts, capabilities,
   consequences, and other shared primitives.
-- `src/core/keyring.ts` keeps long-lived passwords behind a platform adapter:
-  macOS Keychain, Windows Credential Manager, or Linux Secret Service. Its
-  local config contains profile metadata only.
+- `src/core/keyring.ts` keeps long-lived secrets behind platform adapters:
+  macOS Keychain, Windows Credential Manager, or Linux Secret Service. CAS
+  passwords and Blackboard native calendar links use separate secret
+  namespaces. The local config contains profile metadata only for CAS
+  credentials; the Blackboard calendar link does not create on-disk metadata.
 - `src/sso` owns generic CAS session flow. TIS, Blackboard, and WS reuse this
   layer instead of reimplementing login logic separately.
 - `src/tis` owns TIS protocol details, normalized course models, persistent
-  planning and conservative degree audit, live classroom/context helpers,
-  multi-source ICS export, and guarded enroll/cart/drop/bid write paths.
+  planning, official degree-progress normalization, conservative local degree
+  audit, live classroom/context helpers, multi-source ICS export, and guarded
+  enroll/cart/drop/bid write paths.
 - `src/calendar`, `src/faculty`, `src/transit`, `src/resources`, and
   `src/wifi` own public or local-only data sources.
 - `src/context` composes a truthful snapshot from whichever sources are
@@ -40,6 +43,9 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/services` owns reusable campus-service adapters such as Blackboard, WS,
   booking, library booking, PMS, NCES, and papers, plus the authenticated
   session wrappers that sit in front of some of them.
+- `src/services/blackboard-calendar.ts` owns native Learn ICS-link validation,
+  masking, safe same-origin fetch, and bounded ICS parsing for the stored
+  Blackboard calendar subscription workflow.
 - `src/core/capabilities.ts` is the machine-discoverable safety registry.
 - Services must not write to stdout or stderr.
 - Machine-readable output is versioned by `schemaVersion`.
@@ -88,6 +94,10 @@ commands for them.
   `tis bid plan`, and `library search-url` do not authenticate or write.
 - `bb submit preview` authenticates for live read-only preflight checks but
   never calls a mutation endpoint.
+- `bb calendar` is an authenticated read with optional date, type, and course
+  filters. `bb calendar-link set` validates a native Learn ICS feed and stores
+  it as a separate operating-system secret; `show` masks it by default, and
+  `fetch` can refresh the feed without a fresh CAS login.
 - `bb attachments` keeps teacher-provided content files separate from student
   attempt files. `bb download` is a local mutation with an explicit destination,
   same-origin URL checks, exclusive no-overwrite placement, and a portable
@@ -98,6 +108,9 @@ commands for them.
 - `auth login` verifies the selected service before storing a password in the
   operating-system credential store. Linux refuses a session-only keyutils or
   plaintext fallback when Secret Service is unavailable.
+- If CAS responds with an interactive slide CAPTCHA, the shared login layer
+  returns `CAS_INTERACTIVE_CHALLENGE_REQUIRED` before password submission
+  instead of trying to bypass the challenge.
 - Remote mutations cover TIS enroll/cart/drop/bid, Blackboard submission,
   eHall and library booking create/cancel, and PMS queue upload/delete. Every
   path requires `--confirm`; file-bound uploads additionally require the

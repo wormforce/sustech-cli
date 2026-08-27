@@ -25,10 +25,11 @@ export const BLACKBOARD_STATUS: ServiceStatus = {
   auth: "cookie-session",
   campusNetwork: false,
   browser: false,
-  summary: "Blackboard REST reads, safe content-attachment downloads, and Classic assignment submission are available with an authenticated CAS cookie session.",
+  summary: "Blackboard REST reads, native calendar-feed handling, safe content-attachment downloads, and Classic assignment submission are implemented.",
   notes: [
     "The adapter must provide Blackboard cookies for bb.sustech.edu.cn.",
     "The CLI CAS bridge completed an opt-in live courses read on 2026-08-26.",
+    "Native shared-calendar links are separate bearer-like secrets stored only in the operating-system credential store.",
     "Teacher-provided files use the Learn content-attachment endpoint or same-origin BBML links.",
     "Student submission files use the official Learn REST attempt/files flow and currently target Classic/Original assignments.",
     "No Blackboard write path has been live-submitted from this repository yet.",
@@ -37,6 +38,9 @@ export const BLACKBOARD_STATUS: ServiceStatus = {
     "/learn/api/public/v1/users/me",
     "/learn/api/public/v1/users/{uid}/courses",
     "/learn/api/public/v1/courses/{courseId}",
+    "/learn/api/public/v1/calendars",
+    "/learn/api/public/v1/calendars/items",
+    "/webapps/calendar/calendarFeed/{opaque}/learn.ics",
     "/learn/api/public/v1/courses/{courseId}/contents",
     "/learn/api/public/v1/courses/{courseId}/contents/{contentId}/attachments",
     "/learn/api/public/v1/courses/{courseId}/contents/{contentId}/attachments/{attachmentId}/download",
@@ -196,6 +200,7 @@ export interface BlackboardSubmissionPayload {
 
 export type BlackboardFailureStage =
   | "courses"
+  | "calendar-items"
   | "assignments"
   | "content"
   | "content-item"
@@ -208,6 +213,9 @@ export interface BlackboardOperationFailure {
   message: string;
   code?: string;
   status?: number;
+  calendarItemType?: BlackboardCalendarItemType;
+  since?: string;
+  until?: string;
   courseId?: string;
   courseCode?: string;
   courseName?: string;
@@ -238,6 +246,85 @@ export interface BlackboardDeadlineReport {
   coursesMatched: number;
   coursesScanned: number;
   deadlines: BlackboardDeadline[];
+  failures: BlackboardOperationFailure[];
+}
+
+export type BlackboardCalendarKind = "course" | "institution" | "personal" | "unknown";
+
+export interface BlackboardCalendar {
+  id: string;
+  name: string;
+  kind: BlackboardCalendarKind;
+  courseId?: string;
+}
+
+export type BlackboardCalendarItemType =
+  | "Course"
+  | "GradebookColumn"
+  | "Institution"
+  | "OfficeHours"
+  | "Personal";
+
+export type BlackboardCalendarWeekDay =
+  | "Sunday"
+  | "Monday"
+  | "Tuesday"
+  | "Wednesday"
+  | "Thursday"
+  | "Friday"
+  | "Saturday";
+
+export interface BlackboardCalendarItemDynamicProps {
+  attemptable: boolean;
+  categoryId: string;
+  dateRangeLimited: boolean;
+  eventType: string;
+  gradable: boolean;
+}
+
+export interface BlackboardCalendarItemRecurrence {
+  count?: number;
+  frequency: "Daily" | "Weekly" | "Monthly" | "";
+  interval?: number;
+  monthRepeatDay?: number;
+  monthPosition?: number;
+  originalStart?: string;
+  originalEnd?: string;
+  repeatBroken: boolean;
+  repeatDay?: BlackboardCalendarWeekDay;
+  until?: string;
+  weekDays: BlackboardCalendarWeekDay[];
+}
+
+export interface BlackboardCalendarItem {
+  id: string;
+  type: BlackboardCalendarItemType | "";
+  calendarId: string;
+  calendarName: string;
+  title: string;
+  description: string;
+  location: string;
+  start: string;
+  end: string;
+  modified: string;
+  color: string;
+  disableResizing: boolean;
+  courseId?: string;
+  dynamicCalendarItemProps?: BlackboardCalendarItemDynamicProps;
+  recurrence?: BlackboardCalendarItemRecurrence;
+}
+
+export interface BlackboardCalendarItemsReport {
+  generatedAt: string;
+  courseId?: string;
+  type?: BlackboardCalendarItemType;
+  since: string;
+  until: string;
+  requestedChunks: number;
+  completedChunks: number;
+  partial: boolean;
+  totalItems: number;
+  items: BlackboardCalendarItem[];
   failures: BlackboardOperationFailure[];
 }
 
@@ -338,6 +425,86 @@ export async function listBlackboardCourses(
     || course.name.toLowerCase().includes(query)
     || course.courseCode.toLowerCase().includes(query),
   );
+}
+
+export async function listBlackboardCalendars(adapter: ServiceAdapter): Promise<BlackboardCalendar[]> {
+  const page = await fetchBlackboardPage(adapter, "/learn/api/public/v1/calendars");
+  return page.results.map((item) => normaliseBlackboardCalendar(item));
+}
+
+export async function listBlackboardCalendarItems(
+  adapter: ServiceAdapter,
+  options: {
+    courseId?: string;
+    type?: BlackboardCalendarItemType;
+    since?: Date | string;
+    until?: Date | string;
+    now?: Date;
+  } = {},
+): Promise<BlackboardCalendarItemsReport> {
+  const window = resolveBlackboardCalendarWindow(options);
+  const chunks = buildBlackboardCalendarChunks(window.sinceDate, window.untilDate);
+  const unique = new Map<string, BlackboardCalendarItem>();
+  const failures: BlackboardOperationFailure[] = [];
+  let completedChunks = 0;
+
+  for (const chunk of chunks) {
+    try {
+      const items = await fetchBlackboardCalendarItemsChunk(adapter, {
+        since: chunk.since,
+        until: chunk.until,
+        ...(options.courseId ? { courseId: options.courseId } : {}),
+        ...(options.type ? { type: options.type } : {}),
+      });
+      completedChunks += 1;
+      for (const item of items) unique.set(blackboardCalendarItemKey(item), item);
+    } catch (error) {
+      failures.push(blackboardOperationFailure(error, {
+        stage: "calendar-items",
+        ...(options.type ? { calendarItemType: options.type } : {}),
+        ...(options.courseId ? { courseId: canonicalCourseId(options.courseId) } : {}),
+        since: chunk.since,
+        until: chunk.until,
+      }));
+    }
+  }
+
+  if (completedChunks === 0 && failures.length > 0) {
+    const first = failures[0];
+    throw new CliError(
+      first?.message || "Blackboard calendar items could not be read.",
+      first?.code || "BLACKBOARD_CALENDAR_READ_FAILED",
+      1,
+      {
+        ...(first?.status !== undefined ? { status: first.status } : {}),
+        ...(first?.calendarItemType ? { type: first.calendarItemType } : {}),
+        ...(first?.since ? { since: first.since } : {}),
+        ...(first?.until ? { until: first.until } : {}),
+        ...(first?.courseId ? { courseId: first.courseId } : {}),
+      },
+    );
+  }
+
+  const items = [...unique.values()].sort((left, right) =>
+    compareBlackboardCalendarDateTime(left.start, right.start)
+    || compareBlackboardCalendarDateTime(left.end, right.end)
+    || left.type.localeCompare(right.type)
+    || left.title.localeCompare(right.title)
+    || left.id.localeCompare(right.id),
+  );
+  return {
+    generatedAt: new Date().toISOString(),
+    ...(options.courseId ? { courseId: canonicalCourseId(options.courseId) } : {}),
+    ...(options.type ? { type: options.type } : {}),
+    since: window.since,
+    until: window.until,
+    requestedChunks: chunks.length,
+    completedChunks,
+    partial: failures.length > 0,
+    totalItems: items.length,
+    items,
+    failures,
+  };
 }
 
 export async function listBlackboardContent(
@@ -1078,6 +1245,18 @@ export function normaliseBlackboardUser(raw: unknown): BlackboardUser {
   };
 }
 
+export function normaliseBlackboardCalendar(raw: unknown): BlackboardCalendar {
+  const record = recordValue(raw);
+  const id = stringValue(record.id);
+  const kind = blackboardCalendarKind(id);
+  return {
+    id,
+    name: cleanText(record.name),
+    kind,
+    ...(kind === "course" ? { courseId: canonicalCourseId(id) } : {}),
+  };
+}
+
 export function normaliseBlackboardCourse(enrollment: unknown, detail?: unknown): BlackboardCourse {
   const enrollmentRecord = recordValue(enrollment);
   const detailRecord = recordValue(detail);
@@ -1125,6 +1304,31 @@ export function normaliseBlackboardAssignment(raw: unknown): BlackboardAssignmen
       scoringModel: stringValue(grading.scoringModel),
     },
     scoreProviderHandle: stringValue(record.scoreProviderHandle),
+  };
+}
+
+export function normaliseBlackboardCalendarItem(raw: unknown): BlackboardCalendarItem {
+  const record = recordValue(raw);
+  const calendarId = stringValue(record.calendarId);
+  const courseId = blackboardCalendarCourseId(calendarId);
+  const dynamicCalendarItemProps = normaliseBlackboardCalendarItemDynamicProps(record.dynamicCalendarItemProps);
+  const recurrence = normaliseBlackboardCalendarItemRecurrence(record.recurrence);
+  return {
+    id: canonicalIdBody(record.id),
+    type: stringValue(record.type) as BlackboardCalendarItemType | "",
+    calendarId,
+    calendarName: cleanText(record.calendarName),
+    title: cleanText(record.title),
+    description: cleanText(record.description),
+    location: cleanText(record.location),
+    start: stringValue(record.start),
+    end: stringValue(record.end),
+    modified: stringValue(record.modified),
+    color: stringValue(record.color),
+    disableResizing: booleanValue(record.disableResizing),
+    ...(courseId ? { courseId } : {}),
+    ...(dynamicCalendarItemProps ? { dynamicCalendarItemProps } : {}),
+    ...(recurrence ? { recurrence } : {}),
   };
 }
 
@@ -1182,6 +1386,42 @@ export function normaliseBlackboardUploadSettings(raw: unknown): BlackboardUploa
   };
 }
 
+export function normaliseBlackboardCalendarItemDynamicProps(
+  raw: unknown,
+): BlackboardCalendarItemDynamicProps | undefined {
+  const record = recordValue(raw);
+  if (Object.keys(record).length === 0) return undefined;
+  return {
+    attemptable: booleanValue(record.attemptable),
+    categoryId: stringValue(record.categoryId),
+    dateRangeLimited: booleanValue(record.dateRangeLimited),
+    eventType: stringValue(record.eventType),
+    gradable: booleanValue(record.gradable),
+  };
+}
+
+export function normaliseBlackboardCalendarItemRecurrence(
+  raw: unknown,
+): BlackboardCalendarItemRecurrence | undefined {
+  const record = recordValue(raw);
+  if (Object.keys(record).length === 0) return undefined;
+  return {
+    ...(record.count !== undefined ? { count: numberValue(record.count) } : {}),
+    frequency: stringValue(record.frequency) as BlackboardCalendarItemRecurrence["frequency"],
+    ...(record.interval !== undefined ? { interval: numberValue(record.interval) } : {}),
+    ...(record.monthRepeatDay !== undefined ? { monthRepeatDay: numberValue(record.monthRepeatDay) } : {}),
+    ...(record.monthPosition !== undefined ? { monthPosition: numberValue(record.monthPosition) } : {}),
+    ...(record.originalStart !== undefined ? { originalStart: stringValue(record.originalStart) } : {}),
+    ...(record.originalEnd !== undefined ? { originalEnd: stringValue(record.originalEnd) } : {}),
+    repeatBroken: booleanValue(record.repeatBroken),
+    ...(record.repeatDay !== undefined ? { repeatDay: stringValue(record.repeatDay) as BlackboardCalendarWeekDay } : {}),
+    ...(record.until !== undefined ? { until: stringValue(record.until) } : {}),
+    weekDays: arrayValue(record.weekDays)
+      .map((value) => stringValue(value) as BlackboardCalendarWeekDay)
+      .filter(Boolean),
+  };
+}
+
 export function classifyBlackboardHandler(handler: string): BlackboardContentItem["kind"] {
   switch (handler) {
     case "resource/x-bb-file":
@@ -1200,6 +1440,9 @@ export function classifyBlackboardHandler(handler: string): BlackboardContentIte
 export function buildBlackboardUrl(path: string, query: Record<string, string> = {}): string {
   return requestUrl(BLACKBOARD_BASE, path, query);
 }
+
+const BLACKBOARD_CALENDAR_DEFAULT_WINDOW_MS = 14 * 86_400_000;
+const BLACKBOARD_CALENDAR_MAX_WINDOW_MS = 16 * 7 * 86_400_000;
 
 async function fetchBlackboardPage(
   adapter: ServiceAdapter,
@@ -1228,6 +1471,26 @@ async function fetchBlackboardPage(
     url = new URL(nextPage, url).toString();
   }
   throw new ServiceError("Blackboard pagination exceeded the safe page limit.", { url });
+}
+
+async function fetchBlackboardCalendarItemsChunk(
+  adapter: ServiceAdapter,
+  options: {
+    courseId?: string;
+    type?: BlackboardCalendarItemType;
+    since: string;
+    until: string;
+  },
+): Promise<BlackboardCalendarItem[]> {
+  const query: Record<string, string> = {
+    since: options.since,
+    until: options.until,
+  };
+  if (options.courseId) query.courseId = canonicalCourseId(options.courseId);
+  if (options.type) query.type = options.type;
+  const url = buildBlackboardUrl("/learn/api/public/v1/calendars/items", query);
+  const page = await fetchBlackboardPage(adapter, url, { absolute: true });
+  return page.results.map((item) => normaliseBlackboardCalendarItem(item));
 }
 
 async function getBlackboardContentRecord(
@@ -1780,6 +2043,111 @@ function blackboardOperationFailure(
 function blackboardContentPath(course: BlackboardCourse, pathTitles: readonly string[]): string {
   const courseLabel = [course.courseCode, course.name].filter(Boolean).join(" · ") || course.id;
   return [courseLabel, ...pathTitles].join(" / ");
+}
+
+function blackboardCalendarKind(value: string): BlackboardCalendarKind {
+  if (value === "PERSONAL") return "personal";
+  if (value === "INSTITUTION") return "institution";
+  if (/^_.+_1$/.test(value)) return "course";
+  return "unknown";
+}
+
+function blackboardCalendarCourseId(value: string): string | undefined {
+  return blackboardCalendarKind(value) === "course" ? canonicalCourseId(value) : undefined;
+}
+
+function resolveBlackboardCalendarWindow(options: {
+  since?: Date | string;
+  until?: Date | string;
+  now?: Date;
+}): { since: string; until: string; sinceDate: Date; untilDate: Date } {
+  const now = options.now ?? new Date();
+  const sinceDate = options.since !== undefined
+    ? parseBlackboardCalendarDateTime(options.since, "since")
+    : undefined;
+  const untilDate = options.until !== undefined
+    ? parseBlackboardCalendarDateTime(options.until, "until")
+    : undefined;
+  const resolvedSince = sinceDate
+    ?? (untilDate
+      ? new Date(untilDate.getTime() - BLACKBOARD_CALENDAR_DEFAULT_WINDOW_MS)
+      : new Date(now));
+  const resolvedUntil = untilDate
+    ?? (sinceDate
+      ? new Date(sinceDate.getTime() + BLACKBOARD_CALENDAR_DEFAULT_WINDOW_MS)
+      : new Date(now.getTime() + BLACKBOARD_CALENDAR_DEFAULT_WINDOW_MS));
+  if (resolvedSince.getTime() > resolvedUntil.getTime()) {
+    throw new CliError(
+      "Blackboard calendar queries require since to be earlier than or equal to until.",
+      "BLACKBOARD_CALENDAR_WINDOW_INVALID",
+      2,
+      {
+        since: resolvedSince.toISOString(),
+        until: resolvedUntil.toISOString(),
+      },
+    );
+  }
+  return {
+    since: resolvedSince.toISOString(),
+    until: resolvedUntil.toISOString(),
+    sinceDate: resolvedSince,
+    untilDate: resolvedUntil,
+  };
+}
+
+function parseBlackboardCalendarDateTime(value: Date | string, label: "since" | "until"): Date {
+  const parsed = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new CliError(
+      `Blackboard calendar ${label} must be a valid date-time.`,
+      "BLACKBOARD_CALENDAR_TIME_INVALID",
+      2,
+      { field: label, value: String(value) },
+    );
+  }
+  return parsed;
+}
+
+function buildBlackboardCalendarChunks(
+  since: Date,
+  until: Date,
+): Array<{ since: string; until: string }> {
+  const start = since.getTime();
+  const finish = until.getTime();
+  if (finish - start <= BLACKBOARD_CALENDAR_MAX_WINDOW_MS) {
+    return [{ since: since.toISOString(), until: until.toISOString() }];
+  }
+  const chunks: Array<{ since: string; until: string }> = [];
+  let cursor = start;
+  while (cursor < finish) {
+    const boundary = Math.min(cursor + BLACKBOARD_CALENDAR_MAX_WINDOW_MS, finish);
+    chunks.push({
+      since: new Date(cursor).toISOString(),
+      until: new Date(boundary).toISOString(),
+    });
+    if (boundary >= finish) break;
+    cursor = boundary;
+  }
+  return chunks;
+}
+
+function blackboardCalendarItemKey(item: BlackboardCalendarItem): string {
+  return [
+    item.type,
+    item.id,
+    item.calendarId,
+    item.start,
+    item.end,
+    item.title,
+  ].join("\u001F");
+}
+
+function compareBlackboardCalendarDateTime(left: string, right: string): number {
+  const leftValue = Date.parse(left);
+  const rightValue = Date.parse(right);
+  const normalizedLeft = Number.isFinite(leftValue) ? leftValue : Number.MAX_SAFE_INTEGER;
+  const normalizedRight = Number.isFinite(rightValue) ? rightValue : Number.MAX_SAFE_INTEGER;
+  return normalizedLeft - normalizedRight;
 }
 
 function blackboardCourseMatchesQuery(course: BlackboardCourse, query: string): boolean {
