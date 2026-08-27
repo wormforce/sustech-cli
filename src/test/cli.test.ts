@@ -18,7 +18,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
   const text = run(["version"]);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /:\*##: :#######:/);
-  assert.match(text.stdout, /sustech-cli 0\.8\.3/);
+  assert.match(text.stdout, /sustech-cli 0\.8\.4/);
   assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
@@ -27,7 +27,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.8.3", runtime: `node ${process.version}` },
+    data: { version: "0.8.4", runtime: `node ${process.version}` },
   });
 });
 

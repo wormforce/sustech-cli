@@ -10,7 +10,7 @@ JSONL are available for software. Python is not required at runtime.
 
 > [!WARNING]
 > This is an independent community project, not an official SUSTech service.
-> The npm `0.8.3` release is a preview, and `main` may contain additional
+> The npm `0.8.4` release is a preview, and `main` may contain additional
 > next-release work. Inspect `sustech version` and `sustech capabilities` on the
 > installed copy before relying on a command or allowing it to change state.
 
@@ -170,7 +170,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.8.3",
+    "version": "0.8.4",
     "runtime": "node v22.19.0"
   }
 }

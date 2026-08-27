@@ -2,6 +2,17 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [0.8.4] - 2026-08-27
+
+### Added
+
+- Added a branded terminal dashboard for a bare `sustech` invocation, with
+  masked account and credential-store status plus context-aware quick-start
+  commands.
+- Added the SUSTech torch and wordmark to human-readable `sustech version`
+  output, with color limited to compatible interactive terminals. Explicit
+  help and machine-readable output remain unchanged.
+
 ## [0.8.3] - 2026-08-27
 
 ### Changed

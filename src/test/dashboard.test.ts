@@ -15,7 +15,7 @@ const loggedOut: CredentialProfileStatus = {
 
 test("dashboard guides an unconfigured profile to login without expanding full help", () => {
   const output = formatDashboard({
-    version: "0.8.3",
+    version: "0.8.4",
     runtime: "node v22.0.0",
     credentials: loggedOut,
     brandArt: "ART",
@@ -31,7 +31,7 @@ test("dashboard guides an unconfigured profile to login without expanding full h
 
 test("dashboard shows the masked active account and authenticated quick actions", () => {
   const output = formatDashboard({
-    version: "0.8.3",
+    version: "0.8.4",
     runtime: "node v22.0.0",
     credentials: {
       ...loggedOut,
@@ -54,17 +54,17 @@ test("dashboard shows the masked active account and authenticated quick actions"
 
 test("dashboard uses a fastfetch-style side-by-side layout only when it fits", () => {
   const wide = formatDashboard({
-    version: "0.8.3",
+    version: "0.8.4",
     runtime: "node v22.0.0",
     credentials: loggedOut,
     brandArt: "AAAA\nBBBB",
     terminalColumns: 80,
   });
-  assert.match(wide, /^AAAA {4}sustech-cli 0\.8\.3/);
+  assert.match(wide, /^AAAA {4}sustech-cli 0\.8\.4/);
   assert.match(wide, /^BBBB {4}$/m);
 
   const narrow = formatDashboard({
-    version: "0.8.3",
+    version: "0.8.4",
     runtime: "node v22.0.0",
     credentials: loggedOut,
     brandArt: "AAAA\nBBBB",
