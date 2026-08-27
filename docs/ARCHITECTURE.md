@@ -29,7 +29,7 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/sso` owns generic CAS session flow. TIS, Blackboard, and WS reuse this
   layer instead of reimplementing login logic separately.
 - `src/tis` owns TIS protocol details, normalized course models, persistent
-  planning, official degree-progress normalization, conservative derived
+  planning, TIS-reported degree-progress normalization, conservative derived
   missing-course classification, local degree audit, live classroom/context
   helpers, multi-source ICS export, and guarded enroll/cart/drop/bid write
   paths.

@@ -328,9 +328,10 @@ export function formatDegreeMissing(report: TisDegreeMissing): string {
     : "not checked";
   const lines = [
     `TIS degree missing${context ? ` · ${context}` : ""}`,
-    "Derived from official TIS degree progress, grade history, and enrolled-course matching; not a final graduation decision.",
-    `Official credits: ${progressRatio(report.officialSummary.completedCredits, report.officialSummary.requiredCredits, report.officialSummary.remainingCredits, "credits")}`,
-    `Official courses: ${progressRatio(report.officialSummary.completedCourses, report.officialSummary.requiredCourses, report.officialSummary.remainingCourses, "courses")}`,
+    "Derived from TIS-reported degree progress, grade history, and enrolled-course matching; not a final graduation decision.",
+    `Important: ${report.advisory.message} ${report.advisory.contact}`,
+    `TIS-reported credits: ${progressRatio(report.officialSummary.completedCredits, report.officialSummary.requiredCredits, report.officialSummary.remainingCredits, "credits")}`,
+    `TIS-reported courses: ${progressRatio(report.officialSummary.completedCourses, report.officialSummary.requiredCourses, report.officialSummary.remainingCourses, "courses")}`,
     `Sources: details ${report.sourceStatuses.progressDetails.state} · grades ${report.sourceStatuses.grades.state} · enrolled ${report.sourceStatuses.enrolled.state} (${enrolled})`,
   ];
 

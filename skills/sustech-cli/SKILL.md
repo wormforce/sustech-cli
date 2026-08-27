@@ -73,12 +73,15 @@ Some useful routing hints:
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
 - For “how close am I to graduation”, use `tis degree progress` for the
-  official personalized TIS summary. For “which courses am I still missing”,
+  personalized TIS-reported summary. For “which courses am I still missing”,
   use `tis degree missing --json`, preserve its separation between definite
   required courses, in-progress courses, choice gaps, and `manualReview`, and
   never turn a choice gap into a unique course recommendation. `tis degree
-  audit` instead requires a user-supplied local JSON requirements file. None of
-  these commands is an official graduation decision.
+  audit` instead requires a user-supplied local JSON requirements file. Treat
+  every degree result as advisory: preserve `report.advisory`, use the
+  applicable official cultivation plan as the primary reference, and direct
+  discrepancies or uncertainty to the department secretary or Teaching Affairs
+  Office. Never describe TIS as the final authority.
 - Distinguish calendar export from subscription: `tis ical` produces a static
   ICS snapshot; `bb calendar` is an authenticated REST read; and
   `bb calendar-link` manages Blackboard's native shared ICS link, which is a

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatDegreeMissing } from "../core/text.js";
 import { deriveTisDegreeMissing, evaluateTisDegreeMissing, type TisDegreeMissing } from "../tis/degree-missing.js";
 import type { TisClient } from "../tis/client.js";
 import type { TisDegreeProgress } from "../tis/degree-progress.js";
@@ -83,6 +84,16 @@ test("degree missing separates definite required gaps, in-progress required cour
     choiceGaps: 3,
     manualReview: 4,
   });
+  assert.deepEqual(result.advisory, {
+    primaryReference: "applicable-official-cultivation-plan",
+    message: "TIS 数据可能不完整或不一致，请以本人适用的正式培养方案为准。",
+    contact: "如本报告与培养方案不一致或仍有疑问，请联系系秘书或教学工作部确认。",
+  });
+  const rendered = formatDegreeMissing(result);
+  assert.match(rendered, /请以本人适用的正式培养方案为准/);
+  assert.match(rendered, /系秘书或教学工作部/);
+  assert.match(rendered, /TIS-reported credits/);
+  assert.doesNotMatch(rendered, /Official credits/);
 });
 
 test("degree missing degrades to manual review when course details or secondary sources are unavailable", () => {

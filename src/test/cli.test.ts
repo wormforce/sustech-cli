@@ -17,7 +17,7 @@ const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /^sustech-cli 0\.8\.2/);
+  assert.match(text.stdout, /^sustech-cli 0\.8\.3/);
 
   const json = run(["version", "--json"]);
   assert.equal(json.status, 0);
@@ -25,7 +25,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.8.2", runtime: `node ${process.version}` },
+    data: { version: "0.8.3", runtime: `node ${process.version}` },
   });
 });
 

@@ -35,7 +35,7 @@ progress. Per-source failures remain visible in `sourceStatuses`.
 
 ## One-command missing-course report
 
-`sustech tis degree missing` combines the official structured progress view,
+`sustech tis degree missing` combines the TIS-reported structured progress view,
 grade history, and the current enrolled-course list into one conservative
 advisory report:
 
@@ -65,8 +65,12 @@ the grade or current-enrollment source degrade the exact course classification
 instead of turning unknown courses into confirmed gaps.
 
 The JSON document has `kind: "tis-degree-missing"` and `schemaVersion: "1"`.
-It is a derived planning result, not an official graduation decision. Always
-inspect `manualReview` before treating an empty exact-course list as complete.
+Its `advisory` object names the student's applicable official cultivation plan
+as the primary reference. Human-readable output prints the same warning near
+the header. TIS data can be incomplete or inconsistent, so contact the
+department secretary or Teaching Affairs Office (教学工作部) when the report
+differs from the plan or remains unclear. Always inspect `manualReview` before
+treating an empty exact-course list as complete.
 
 ## Progress versus local audit
 
@@ -80,14 +84,15 @@ The three degree commands answer different questions:
   file to live grade records. It remains useful for proposed rules, offline
   checking, or curricula not represented correctly in TIS.
 
-The official progress response is not automatically rewritten into the local
+The TIS progress response is not automatically rewritten into the local
 audit schema. TIS can express nested modules, combined minima, language-placement
 conditions, and free-text exceptions that the current flat audit schema cannot
 represent losslessly. The local audit is therefore a separate conservative tool,
 not a hidden serialization of the personalized TIS result.
 
-None of these commands is a final graduation determination. Confirm unusual results in
-TIS and with the Teaching Affairs office.
+None of these commands is a final graduation determination. Use the applicable
+official cultivation plan as the primary reference, and confirm discrepancies
+with the department secretary or Teaching Affairs Office (教学工作部).
 
 ## Authentication note
 

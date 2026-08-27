@@ -2,6 +2,19 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [0.8.3] - 2026-08-27
+
+### Changed
+
+- `tis degree missing` now prints a prominent warning that TIS data may be
+  incomplete or inconsistent and that the student's applicable official
+  cultivation plan is the primary reference.
+- The JSON report now includes a structured `advisory` object directing
+  discrepancies or uncertainty to the department secretary or Teaching
+  Affairs Office (教学工作部).
+- Updated the repository skill and documentation to describe degree progress
+  as TIS-reported guidance rather than a final or authoritative determination.
+
 ## [0.8.2] - 2026-08-27
 
 ### Fixed

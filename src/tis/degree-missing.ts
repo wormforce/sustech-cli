@@ -70,6 +70,18 @@ export interface DegreeMissingManualReview {
   course?: Pick<DegreeMissingRequiredCourse, "code" | "name">;
 }
 
+export interface DegreeMissingAdvisory {
+  primaryReference: "applicable-official-cultivation-plan";
+  message: string;
+  contact: string;
+}
+
+export const DEGREE_MISSING_ADVISORY: Readonly<DegreeMissingAdvisory> = Object.freeze({
+  primaryReference: "applicable-official-cultivation-plan",
+  message: "TIS 数据可能不完整或不一致，请以本人适用的正式培养方案为准。",
+  contact: "如本报告与培养方案不一致或仍有疑问，请联系系秘书或教学工作部确认。",
+});
+
 export interface TisDegreeMissing {
   schemaVersion: "1";
   kind: "tis-degree-missing";
@@ -78,6 +90,7 @@ export interface TisDegreeMissing {
   context: DegreeProgressContext;
   officialSummary: DegreeProgressSummary;
   summary: Pick<DegreeProgressSummary, "remainingCredits" | "remainingCourses">;
+  advisory: DegreeMissingAdvisory;
   enrolledSemester?: {
     value: string;
     source: DegreeMissingSemesterSource;
@@ -329,6 +342,7 @@ export function evaluateTisDegreeMissing(input: EvaluateTisDegreeMissingInput): 
       remainingCredits: progress.summary.remainingCredits,
       remainingCourses: progress.summary.remainingCourses,
     }),
+    advisory: { ...DEGREE_MISSING_ADVISORY },
     ...(input.enrolledSemester && input.enrolledSemesterSource
       ? { enrolledSemester: { value: input.enrolledSemester, source: input.enrolledSemesterSource } }
       : {}),

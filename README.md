@@ -10,7 +10,7 @@ JSONL are available for software. Python is not required at runtime.
 
 > [!WARNING]
 > This is an independent community project, not an official SUSTech service.
-> The npm `0.8.2` release is a preview, and `main` may contain additional
+> The npm `0.8.3` release is a preview, and `main` may contain additional
 > next-release work. Inspect `sustech version` and `sustech capabilities` on the
 > installed copy before relying on a command or allowing it to change state.
 
@@ -119,13 +119,13 @@ version's exact command, authentication, network, and confirmation metadata.
 | --- | --- | --- |
 | Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
 | Academic context | calendar, live context, profile reports, academic snapshots | Public and authenticated reads; guarded local exports |
-| TIS | catalog, schedule, grades, exams, official degree progress, conservative missing-course report, persistent planning, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
+| TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
 | Blackboard | courses, deadlines, calendar reads, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; the native calendar link is a separate stored secret and local writes are guarded |
 | Campus services | WS programs, eHall booking, library booking, PMS jobs and usage | Authenticated reads; booking and queue writes are confirm-gated |
 | Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
 
-For the official structured `tis degree progress` response, the derived
+For the structured TIS-reported `tis degree progress` response, the derived
 `tis degree missing` report, and how both differ from local JSON
 `tis degree audit`, see
 [docs/DEGREE_PROGRESS.md](docs/DEGREE_PROGRESS.md). For the
@@ -170,7 +170,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.8.2",
+    "version": "0.8.3",
     "runtime": "node v22.19.0"
   }
 }

@@ -15,7 +15,7 @@ no real account mutation was attempted while completing this expansion.
 | SSO/CAS | shared CAS sessions for TIS, Blackboard, and WS | none | Implemented; opt-in live login smoke passed for all three on 2026-08-26, while fresh login on 2026-08-27 was blocked before password submission by the current interactive slide CAPTCHA | P0 |
 | TIS catalog | search, normalized schedules, cache | none | Implemented | P0 |
 | TIS personal | selectable courses, normalized enrolled/week schedule | enroll | Enrolled read live-smoked; other reads still need targeted live QA | P0 |
-| TIS academics | grades/GPA, exams, official structured degree progress, conservative missing-course classification | none | Implemented with fixtures; live QA pending | P1 |
+| TIS academics | grades/GPA, exams, TIS-reported structured degree progress, conservative missing-course classification | none | Implemented with fixtures; live QA pending | P1 |
 | TIS planning | persistent week-aware timetable plans, scored solver, blocked periods, conservative local degree audit | guarded local plan files | Implemented with fixtures | P1 |
 | TIS remaining | catalog and live classroom views, evaluation status, multi-source iCalendar export, selection previews, bid planning | enroll, cart, drop, single and batch bids | Implemented with explicit confirmation and exact post-readback for remote writes; live QA pending | P1 |
 | Calendar | academic terms, holidays, date intelligence | local override not ported | Read paths implemented | P1 |
@@ -46,7 +46,7 @@ no real account mutation was attempted while completing this expansion.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-preview v0.8.2, guarded remote mutations include TIS enroll/cart/drop/bid,
+preview v0.8.3, guarded remote mutations include TIS enroll/cart/drop/bid,
 Blackboard submission, eHall and library booking create/cancel, and PMS queue
 upload/delete. They require an exact typed target, fresh preflight, explicit
 `--confirm`, and operation-specific read-back; an ambiguous result exits 5 with
