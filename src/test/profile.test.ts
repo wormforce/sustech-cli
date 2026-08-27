@@ -187,7 +187,8 @@ test("profile exports save exclusively, keep private permissions, and reject sym
   try {
     assert.equal(await saveStudentProfile(destination, report), destination);
     const metadata = await lstat(destination);
-    assert.equal(metadata.mode & 0o777, 0o600);
+    assert.equal(metadata.isFile(), true);
+    if (process.platform !== "win32") assert.equal(metadata.mode & 0o777, 0o600);
     const loaded = JSON.parse(await readFile(destination, "utf8")) as StudentProfileReport;
     assert.equal(loaded.kind, report.kind);
     assert.equal(loaded.schemaVersion, report.schemaVersion);

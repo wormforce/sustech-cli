@@ -105,7 +105,9 @@ commands for them.
 - Local file mutations such as Blackboard download/sync, OA PDF fetch,
   iCalendar/profile/snapshot export, and plan persistence require explicit or
   well-scoped destinations, reject symbolic-link traversal, default to
-  no-overwrite, and use private permissions for personal academic artifacts.
+  no-overwrite, and request mode `0600` for personal academic artifacts on
+  POSIX platforms. Windows uses the destination filesystem's ACLs rather than
+  POSIX mode bits.
 - Mutation commands use explicit preview/build phases and post-action
   verification. Any ambiguous remote result returns exit code 5 plus
   `DO_NOT_RETRY_AUTOMATICALLY` when write state cannot be determined safely.

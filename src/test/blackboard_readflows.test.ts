@@ -382,7 +382,7 @@ test("Blackboard sync downloads attachments into a safe destination and preserve
     });
     assert.equal(first.downloadedFiles, 1);
     assert.equal(first.partial, false);
-    assert.match(first.files[0]?.relativePath ?? "", /Homework 1 \[content-300\]\/report\.final \[42588\]\.pdf$/);
+    assert.deepEqual(first.files[0]?.relativePath.split(/[\\/]+/), ["Homework 1 [content-300]", "report.final [42588].pdf"]);
     assert.equal(first.files[0]?.relativePath.includes(".."), false);
     assert.equal(await readFile(first.files[0]!.destination, "utf8"), "report bytes");
 

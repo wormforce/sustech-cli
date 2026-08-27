@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, parse, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { CliError } from "./errors.js";
+
+interface PathOperations {
+  dirname(path: string): string;
+  resolve(path: string): string;
+}
 
 export interface ConfigDirectoryOptions {
   env?: NodeJS.ProcessEnv;
@@ -64,11 +69,7 @@ export async function writeJsonAtomically(path: string, value: unknown): Promise
 
 export async function assertPathAndParentsAreNotSymlinks(path: string): Promise<void> {
   const resolved = resolve(path);
-  const root = parse(resolved).root;
-  const segments = resolved.slice(root.length).split("/").filter(Boolean);
-  let current = root;
-  for (const segment of segments) {
-    current = current === root ? join(root, segment) : join(current, segment);
+  for (const current of pathChainForSymlinkGuard(path)) {
     try {
       const stats = await lstat(current);
       if (stats.isSymbolicLink()) {
@@ -85,6 +86,18 @@ export async function assertPathAndParentsAreNotSymlinks(path: string): Promise<
       if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
       throw error;
     }
+  }
+}
+
+export function pathChainForSymlinkGuard(path: string, pathOps: PathOperations = { dirname, resolve }): string[] {
+  const resolved = pathOps.resolve(path);
+  const chain: string[] = [];
+  let current = resolved;
+  for (;;) {
+    chain.push(current);
+    const parent = pathOps.dirname(current);
+    if (parent === current) return chain.reverse();
+    current = parent;
   }
 }
 

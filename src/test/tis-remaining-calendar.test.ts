@@ -231,7 +231,9 @@ test("safe ICS writer rejects symlinks and keeps new files mode 0600", async () 
     const result = await writeIcsFile(payload, destination);
     assert.equal(result.overwritten, false);
     assert.equal((await readFile(destination, "utf8")), payload);
-    assert.equal((await stat(destination)).mode & 0o777, 0o600);
+    const metadata = await stat(destination);
+    assert.equal(metadata.isFile(), true);
+    if (process.platform !== "win32") assert.equal(metadata.mode & 0o777, 0o600);
 
     await symlink(destination, symlinkPath);
     await assert.rejects(() => writeIcsFile(payload, symlinkPath), /symbolic link/i);

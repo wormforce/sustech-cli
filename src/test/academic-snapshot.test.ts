@@ -28,7 +28,8 @@ test("academic snapshots save exclusively, use private permissions, and verify t
   try {
     assert.equal(await saveAcademicSnapshot(destination, snapshot), destination);
     const metadata = await lstat(destination);
-    assert.equal(metadata.mode & 0o777, 0o600);
+    assert.equal(metadata.isFile(), true);
+    if (process.platform !== "win32") assert.equal(metadata.mode & 0o777, 0o600);
     assert.deepEqual(await loadAcademicSnapshot(destination), snapshot);
 
     await assert.rejects(
@@ -118,7 +119,7 @@ test("academic snapshot loader rejects oversized files before parsing", async ()
   const destination = join(directory, "large.json");
   try {
     await writeFile(destination, "{}", "utf8");
-    await chmod(destination, 0o600);
+    if (process.platform !== "win32") await chmod(destination, 0o600);
     // A sparse extension exercises the metadata limit without allocating a large fixture.
     const handle = await import("node:fs/promises").then(({ open }) => open(destination, "r+"));
     await handle.truncate(16 * 1024 * 1024 + 1);

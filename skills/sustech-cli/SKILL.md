@@ -161,8 +161,9 @@ For these commands:
 Specific checks matter:
 
 - `profile export` and `academic snapshot save` contain personal academic data;
-  verify private file mode, schema version, masked identity, digest, and
-  per-source statuses.
+  verify schema version, masked identity, digest, and per-source statuses. On
+  POSIX, also verify mode `0600`; on Windows, access is governed by the
+  destination filesystem's ACLs rather than POSIX mode bits.
 - `tis ical` can include schedule, exams, deadlines, and holidays; verify event
   count, source statuses, omissions, and SHA-256 when it writes a file.
 - `papers fetch-oa`, `bb download`, and `bb sync` should report saved paths,

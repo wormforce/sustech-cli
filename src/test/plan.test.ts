@@ -19,9 +19,10 @@ test("persistent TIS plans keep schema/version and normalize local state", async
     await savePlan(planPath, initial);
 
     const written = JSON.parse(readFileSync(planPath, "utf8")) as { schemaVersion: string; kind: string };
+    assert.equal(statSync(planPath).isFile(), true);
     assert.equal(written.schemaVersion, "1");
     assert.equal(written.kind, "tis-plan");
-    assert.equal(statSync(planPath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(planPath).mode & 0o777, 0o600);
 
     const loaded = await loadPlan(planPath);
     assert.deepEqual(loaded.plan.requestedCodes, ["CS101", "MA101"]);
