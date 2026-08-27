@@ -1,328 +1,273 @@
 # sustech-cli
 
-A standalone TypeScript CLI for SUSTech services, designed for both people and
-agents. It talks to campus services directly and never invokes Python at
-runtime.
+[![npm](https://img.shields.io/npm/v/sustech-cli)](https://www.npmjs.com/package/sustech-cli)
+[![CI](https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/sustech-cli)](https://www.npmjs.com/package/sustech-cli)
 
-> Status: preview v0.6.0. The TypeScript rewrite now covers the core TIS read
-> surface, guarded enrollment apply, public calendar/faculty/transit data,
-> local Wi-Fi and resource helpers, public papers/NCES queries, CAS-backed
-> Blackboard/WS reads, safe Blackboard attachment downloads, fixture-validated Blackboard assignment submission, and
-> authenticated read-only booking, library-booking, and PMS flows. On
-> 2026-08-26, opt-in read-only live smoke tests passed for
-> TIS enrollment reads, Blackboard courses, WS programs, eHall rooms, and
-> library-booking identity/summary/lab/count reads. PMS remained blocked by
-> its campus-network gate. Module-by-module status is tracked in [docs/MIGRATION.md](docs/MIGRATION.md)
-> and [docs/SERVICES.md](docs/SERVICES.md).
+An unofficial TypeScript CLI for SUSTech services, designed for people,
+scripts, and coding agents. Text is the default for humans; versioned JSON and
+JSONL are available for software. Python is not required at runtime.
 
-## Output for people and agents
+> [!WARNING]
+> This is an independent community project, not an official SUSTech service.
+> The npm `0.6.0` release is a preview, and `main` may contain additional
+> next-release work. Inspect `sustech version` and `sustech capabilities` on the
+> installed copy before relying on a command or allowing it to change state.
 
-Human-readable text is the default:
+## Install
+
+Requires Node.js 20.18 or newer:
 
 ```bash
+npm install --global sustech-cli
+sustech version
+```
+
+To try one command without a global install:
+
+```bash
+npm exec --package=sustech-cli -- sustech version
+```
+
+`npm run build` only compiles a source checkout; it does not put `sustech` on
+your shell `PATH`. Package developers can use `npm install --global .` or
+`npm link` after building.
+
+## Quick start
+
+Public data does not require an account:
+
+```bash
+sustech calendar day 2026-09-01
+sustech faculty search "computer vision"
+sustech transit lines
+```
+
+Authenticated services use a named local profile:
+
+```bash
+sustech auth login
+sustech auth status
+sustech tis schedule
+sustech bb courses
+```
+
+Discover the complete command surface from the installed version:
+
+```bash
+sustech --help
+sustech capabilities --json --pretty
+```
+
+## Use with an Agent
+
+The CLI is self-describing. Agents should inspect structured command and safety
+metadata instead of parsing `--help` or relying on a memorized command list:
+
+```bash
+sustech version --json
+sustech capabilities --json
+sustech consequences --json
+```
+
+This repository also ships a portable
+[`sustech-cli` Agent Skill](skills/sustech-cli/SKILL.md). Install it directly
+from the public repository—no source clone is needed:
+
+```bash
+npx skills add wormforce/sustech-cli --skill sustech-cli
+```
+
+For a global Codex installation:
+
+```bash
+npx skills add wormforce/sustech-cli --skill sustech-cli --global --agent codex
+```
+
+The [Agent Skills CLI](https://github.com/vercel-labs/skills) can target other
+supported agents and project-local scopes. Review the Skill before installing
+it: it teaches command discovery, structured output, credential boundaries,
+preview/confirm workflows, and the rule never to retry an ambiguous mutation
+automatically.
+
+Installing the npm package deliberately does **not** edit Codex, Claude Code,
+Cursor, or other agent configuration. The target agent and scope are user
+choices, so an npm `postinstall` script should not install instructions
+silently.
+
+For an agent without Skill support, provide this short instruction:
+
+> Use the installed `sustech` CLI. Start with `sustech capabilities --json` and
+> `sustech consequences --json`; request structured output, never expose login
+> secrets, and never add `--confirm` without approval for the exact target.
+
+A Skill is the onboarding layer; the CLI remains the executable source of
+truth. An MCP server may be useful later for native tool registration or remote
+execution, but wrapping every command in MCP now would duplicate the existing
+JSON interface. A repository-level `AGENTS.md` alone would only help agents
+that cloned the source.
+
+## What it covers
+
+This table is a summary. Use `sustech capabilities --json` for the installed
+version's exact command, authentication, network, and confirmation metadata.
+
+| Area | Examples | Access |
+| --- | --- | --- |
+| Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
+| Academic context | calendar, live context, profile reports, academic snapshots | Public and authenticated reads; guarded local exports |
+| TIS | catalog, schedule, grades, exams, persistent planning, degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
+| Blackboard | courses, deadlines, search, attachment download/sync, attempts, submission | CAS login; local writes are guarded and submission is confirm-gated |
+| Campus services | WS programs, eHall booking, library booking, PMS jobs and usage | Authenticated reads; booking and queue writes are confirm-gated |
+| Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths |
+| Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
+
+Remote-state mutations are deliberately limited to these apply commands, all
+of which require an exact target plus `--confirm`:
+
+- `tis enroll apply`, `tis selection apply`, and `tis bid apply`
+- `bb submit apply`
+- `booking create apply` and `booking cancel apply`
+- `lib-booking create apply` and `lib-booking cancel apply`
+- `pms upload apply` and `pms delete apply`
+
+Local state can also change through credential login/logout, persistent
+`tis plan` edits, and explicit file outputs such as `profile export`,
+`academic snapshot save`, `tis ical --destination`, `papers fetch-oa`,
+`bb download`, and `bb sync`. File commands reject unsafe symbolic-link paths
+and do not overwrite an existing target unless the command explicitly permits
+and requests it.
+
+## Output contract
+
+```bash
+# Human-readable text
 sustech tis courses search "machine learning"
-```
 
-Agents and scripts should request a versioned JSON contract explicitly:
-
-```bash
+# One versioned JSON envelope
 sustech tis courses search "machine learning" --json
-sustech tis courses search "machine learning" --json --pretty
-```
 
-Bulk consumers can stream one record per line:
-
-```bash
+# One record per line for list commands
 sustech tis courses search "machine learning" --jsonl
 ```
 
-`--output text|json|jsonl` is the long form. Exit codes remain authoritative in
-every mode. The exact envelope, JSONL, stream, and compatibility rules are in
-[docs/OUTPUT.md](docs/OUTPUT.md).
+`--output text|json|jsonl` is the long form, and `--pretty` formats JSON for
+review. A successful envelope looks like this:
 
-Agents can discover the command and safety surface without parsing help text:
+```json
+{
+  "schemaVersion": "1",
+  "ok": true,
+  "command": "version",
+  "data": {
+    "version": "0.6.0",
+    "runtime": "node v22.19.0"
+  }
+}
+```
+
+The process exit status remains authoritative in every mode. See
+[docs/OUTPUT.md](docs/OUTPUT.md) for envelope, JSONL, error-code, and
+compatibility rules.
+
+## Credentials
+
+On a desktop, `sustech auth login` verifies the account and stores the password
+in the operating system's native credential store:
+
+- macOS: Keychain
+- Windows: Credential Manager
+- Linux desktop: Secret Service via `secret-tool`
+
+The password is entered through a hidden prompt, is never accepted as a normal
+command-line argument, and is never written to the CLI config. If no safe
+backend is available, the CLI returns `CREDENTIAL_STORE_UNAVAILABLE` instead of
+falling back to plaintext.
 
 ```bash
-sustech capabilities --json
+sustech auth login --profile main
+sustech auth check --profile main --service bb --json
+sustech auth logout --profile main
 ```
 
-Each capability declares whether it is local/read/plan/mutation, whether it
-uses the network, which authentication it needs, and whether confirmation is
-required.
+Headless runners can use credentials supplied by their own secret manager via
+the documented environment variables or credentials file. Service sessions and
+cookies remain in memory. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
+for precedence, backend requirements, and non-interactive use.
 
-## Implemented command areas
+## Guarded workflows
 
-```text
-sustech capabilities
-sustech consequences
-sustech auth login/status/logout/check
-sustech calendar terms
-sustech calendar day
-sustech faculty departments
-sustech faculty list/get/search/render
-sustech context
-sustech resources list/search
-sustech wifi status/events
-sustech services status
-sustech papers search
-sustech nces browse/search/course
-sustech bb user/courses/content/attachments/assignments/attempts
-sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite]
-sustech bb submit preview ...
-sustech bb submit apply ... --expected-sha256 HASH --confirm
-sustech ws programs/detail
-sustech booking whoami
-sustech booking rooms [QUERY] [--available] [--page N] [--page-size N]
-sustech booking my-meetings [--page N] [--page-size N]
-sustech lib-booking whoami
-sustech lib-booking home-summary
-sustech lib-booking labs [--class-kind N]
-sustech lib-booking rooms --kind-id N --lab-id N [--class-kind N]
-sustech lib-booking reservation-count
-sustech lib-booking reservations [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--need-status N] [--page N] [--page-size N]
-sustech pms check
-sustech pms server-groups
-sustech pms stations [--server-group N]
-sustech pms jobs
-sustech pms scan-jobs
-sustech pms usage --begin YYYY-MM-DD --end YYYY-MM-DD [--type N] [--page N] [--page-size N]
-sustech library search-url
-sustech tis courses search [KEYWORD]
-sustech tis courses available [KEYWORD] --round ROUND
-sustech tis enrolled
-sustech tis schedule [--week N|--all]
-sustech tis grades [--semester YYYY-YYYY-N]
-sustech tis exams
-sustech tis classroom rooms/occupancy/free
-sustech tis evals
-sustech tis ical
-sustech tis timetable CODE... [--block MON:1-4] [--max N]
-sustech tis enroll preview ...
-sustech tis selection preview ...
-sustech tis bid plan ...
-sustech tis enroll apply ... --confirm
-sustech transit facilities
-sustech transit find QUERY
-sustech transit lines
-sustech transit schedule LINE
-sustech transit stops LINE
-sustech transit live
+Every remote mutation follows the same pattern: resolve the exact target, run a
+preview or read-only preflight, obtain explicit approval, apply with
+`--confirm`, then verify by reading the live state back.
+
+Enrollment example:
+
+```bash
+sustech tis courses available "machine learning" --round bxxk --json
+sustech tis enroll preview \
+  --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2
+sustech tis enroll apply \
+  --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2 --confirm
 ```
 
-All list commands support JSONL. `tis timetable` fetches the catalog once and
-solves conflicts locally with week-aware period overlap checks.
+Blackboard attachment and submission example:
 
-`faculty list` and `faculty search --department` take the exact department
-label returned by `sustech faculty departments`.
+```bash
+sustech bb attachments _8537_1 _629896_1 --json
+sustech bb download _8537_1 _629896_1 ATTACHMENT_ID \
+  --destination ./homework.pdf
 
-The currently exposed mutation commands are:
+sustech bb submit preview \
+  --course-id _8537_1 --content-id _629896_1 --file homework.pdf
+sustech bb submit apply \
+  --course-id _8537_1 --content-id _629896_1 --column-id _12345_1 \
+  --file homework.pdf --expected-sha256 HASH --confirm
+```
 
-- `sustech tis enroll apply --confirm`
-- `sustech bb submit apply --expected-sha256 HASH --confirm`
+`bb submit preview` is authenticated but read-only. It resolves assignment IDs,
+checks attempts, due date and upload limit, hashes the file, and emits the exact
+apply command. The same preview/confirm/read-back contract applies to TIS
+selection and bid changes, booking and library-booking create/cancel actions,
+and PMS upload/delete actions. An ambiguous remote write result includes
+`DO_NOT_RETRY_AUTOMATICALLY` and must not be retried automatically.
 
-`sustech bb download ... --destination PATH` is a local filesystem mutation,
-not a Blackboard write. It refuses to replace an existing path unless the exact
-command includes `--overwrite`.
+## Current limitations
 
-Everything else in the new selection and service surface is read-only, local
-planning, or browser handoff:
+- Blackboard submission follows official Learn REST attempt/upload endpoints
+  and is fixture-tested, but it has not yet performed a real Blackboard write.
+- The supported submission surface is Classic/Original assignment attempts;
+  the CLI does not scrape or silently fall back to the legacy
+  `uploadAssignment` HTML form.
+- Newly added TIS selection, booking, library-booking, and PMS write paths are
+  protocol/fixture-tested only. No real account mutation was performed while
+  building this expansion.
+- PMS may require the campus network, and first-time account linking may still
+  require a browser-side step.
+- Reusable service-adapter status can differ from the CLI's wired end-to-end
+  status. Inspect `sustech services status` and [docs/SERVICES.md](docs/SERVICES.md).
 
-- `tis selection preview` builds enroll/drop/cart/bid payloads locally
-- `tis bid plan` validates bid budgets locally
-- `bb submit preview` authenticates for read-only assignment, attempt, and upload-limit checks; it never mutates
-- `booking ...`, `lib-booking ...`, and `pms ...` expose authenticated reads only
-- `library search-url` builds a Primo handoff URL without claiming catalog data
-
-## Service status model
-
-`sustech services status` reports the reusable service-adapter layer rather than
-the CLI wrapper alone.
-
-- `implemented`: this repo includes the transport, login handshake, and
-  read-only request guard needed to reach the documented service surface
-- `adapter_required`: parsers and endpoints are ported, but the caller still
-  must provide an authenticated transport or service-specific headers/cookies
-- `unavailable`: only safe URL builders or types are preserved for now
-
-This distinction matters across the current campus-service surface:
-
-- `booking`, `library-booking`, and `pms` are now `implemented`
-- `blackboard` and `ws` still report `adapter_required` at the reusable
-  service-module level even though the CLI wires CAS-backed Blackboard/WS commands for them
-- `library-catalog` stays `unavailable` apart from `library search-url`
-
-The full matrix is in [docs/SERVICES.md](docs/SERVICES.md).
-`papers search` uses CrossRef bibliographic relevance by default and only
-resolves open-access links when `--resolve-oa` or `--open-access` is requested.
+Module-by-module migration status is tracked in
+[docs/MIGRATION.md](docs/MIGRATION.md). Architecture and safety invariants are
+documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development
 
-Requires Node.js 20.18 or newer.
-
 ```bash
-npm install
+git clone https://github.com/wormforce/sustech-cli.git
+cd sustech-cli
+npm ci
+npm run check
 npm test
 npm run build
 node dist/cli.js --help
 ```
 
-Install the CLI from npm with:
-
-```bash
-npm install --global sustech-cli
-```
-
-For local development, `build` creates `dist`; it does not place `sustech` on
-your shell `PATH`. Use one of these flows instead:
-
-```bash
-# Run the compiled CLI directly without touching global PATH.
-npm run build
-node dist/cli.js version
-
-# Install the current checkout as the global `sustech` command.
-npm install --global .
-sustech version
-```
-
-`npm link` is also available to package developers who explicitly want a live
-symlink. Remove a global install later with:
-
-```bash
-npm uninstall --global sustech-cli
-```
-
-## CI
-
-Cross-platform CI is active at [.github/workflows/ci.yml](.github/workflows/ci.yml).
-It runs `npm ci`, `npm run check`, `npm test`, and `npm pack --dry-run` on
-Ubuntu, macOS, and Windows with Node.js 20 and 22.
-
-## Authentication
-
-For a local desktop, verify the account once and save it in the operating
-system's credential store:
-
-```bash
-sustech auth login
-sustech auth status
-sustech auth check --service bb
-```
-
-The hidden password prompt writes to stderr, so `--json` remains parseable on
-stdout. macOS uses Keychain, Windows uses Credential Manager, and Linux desktop
-uses Secret Service through `secret-tool`. Profile metadata contains the SID
-and backend but never the password. Use `--profile NAME` for multiple accounts
-and `sustech auth logout` to delete one.
-
-Headless Linux, containers, and CI do not silently fall back to plaintext or a
-session-only kernel keyring. Inject credentials when an agent runner or CI
-system owns secret management:
-
-```bash
-export SUSTECH_SID='12410000'
-export SUSTECH_PASSWORD='your-password'
-sustech auth check
-sustech auth check --service bb
-sustech auth check --service ws
-sustech auth check --service booking
-sustech auth check --service lib-booking
-sustech auth check --service pms
-```
-
-Alternatively set `SUSTECH_CREDENTIALS_FILE` or pass `--credentials-file` to a
-file whose only content is `sid:password`. Explicit files and environment
-variables override a stored profile. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
-for backend availability, profile precedence, config paths, and non-interactive
-usage.
-
-All authenticated service sessions stay in memory only:
-
-- booking keeps CAS cookies plus the booking bearer token in memory
-- library booking keeps the `ic-cookie` session in memory
-- PMS keeps the `OSESSIONID` cookie in memory and uses transient RSA login material
-
-None of those session secrets are written to disk or echoed in normal command
-output. A long-lived account password is persisted only when `auth login`
-explicitly stores it in the operating-system credential store.
-Booking, library-booking, and PMS remain restricted to read-only endpoint
-allowlists. Blackboard writes are exposed only through the guarded official
-assignment-submission workflow below.
-
-For PMS specifically, the CLI reuses `SUSTECH_SID` and `SUSTECH_PASSWORD` as
-the PMS username/password pair. A first-time PMS account link or activation may
-still require a browser-side step before the CLI can authenticate successfully.
-
-## Safe enrollment workflow
-
-```bash
-# Returns the account-specific TIS ID required by enrollment.
-sustech tis courses available "machine learning" --round bxxk --json
-
-# Pure local preview: no login, network request, or mutation.
-sustech tis enroll preview --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2
-
-# Mutation requires the exact target plus explicit confirmation.
-sustech tis enroll apply --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2 --confirm
-```
-
-Agents must obtain user approval for the exact course target before invoking an
-`apply` command. After TIS accepts the write, the CLI reads the enrolled
-schedule back and reports `confirmed`, `not_observed`, or `unavailable`.
-Unconfirmed results carry `DO_NOT_RETRY_AUTOMATICALLY`.
-
-## Safe Blackboard submission workflow
-
-Teacher-provided assignment files are discovered separately from files in a
-student submission attempt:
-
-```bash
-# List attachment IDs without exposing signed bbcswebdav URLs.
-sustech bb attachments _8537_1 _629896_1
-
-# Download exactly one listed attachment. --output remains reserved for the
-# text/json/jsonl renderer, so the local file flag is named --destination.
-sustech bb download _8537_1 _629896_1 ATTACHMENT_ID --destination ./homework.pdf
-```
-
-The attachment reader supports the official Learn content-attachment endpoint
-used by Original courses and attachment links embedded in BBML. Downloads are
-streamed through a same-origin guard into a temporary file, then placed with
-exclusive no-overwrite semantics only after the byte count and SHA-256 have
-been computed. Existing files are never replaced by default.
-
-```bash
-# Resolve assignment IDs first. The first column is contentId, the second is columnId.
-sustech bb assignments _8537_1
-
-# Optional: inspect your own attempt history for one assignment.
-sustech bb attempts _8537_1 --content-id _629896_1 --json
-
-# Authenticated, read-only preflight: resolves the exact assignment, checks
-# existing attempts/due date/upload limit, hashes the file, and prints an apply command.
-sustech bb submit preview --course-id _8537_1 --content-id _629896_1 --file homework.pdf
-
-# Copy the exact command emitted by preview. HASH is its SHA-256 value.
-sustech bb submit apply --course-id _8537_1 --content-id _629896_1 --column-id _12345_1 \
-  --file homework.pdf --expected-sha256 HASH --confirm
-```
-
-The Blackboard submission flow follows the official Learn REST v2 attempt
-lifecycle and v1 upload/attempt-file endpoints. `preview` refuses unsupported
-content, an existing in-progress attempt, exhausted attempts, or an oversized
-file. It adds `--allow-late` to the handoff only when the live due date has
-passed. `apply` uploads the exact bytes bound to `--expected-sha256`, creates an
-in-progress attempt, attaches the file, changes the status to `NeedsGrading`,
-and reads the attempt plus filename back.
-
-The official attempt-file endpoint currently supports only Classic/Original
-course assignments, so this CLI deliberately does not fall back to scraping the
-legacy `uploadAssignment` HTML form. The implementation is fixture-tested but
-has not made a real Blackboard write. Ambiguous write outcomes use exit code 5
-and `DO_NOT_RETRY_AUTOMATICALLY`.
-
-Official references: [Learn REST API](https://developer.blackboard.com/portal/displayApi/Learn?version=4001.2.0)
-and [Blackboard's SOAP-to-REST mapping](https://blackboard.github.io/rest-apis/learn/advanced/soap-to-rest-mapping).
+Cross-platform CI runs checks, tests, native credential-store smoke tests where
+available, and `npm pack --dry-run` on Ubuntu, macOS, and Windows. Releases use
+the tagged, manually triggered Trusted Publishing workflow in
+[.github/workflows/publish.yml](.github/workflows/publish.yml); no long-lived npm
+token is stored in GitHub.
 
 ## Attribution and license
 
