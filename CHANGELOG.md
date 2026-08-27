@@ -2,6 +2,15 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [0.8.2] - 2026-08-27
+
+### Fixed
+
+- The derived `tis degree missing` classifier now leaves same-name required
+  courses unresolved when the matching grade or enrolled-course row lacks a
+  reliable course code, instead of guessing by name and risking a false
+  pass/in-progress classification.
+
 ## [0.8.1] - 2026-08-27
 
 ### Added

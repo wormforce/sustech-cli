@@ -139,6 +139,36 @@ test("degree missing falls back to course name when a required course has no rel
   assert.equal(result.inProgressRequiredCourses[0]?.matchedEnrollmentBy, "name");
 });
 
+test("degree missing leaves same-name required courses unresolved when matching rows lack a reliable course code", () => {
+  const progress = makeProgress({
+    courses: [
+      { code: "CS401A", name: "专题研究", required: true, credits: 2 },
+      { code: "CS401B", name: "专题研究", required: true, credits: 2 },
+    ],
+    sourceStatuses: {
+      ...SOURCE_STATUSES,
+      courses: { state: "available" as const, count: 2 },
+    },
+  });
+
+  const result = evaluateTisDegreeMissing({
+    progress,
+    grades: [grade({ code: "", name: "专题研究", letterGrade: "A" })],
+    enrolled: [enrolledCourse({ courseCode: "", courseName: "专题研究" })],
+    enrolledSemester: "2026-2027-1",
+  });
+
+  assert.equal(result.definiteMissingRequiredCourses.length, 0);
+  assert.equal(result.inProgressRequiredCourses.length, 0);
+  assert.deepEqual(
+    result.manualReview
+      .filter((entry) => entry.code === "REQUIRED_COURSE_STATUS_UNCLEAR")
+      .map((entry) => entry.course?.code)
+      .sort(),
+    ["CS401A", "CS401B"],
+  );
+});
+
 test("degree missing can still identify an explicitly failed required course when grades are unavailable", () => {
   const progress = makeProgress({
     courses: [{ code: "CS210", name: "离散数学", required: true, letterGrade: "F", credits: 4 }],

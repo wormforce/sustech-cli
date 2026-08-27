@@ -190,6 +190,7 @@ export function evaluateTisDegreeMissing(input: EvaluateTisDegreeMissingInput): 
   const addReview = manualReviewAdder(manualReview);
   const choiceGaps = buildChoiceGaps(progress);
   const requiredCourses = aggregateRequiredCourses(progress.courses ?? [], addReview);
+  const ambiguousRequiredNames = collectAmbiguousRequiredNames(requiredCourses);
   const gradesStatus = normaliseDerivedStatus(input.gradesSourceStatus, input.grades, "Grade history was unavailable.");
   const enrolledStatus = normaliseDerivedStatus(
     input.enrolledSourceStatus,
@@ -238,13 +239,23 @@ export function evaluateTisDegreeMissing(input: EvaluateTisDegreeMissingInput): 
   const definiteMissingRequiredCourses: DegreeMissingRequiredCourse[] = [];
   const inProgressRequiredCourses: DegreeMissingRequiredCourse[] = [];
   for (const course of requiredCourses) {
-    const attempts = matchingGrades(course, input.grades ?? [])
+    const attempts = matchingGrades(course, input.grades ?? [], ambiguousRequiredNames)
       .map(toAttempt)
       .sort(compareAttemptsNewestFirst);
     const completions = [...attempts, ...course.detailCompletions];
     if (completions.some((attempt) => attempt.completion === "passed")) continue;
 
-    const enrollmentMatch = matchingEnrollment(course, input.enrolled ?? []);
+    const ambiguousSources = ambiguousNameEvidence(course, input.grades, input.enrolled, ambiguousRequiredNames);
+    if (ambiguousSources.length > 0) {
+      addReview(
+        "REQUIRED_COURSE_STATUS_UNCLEAR",
+        `${courseLabel(course)} shares its name with another required course, and ${joinFragments(ambiguousSources)} matched only by name. The CLI did not guess which course it belongs to.`,
+        course,
+      );
+      continue;
+    }
+
+    const enrollmentMatch = matchingEnrollment(course, input.enrolled ?? [], ambiguousRequiredNames);
     if (enrollmentMatch) {
       inProgressRequiredCourses.push(renderCourse(course, {
         reason: input.enrolledSemester
@@ -377,6 +388,16 @@ function aggregateRequiredCourses(
   return [...grouped.values()];
 }
 
+function collectAmbiguousRequiredNames(courses: readonly RequiredCourseCandidate[]): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const course of courses) {
+    const key = normaliseName(course.name);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key));
+}
+
 function buildChoiceGaps(progress: TisDegreeProgress): DegreeMissingChoiceGap[] {
   const output: DegreeMissingChoiceGap[] = [];
   for (const category of progress.creditCategories) {
@@ -404,31 +425,83 @@ function buildChoiceGaps(progress: TisDegreeProgress): DegreeMissingChoiceGap[] 
   return output;
 }
 
-function matchingGrades(course: RequiredCourseCandidate, grades: readonly GradeRecord[]): GradeRecord[] {
-  return grades.filter((grade) => matchesIdentity(course, grade.code, grade.name));
+function matchingGrades(
+  course: RequiredCourseCandidate,
+  grades: readonly GradeRecord[],
+  ambiguousRequiredNames: ReadonlySet<string>,
+): GradeRecord[] {
+  return grades.filter((grade) => matchesIdentity(course, grade.code, grade.name, ambiguousRequiredNames));
 }
 
 function matchingEnrollment(
   course: RequiredCourseCandidate,
   enrolled: readonly PersonalScheduleEntry[],
+  ambiguousRequiredNames: ReadonlySet<string>,
 ): "code" | "name" | undefined {
   if (course.code) {
     const byCode = enrolled.some((entry) => normaliseCode(entry.courseCode) === normaliseCode(course.code));
     if (byCode) return "code";
+    if (hasAmbiguousRequiredName(course, ambiguousRequiredNames)) return undefined;
     const byNameWithNoCode = enrolled.some((entry) =>
       !clean(entry.courseCode) && normaliseName(entry.courseName) === normaliseName(course.name),
     );
     return byNameWithNoCode ? "name" : undefined;
   }
+  if (hasAmbiguousRequiredName(course, ambiguousRequiredNames)) return undefined;
   return enrolled.some((entry) => normaliseName(entry.courseName) === normaliseName(course.name)) ? "name" : undefined;
 }
 
-function matchesIdentity(course: RequiredCourseCandidate, code: string, name: string): boolean {
+function matchesIdentity(
+  course: RequiredCourseCandidate,
+  code: string,
+  name: string,
+  ambiguousRequiredNames: ReadonlySet<string>,
+): boolean {
   if (course.code) {
     if (clean(code)) return normaliseCode(code) === normaliseCode(course.code);
+    if (hasAmbiguousRequiredName(course, ambiguousRequiredNames)) return false;
     return normaliseName(name) === normaliseName(course.name);
   }
+  if (hasAmbiguousRequiredName(course, ambiguousRequiredNames)) return false;
   return normaliseName(name) === normaliseName(course.name);
+}
+
+function ambiguousNameEvidence(
+  course: RequiredCourseCandidate,
+  grades: readonly GradeRecord[] | undefined,
+  enrolled: readonly PersonalScheduleEntry[] | undefined,
+  ambiguousRequiredNames: ReadonlySet<string>,
+): string[] {
+  if (!hasAmbiguousRequiredName(course, ambiguousRequiredNames)) return [];
+  const sources: string[] = [];
+  if (ambiguousGradeEvidence(course, grades ?? [])) sources.push("grade rows without a reliable course code");
+  if (ambiguousEnrollmentEvidence(course, enrolled ?? [])) sources.push("enrolled-course rows without a reliable course code");
+  return sources;
+}
+
+function ambiguousGradeEvidence(course: RequiredCourseCandidate, grades: readonly GradeRecord[]): boolean {
+  const name = normaliseName(course.name);
+  if (!name) return false;
+  if (course.code) {
+    return grades.some((grade) => !clean(grade.code) && normaliseName(grade.name) === name);
+  }
+  return grades.some((grade) => normaliseName(grade.name) === name);
+}
+
+function ambiguousEnrollmentEvidence(course: RequiredCourseCandidate, enrolled: readonly PersonalScheduleEntry[]): boolean {
+  const name = normaliseName(course.name);
+  if (!name) return false;
+  if (course.code) {
+    return enrolled.some((entry) => !clean(entry.courseCode) && normaliseName(entry.courseName) === name);
+  }
+  return enrolled.some((entry) => normaliseName(entry.courseName) === name);
+}
+
+function hasAmbiguousRequiredName(
+  course: RequiredCourseCandidate,
+  ambiguousRequiredNames: ReadonlySet<string>,
+): boolean {
+  return ambiguousRequiredNames.has(normaliseName(course.name));
 }
 
 function courseAttempt(course: DegreeProgressCourse): DegreeMissingAttempt | undefined {
@@ -564,6 +637,12 @@ function sanitise(value: string): string {
 function safeErrorMessage(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   return sanitise(raw) || fallback;
+}
+
+function joinFragments(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
 }
 
 function compact<T extends Record<string, unknown>>(value: T): T {
