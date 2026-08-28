@@ -37,7 +37,7 @@ includes these high-value areas:
   `faculty render`, `transit facilities`, `transit find`, `transit lines`,
   `transit schedule`, `transit stops`, `transit live`.
 - Academic profile and audits: `profile show`, `profile export`,
-  `academic snapshot save`, `academic snapshot diff`, `doctor`.
+  `academic snapshot save`, `academic changes`, `academic watch`, `doctor`.
 - Research helpers: `papers search`, `papers fetch-oa`, `nces browse`,
   `nces search`, `nces course`.
 - Blackboard: `bb user`, `bb courses`, `bb content`, `bb attachments`,
@@ -46,7 +46,7 @@ includes these high-value areas:
   `bb submit apply`, `bb calendar-link set/show/fetch/delete`.
 - TIS reads and planning: `tis courses search`, `tis courses available`,
   `tis enrolled`, `tis schedule`, `tis grades`, `tis exams`,
-  `tis timetable`, `tis plan init/show/add/remove/solve`,
+  `tis timetable`, `tis plan init/show/add/remove/solve/explain/recommend`,
   `tis classroom rooms/occupancy/free/live/now`, `tis evals`,
   `tis ical`, `tis degree progress`, `tis degree missing`,
   `tis degree audit`.
@@ -54,7 +54,7 @@ includes these high-value areas:
   style operations, `tis bid plan`, `tis bid apply`, `tis enroll preview`,
   `tis enroll apply`.
 - Other authenticated campus services: `ws programs`, `ws detail`,
-  `library search-url`, `booking whoami`, `booking rooms`,
+  `library search`, `library detail`, `booking whoami`, `booking rooms`,
   `booking my-meetings`, `booking create preview/apply`,
   `booking cancel preview/apply`, `lib-booking whoami`,
   `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`,
@@ -66,12 +66,18 @@ includes these high-value areas:
 
 Some useful routing hints:
 
-- For “what is due soon”, prefer `bb deadlines` and optionally `context --live`.
+- For “what is due soon”, prefer `bb deadlines` and optionally
+  `context --live --level normal` or `context --live --level verbose`.
 - For Blackboard timeline questions, prefer `bb calendar` when you need typed
   `--since`/`--until`/`--type`/`--course-id` filtering.
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
+- `tis plan explain` and `tis plan recommend` are read-only planning helpers.
+  Use them to explain timetable fit, seat observations, and conservative
+  degree relevance for a round without adding courses or performing any TIS
+  write. Treat NCES as community reference only, never as official degree or
+  prerequisite authority, and keep ambiguous degree matches in manual review.
 - For “how close am I to graduation”, use `tis degree progress` for the
   personalized TIS-reported summary. For “which courses am I still missing”,
   use `tis degree missing --json`, preserve its separation between definite
@@ -86,10 +92,14 @@ Some useful routing hints:
   ICS snapshot; `bb calendar` is an authenticated REST read; and
   `bb calendar-link` manages Blackboard's native shared ICS link, which is a
   long-lived secret stored in the OS credential store and masked by default.
+- `academic watch --state PATH` is a one-shot local workflow: read, compare,
+  print, and update the named state file once. It does not schedule itself,
+  does not loop, and does not write remote campus state.
 - For room availability, distinguish catalog-backed `tis classroom *` from
   live `tis classroom live/now`.
-- `library search-url` is only a browser handoff; do not fabricate library
-  catalog results.
+- `library search` and `library detail` are read-only Primo catalog commands.
+  Use `--browser` or `--browser --interactive` when the direct public HTTP path
+  cannot complete on the current host. Browser auth stays manual.
 
 ## Consume output safely
 
@@ -117,6 +127,10 @@ Some useful routing hints:
 - If CAS returns `CAS_INTERACTIVE_CHALLENGE_REQUIRED`, report that the password
   was not submitted and stop. Do not bypass, solve, or repeatedly retry the
   interactive challenge.
+- For Primo browser mode, never ask the user to paste a browser username,
+  password, cookie, or token. If CAS appears in the browser path, the user
+  completes it manually. Do not solve CAPTCHAs and do not persist browser
+  cookies.
 
 ## Guard remote mutations
 
@@ -152,6 +166,9 @@ Important command-specific rules:
 - `bb submit preview` is authenticated but read-only.
 - Booking, library-booking, and PMS preview commands are live read-only checks,
   not reservations, cancellations, uploads, or deletions.
+- Booking and library-booking create previews now attempt exact slot
+  availability checks first. If the live evidence is missing, malformed, or
+  ambiguous, stop and fail closed instead of guessing that the slot is free.
 - Preserve opaque IDs exactly: TIS course IDs and `rwh`, Blackboard course,
   content, column, and attachment IDs, booking meeting IDs, library reservation
   IDs, and PMS job IDs.

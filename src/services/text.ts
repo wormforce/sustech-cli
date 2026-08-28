@@ -25,6 +25,7 @@ import type {
   BookingRoom,
 } from "./booking.js";
 import type {
+  LibraryCatalogDetail,
   LibraryBookingCancelPreview,
   LibraryBookingCancelSuccess,
   LibraryBookingCreatePreview,
@@ -33,6 +34,7 @@ import type {
   LibraryCampusGroup,
   LibraryIdleCategory,
   LibraryLab,
+  PrimoCatalogSearchPage,
   LibraryReservation,
 } from "./library.js";
 import type { NcesCourseDetail, NcesCourseSummary } from "./nces.js";
@@ -80,9 +82,16 @@ export function formatBookingMeetings(meetings: readonly BookingMeeting[]): stri
 }
 
 export function formatBookingCreatePreview(preview: BookingCreatePreview, applyCommand?: string): string {
+  const exactSlotLine = preview.slotCheck?.status === "available"
+    ? `Exact slot check: available on ${preview.slotCheck.date}.`
+    : preview.slotCheck?.status === "occupied"
+      ? `Exact slot check: occupied on ${preview.slotCheck.date} (${preview.slotCheck.overlaps.length} overlap).`
+      : preview.slotCheck?.status === "unavailable"
+        ? "Exact slot check: unavailable; apply is blocked because overlap could not be ruled out."
+        : "Inventory/policy preflight only; exact slot availability is not verified.";
   const lines = [
     "E-Hall booking create preview",
-    "Inventory/policy preflight only; exact slot availability is not verified.",
+    exactSlotLine,
     `${preview.target.roomId} · ${preview.target.start} to ${preview.target.end}`,
     `Title ${preview.target.title || "(missing)"} · participants ${preview.target.participants}`,
   ];
@@ -163,6 +172,53 @@ export function formatLibraryIdleSummary(items: readonly LibraryIdleCategory[]):
   ].join("\n");
 }
 
+export function formatLibraryCatalogSearch(page: PrimoCatalogSearchPage): string {
+  if (page.items.length === 0) {
+    return [
+      "Library catalog search",
+      `Query ${page.query}`,
+      "No matching catalog records.",
+    ].join("\n");
+  }
+  return [
+    `Library catalog search · ${page.items.length}/${page.total}`,
+    `Query ${page.query}`,
+    ...page.items.map((item) => {
+      const tags = [
+        item.format || "format unavailable",
+        item.reference,
+        ...(item.fullText ? ["full text"] : []),
+        ...(item.peerReviewed ? ["peer reviewed"] : []),
+      ];
+      return [
+        `${String(item.rank).padStart(2, " ")}. ${item.title}`,
+        `  ${tags.join(" · ")}`,
+        ...(item.snippet ? [`  ${item.snippet}`] : []),
+        ...(item.detailUrl ? [`  ${item.detailUrl}`] : []),
+      ].join("\n");
+    }),
+  ].join("\n");
+}
+
+export function formatLibraryCatalogDetail(detail: LibraryCatalogDetail): string {
+  const lines = [
+    "Library catalog detail",
+    `${detail.reference} · ${detail.title}`,
+    ...(detail.format ? [`Format ${detail.format}`] : []),
+    ...(detail.creators.length > 0 ? [`Creators ${detail.creators.join("; ")}`] : []),
+    ...(detail.publisher ? [`Publisher ${detail.publisher}`] : []),
+    ...(detail.isPartOf ? [`Part of ${detail.isPartOf}`] : []),
+    ...(detail.date ? [`Date ${detail.date}`] : []),
+    ...(detail.language ? [`Language ${detail.language}`] : []),
+    ...(detail.subjects.length > 0 ? [`Subjects ${detail.subjects.join("; ")}`] : []),
+    ...(detail.identifiers.length > 0 ? [`Identifiers ${detail.identifiers.join("; ")}`] : []),
+    ...(detail.availability.length > 0 ? [`Availability ${detail.availability.join("; ")}`] : []),
+    ...(detail.links.length > 0 ? [`Links ${detail.links.join(" ")}`] : []),
+    ...(detail.description ? [`Description ${detail.description}`] : []),
+  ];
+  return lines.join("\n");
+}
+
 export function formatLibraryLabs(labs: readonly LibraryLab[]): string {
   if (labs.length === 0) return "Library booking labs\nNo labs returned.";
   return [
@@ -193,9 +249,16 @@ export function formatLibraryReservations(items: readonly LibraryReservation[]):
 }
 
 export function formatLibraryBookingCreatePreview(preview: LibraryBookingCreatePreview, applyCommand?: string): string {
+  const exactSlotLine = preview.slotCheck?.status === "available"
+    ? "Exact slot check: available."
+    : preview.slotCheck?.status === "occupied"
+      ? `Exact slot check: occupied (${preview.slotCheck.overlaps.length} overlap).`
+      : preview.slotCheck?.status === "unavailable"
+        ? "Exact slot check: unavailable; apply is blocked because overlap could not be ruled out."
+        : "Inventory/policy preflight only; exact slot availability is not verified.";
   const lines = [
     "Library booking create preview",
-    "Inventory/policy preflight only; exact slot availability is not verified.",
+    exactSlotLine,
     `${preview.target.devId} · ${preview.target.start} to ${preview.target.end}`,
     `Title ${preview.target.title || "(missing)"} · memberKind ${preview.target.memberKind} · members ${preview.target.members.join(", ")}`,
   ];

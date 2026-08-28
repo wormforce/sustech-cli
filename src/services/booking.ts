@@ -24,12 +24,14 @@ export const BOOKING_STATUS: ServiceStatus = {
     "The service must be reachable from the campus network or an approved campus access path.",
     "Credentials, cookies, CAS tickets, and the booking token remain in memory and are never returned in command output.",
     "The room-list path completed an opt-in read-only live smoke test on 2026-08-26.",
+    "Create preview reads the selected room's live calendar and blocks on overlaps or an unreadable calendar state.",
     "Create/cancel mutations are exposed only through typed preview/apply flows with explicit confirmation and post-readback verification.",
   ],
   endpoints: [
     "/redirect",
     "/api/SystemApi/AddMeeting",
     "/api/SystemApi/CancelMeeting",
+    "/api/SystemApi/GetMeetingByMeetingRoomList",
     "/api/SystemApi/GetMeetingRoomAllByCondition",
     "/api/SystemApi/GetMyMeetings",
     "/api/SystemApi/GetUserProfile",
@@ -72,6 +74,13 @@ export interface BookingMeeting {
   unread: boolean;
 }
 
+export interface BookingSlotCheck {
+  status: "available" | "occupied" | "unavailable";
+  date: string;
+  overlaps: BookingMeeting[];
+  message?: string;
+}
+
 export interface BookingMutationIssue {
   code: string;
   message: string;
@@ -95,6 +104,7 @@ export interface BookingCreatePreview {
   action: "create";
   target: BookingCreateTarget;
   room?: BookingRoom;
+  slotCheck?: BookingSlotCheck;
   blockers: BookingMutationIssue[];
   warnings: BookingMutationIssue[];
   applyAllowed: boolean;
@@ -133,14 +143,18 @@ export interface BookingMutationAdapter extends ServiceAdapter {
 }
 
 export interface BookingEnvelope<T> {
-  MessageType: 1002;
+  MessageType: number;
   MessageID: string;
   Data: T;
 }
 
-export function buildBookingEnvelope<T>(data: T, messageId = randomUUID()): BookingEnvelope<T> {
+export function buildBookingEnvelope<T>(
+  data: T,
+  messageId = randomUUID(),
+  messageType = 1002,
+): BookingEnvelope<T> {
   return {
-    MessageType: 1002,
+    MessageType: messageType,
     MessageID: messageId,
     Data: data,
   };
@@ -182,12 +196,14 @@ export async function buildBookingCreatePreview(
   target: BookingCreateTarget,
   options: { now?: Date } = {},
 ): Promise<BookingCreatePreview> {
-  const checkedAt = (options.now ?? new Date()).toISOString();
+  const now = options.now ?? new Date();
+  const checkedAt = now.toISOString();
   const room = await findBookingRoom(adapter, target.roomId);
   const blockers: BookingMutationIssue[] = [];
   const warnings: BookingMutationIssue[] = [];
   const normalisedTarget = normaliseBookingCreateTarget(target);
   const timing = parseShanghaiRange(normalisedTarget.start, normalisedTarget.end);
+  let slotCheck: BookingSlotCheck | undefined;
 
   if (!normalisedTarget.title) {
     blockers.push(issue("TITLE_REQUIRED", "A non-empty meeting title is required."));
@@ -201,7 +217,7 @@ export async function buildBookingCreatePreview(
   if (!timing.start || !timing.end) {
     blockers.push(issue("TIME_INVALID", "Start and end must be valid local date-times."));
   } else {
-    if (timing.start.epochMs < (options.now ?? new Date()).getTime()) {
+    if (timing.start.epochMs < now.getTime()) {
       blockers.push(issue("START_IN_PAST", "The meeting start time is already in the past."));
     }
     if (timing.end.epochMs <= timing.start.epochMs) {
@@ -222,7 +238,7 @@ export async function buildBookingCreatePreview(
     if (room.capacity > 0 && normalisedTarget.participants > room.capacity) {
       blockers.push(issue("PARTICIPANTS_EXCEED_CAPACITY", `Participants (${normalisedTarget.participants}) exceed room capacity (${room.capacity}).`));
     }
-    const daysAhead = daysBetweenShanghai(todayShanghai(options.now ?? new Date()), timing.start.date);
+    const daysAhead = daysBetweenShanghai(todayShanghai(now), timing.start.date);
     if (room.bookableDaysAhead > 0 && daysAhead > room.bookableDaysAhead) {
       blockers.push(issue(
         "ADVANCE_WINDOW_EXCEEDED",
@@ -241,17 +257,44 @@ export async function buildBookingCreatePreview(
         `Room '${room.name || room.id}' requires approval after booking; verify downstream approval status manually.`,
       ));
     }
+    slotCheck = await inspectBookingSlot(
+      adapter,
+      room.id,
+      timing.start.date,
+      timing.start.epochMs,
+      timing.end.epochMs,
+    );
+    if (slotCheck.status === "occupied") {
+      blockers.push(issue(
+        "SLOT_OCCUPIED",
+        `Room '${room.name || room.id}' already has ${slotCheck.overlaps.length} overlapping booking(s) in the requested time window.`,
+      ));
+    } else if (slotCheck.status === "unavailable") {
+      blockers.push(issue(
+        "SLOT_CHECK_FAILED",
+        slotCheck.message
+          || "The room calendar could not be read safely, so overlap cannot be ruled out.",
+      ));
+    } else {
+      warnings.push(issue(
+        "SLOT_AVAILABILITY_POINT_IN_TIME",
+        "The room calendar showed no overlap at preview time; apply repeats this check, but availability can still change before the upstream write is accepted.",
+      ));
+    }
   }
-  warnings.push(issue(
-    "SLOT_AVAILABILITY_UNVERIFIED",
-    "This preview checks room inventory and policy constraints only; the upstream service may still reject the reservation if the exact slot is already occupied.",
-  ));
+  if (!slotCheck && room && timing.start && timing.end) {
+    warnings.push(issue(
+      "SLOT_AVAILABILITY_UNVERIFIED",
+      "This preview checks room inventory and policy constraints only; the upstream service may still reject the reservation if the exact slot is already occupied.",
+    ));
+  }
 
   return {
     checkedAt,
     action: "create",
     target: normalisedTarget,
     ...(room ? { room } : {}),
+    ...(slotCheck ? { slotCheck } : {}),
     blockers,
     warnings,
     applyAllowed: blockers.length === 0,
@@ -283,8 +326,9 @@ export async function buildBookingCancelPreview(
 export async function applyBookingCreate(
   adapter: BookingMutationAdapter,
   target: BookingCreateTarget,
+  options: { now?: Date } = {},
 ): Promise<BookingCreateSuccess> {
-  const preview = await buildBookingCreatePreview(adapter, target);
+  const preview = await buildBookingCreatePreview(adapter, target, options);
   if (!preview.applyAllowed || !preview.room) {
     throw bookingPrecheckError("create", preview.target, preview.blockers);
   }
@@ -342,8 +386,9 @@ export async function applyBookingCreate(
 export async function applyBookingCancel(
   adapter: BookingMutationAdapter,
   target: BookingCancelTarget,
+  options: { now?: Date } = {},
 ): Promise<BookingCancelSuccess> {
-  const preview = await buildBookingCancelPreview(adapter, target);
+  const preview = await buildBookingCancelPreview(adapter, target, options);
   if (!preview.applyAllowed || !preview.meeting) {
     throw bookingPrecheckError("cancel", target, preview.blockers);
   }
@@ -406,20 +451,43 @@ export function normaliseBookingMeeting(raw: unknown): BookingMeeting {
     id: stringValue(record.MeetingID ?? record.ID),
     roomId: stringValue(record.MeetingRoomID),
     roomName: stringValue(record.MeetingRoomName),
-    title: stringValue(record.MeetingName ?? record.Title),
-    startAt: stringValue(record.StartTime ?? record.MeetingStart),
-    endAt: stringValue(record.EndTime ?? record.MeetingEnd),
-    status: stringValue(record.Status ?? record.MeetingStatus),
+    title: stringValue(record.MeetingName ?? record.Title ?? record.Topical),
+    startAt: stringValue(record.StartTime ?? record.MeetingStart ?? record.StartDateTime),
+    endAt: stringValue(record.EndTime ?? record.MeetingEnd ?? record.EndDateTime),
+    status: stringValue(record.Status ?? record.MeetingStatus ?? record.State),
     unread: booleanValue(record.IsUnread ?? record.Unread),
   };
 }
 
-async function callBooking(adapter: ServiceAdapter, method: string, data: Record<string, unknown>): Promise<unknown> {
+export async function listBookingRoomCalendar(
+  adapter: ServiceAdapter,
+  roomId: string,
+  currentDate: string,
+): Promise<BookingMeeting[]> {
+  const payload = await callBooking(
+    adapter,
+    "GetMeetingByMeetingRoomList",
+    {
+      meetingroomid: roomId,
+      currentdate: currentDate,
+    },
+    5001,
+  );
+  const rows = unwrapBookingCalendarRows(payload);
+  return rows.map((item) => normaliseBookingMeeting(item));
+}
+
+async function callBooking(
+  adapter: ServiceAdapter,
+  method: string,
+  data: Record<string, unknown>,
+  messageType = 1002,
+): Promise<unknown> {
   const url = `${BOOKING_API}/${method}`;
   const response = await fetchJson<unknown>(adapter, url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(buildBookingEnvelope(data)),
+    body: JSON.stringify(buildBookingEnvelope(data, randomUUID(), messageType)),
   });
   const record = recordValue(response);
   if (looksLikeBookingAuthError(record)) {
@@ -634,4 +702,83 @@ function daysBetweenShanghai(startDate: string, endDate: string): number {
   const start = new Date(`${startDate}T00:00:00+08:00`).getTime();
   const end = new Date(`${endDate}T00:00:00+08:00`).getTime();
   return Math.floor((end - start) / (24 * 60 * 60 * 1000));
+}
+
+async function inspectBookingSlot(
+  adapter: ServiceAdapter,
+  roomId: string,
+  date: string,
+  startEpochMs: number,
+  endEpochMs: number,
+): Promise<BookingSlotCheck> {
+  try {
+    const currentDate = shanghaiDayStartIso(date);
+    const meetings = await listBookingRoomCalendar(adapter, roomId, currentDate);
+    const observedMeetings = meetings.map((meeting) => ({
+      meeting,
+      range: parseShanghaiRange(meeting.startAt, meeting.endAt),
+    }));
+    const unparseable = observedMeetings.find(({ range }) => !range.start || !range.end);
+    if (unparseable) {
+      return {
+        status: "unavailable",
+        date,
+        overlaps: [],
+        message: `The live room calendar returned meeting '${unparseable.meeting.id || "unknown"}' with an unparseable time range.`,
+      };
+    }
+    const overlaps = observedMeetings.filter(({ range }) => {
+      return Boolean(
+        range.start
+        && range.end
+        && range.start.epochMs < endEpochMs
+        && range.end.epochMs > startEpochMs,
+      );
+    }).map(({ meeting }) => meeting);
+    return {
+      status: overlaps.length > 0 ? "occupied" : "available",
+      date,
+      overlaps,
+    };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      date,
+      overlaps: [],
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function unwrapBookingCalendarRows(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  const record = recordValue(payload);
+  for (const key of ["rows", "data", "list", "items", "Schedule"] as const) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    const candidate = record[key];
+    if (Array.isArray(candidate)) return candidate;
+    throw new CliError(
+      "The live room calendar payload was malformed.",
+      "SERVICE_PROTOCOL_ERROR",
+      1,
+      {
+        service: "booking",
+        operation: "GetMeetingByMeetingRoomList",
+        field: key,
+      },
+    );
+  }
+  throw new CliError(
+    "The live room calendar payload was malformed.",
+    "SERVICE_PROTOCOL_ERROR",
+    1,
+    {
+      service: "booking",
+      operation: "GetMeetingByMeetingRoomList",
+    },
+  );
+}
+
+function shanghaiDayStartIso(date: string): string {
+  return `${date}T00:00:00+08:00`;
 }

@@ -34,6 +34,27 @@ CAPTCHA, the CLI stops before password submission and returns
 `CAS_INTERACTIVE_CHALLENGE_REQUIRED`. It does not attempt to bypass that
 challenge.
 
+## Primo browser mode
+
+The library catalog browser flow is separate from `auth login`:
+
+```bash
+sustech library search "graph neural networks" --browser
+sustech library search "graph neural networks" --browser --interactive
+sustech library detail PC:cdi_proquest_miscellaneous_1901310093 --browser
+```
+
+This mode is read-only and manual-auth only:
+
+- the CLI does not accept a browser username, password, cookie, or token
+- if Primo redirects to CAS, the user must complete that page themselves in the
+  opened browser window
+- the CLI does not solve CAPTCHAs or automate the challenge
+- browser cookies are not persisted by the CLI
+
+Use it when the host cannot complete the public Primo HTTP path directly or
+when the record is easier to reach through the browser transport.
+
 ## Platform backends
 
 | Platform | Backend | Persistence rule |

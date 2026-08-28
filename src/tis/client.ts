@@ -20,6 +20,11 @@ import {
   normaliseGrade,
   normalisePersonalScheduleEntry,
 } from "./normalise.js";
+import {
+  EvaluationStatusClient,
+  type EvaluationCourseStatus,
+  type EvaluationStatusFilter,
+} from "./remaining-evaluation.js";
 import type { SelectionPreview } from "./remaining-selection.js";
 import type {
   Course,
@@ -192,6 +197,11 @@ export class TisClient {
     return asRecords(response)
       .map(normaliseExam)
       .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
+  }
+
+  public async evaluations(semester: string, status: EvaluationStatusFilter = "all"): Promise<EvaluationCourseStatus[]> {
+    const client = new EvaluationStatusClient(this.session, await this.evaluationUserId());
+    return client.listCourses(semester, status);
   }
 
   public async degreeProgress(options: { details?: boolean } = {}): Promise<TisDegreeProgress> {
@@ -375,6 +385,13 @@ export class TisClient {
       await delay(250);
     }
     return rows;
+  }
+
+  private async evaluationUserId(): Promise<string> {
+    const me = asRecord(await this.session.getJson("/user/me"));
+    const userId = firstString(me, "yhdm", "studentId", "sid", "id");
+    if (!userId) throw new CliError("TIS user profile did not include an evaluation user ID.", "TIS_PROTOCOL_ERROR", 1);
+    return userId;
   }
 }
 

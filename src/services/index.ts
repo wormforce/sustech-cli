@@ -40,6 +40,23 @@ export * from "./blackboard-calendar.js";
 export * from "./booking-auth.js";
 export * from "./booking.js";
 export * from "./library-booking-auth.js";
+export {
+  getPrimoCatalogDetail as getPrimoCatalogDetailByBrowser,
+  formatBrowserPrimoCatalogDetail,
+  formatBrowserPrimoCatalogSearch,
+  parsePrimoDetailText,
+  PlaywrightPrimoBrowserRuntime,
+  PRIMO_BROWSER_AUTH_POLICY,
+  searchPrimoCatalog as searchPrimoCatalogByBrowser,
+} from "./library-browser.js";
+export type {
+  BrowserPrimoCatalogDetail,
+  BrowserPrimoCatalogSearch,
+  PrimoBrowserDetailPage,
+  PrimoBrowserOptions,
+  PrimoBrowserRuntime,
+  PrimoBrowserSearchRow,
+} from "./library-browser.js";
 export * from "./library.js";
 export * from "./nces.js";
 export * from "./papers.js";

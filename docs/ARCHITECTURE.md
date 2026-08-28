@@ -31,19 +31,24 @@ output renderer       text | versioned JSON | streaming JSONL
 - `src/tis` owns TIS protocol details, normalized course models, persistent
   planning, TIS-reported degree-progress normalization, conservative derived
   missing-course classification, local degree audit, live classroom/context
-  helpers, multi-source ICS export, and guarded enroll/cart/drop/bid write
-  paths.
+  helpers, multi-source ICS export, read-only plan explain/recommend
+  enrichment, and guarded enroll/cart/drop/bid write paths.
 - `src/calendar`, `src/faculty`, `src/transit`, `src/resources`, and
   `src/wifi` own public or local-only data sources.
 - `src/context` composes a truthful snapshot from whichever sources are
-  available and marks missing or partial inputs explicitly.
+  available, exposes Context v2 `level`/`live` enrichments, and marks missing
+  or partial inputs explicitly.
 - `src/profile` aggregates only whitelisted student fields and can save a
   versioned, private local report without exposing raw upstream profiles.
-- Academic snapshots and shared local-store helpers provide guarded,
-  digest-verifiable local persistence and offline diffing.
+- `src/academic` and shared local-store helpers provide guarded,
+  digest-verifiable local persistence, offline diffing, and the one-shot
+  watch/update workflow.
 - `src/services` owns reusable campus-service adapters such as Blackboard, WS,
   booking, library booking, PMS, NCES, and papers, plus the authenticated
   session wrappers that sit in front of some of them.
+- `src/services/library.ts` owns direct Primo search/detail normalization, and
+  `src/services/library-browser.ts` owns the browser-backed manual-auth Primo
+  transport.
 - `src/services/blackboard-calendar.ts` owns native Learn ICS-link validation,
   masking, safe same-origin fetch, and bounded ICS parsing for the stored
   Blackboard calendar subscription workflow.
@@ -92,7 +97,8 @@ commands for them.
 
 - Read commands never mutate remote state.
 - Local planning commands such as `tis enroll preview`, `tis selection preview`,
-  `tis bid plan`, and `library search-url` do not authenticate or write.
+  `tis bid plan`, `tis plan explain`, `tis plan recommend`, `academic changes`,
+  and one-shot `academic watch` do not mutate remote campus state.
 - `bb submit preview` authenticates for live read-only preflight checks but
   never calls a mutation endpoint.
 - `bb calendar` is an authenticated read with optional date, type, and course
@@ -106,6 +112,10 @@ commands for them.
 - Booking, library-booking, and PMS sessions keep credentials and session
   material in memory only, reject requests outside their allowlists, and never
   expose a generic authenticated write primitive.
+- `library search` and `library detail` support a direct public HTTP path plus
+  `--browser` fallback. If the browser path reaches CAS, the user must finish
+  that step manually. The CLI does not accept browser credentials, does not
+  solve CAPTCHAs, and does not persist browser cookies.
 - `auth login` verifies the selected service before storing a password in the
   operating-system credential store. Linux refuses a session-only keyutils or
   plaintext fallback when Secret Service is unavailable.
@@ -116,6 +126,9 @@ commands for them.
   eHall and library booking create/cancel, and PMS queue upload/delete. Every
   path requires `--confirm`; file-bound uploads additionally require the
   previewed SHA-256. These paths are protocol-fixture-tested, not live-written.
+- eHall booking and library-booking create previews attempt exact slot
+  availability checks first and fail closed when the live evidence is missing,
+  malformed, or ambiguous.
 - Local file mutations such as Blackboard download/sync, OA PDF fetch,
   iCalendar/profile/snapshot export, and plan persistence require explicit or
   well-scoped destinations, reject symbolic-link traversal, default to

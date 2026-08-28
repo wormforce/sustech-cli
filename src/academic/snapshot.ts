@@ -9,6 +9,7 @@ export const ACADEMIC_SNAPSHOT_SCHEMA_VERSION = "1";
 export const ACADEMIC_SNAPSHOT_KIND = "sustech-academic-snapshot";
 const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const MAX_SOURCE_ITEMS = 50_000;
+const ACADEMIC_SOURCE_NAMES = ["schedule", "grades", "exams", "blackboardDeadlines"] as const;
 
 export type AcademicSnapshotSourceName = "schedule" | "grades" | "exams" | "blackboardDeadlines";
 export type AcademicSnapshotSourceStatus = "ok" | "partial" | "error";
@@ -285,12 +286,12 @@ function diffSource(
     const afterGroup = [...(afterGroups.get(key) ?? [])];
     const unmatchedAfter = new Map<string, unknown[]>();
     for (const value of afterGroup) {
-      const canonical = stableStringify(value);
+      const canonical = comparableSourceString(sourceName, value);
       unmatchedAfter.set(canonical, [...(unmatchedAfter.get(canonical) ?? []), value]);
     }
     const unmatchedBefore: unknown[] = [];
     for (const value of beforeGroup) {
-      const canonical = stableStringify(value);
+      const canonical = comparableSourceString(sourceName, value);
       const matches = unmatchedAfter.get(canonical);
       if (matches?.length) {
         matches.pop();
@@ -398,7 +399,7 @@ function assertSnapshotSync(value: unknown, path?: string): AcademicSnapshot {
 function normaliseSources(value: unknown): Partial<Record<AcademicSnapshotSourceName, AcademicSnapshotSource>> {
   const record = asRecord(value);
   const sources: Partial<Record<AcademicSnapshotSourceName, AcademicSnapshotSource>> = {};
-  for (const name of ["schedule", "grades", "exams", "blackboardDeadlines"] as const) {
+  for (const name of ACADEMIC_SOURCE_NAMES) {
     if (record[name] === undefined) continue;
     const source = asRecord(record[name]);
     const status = source.status;
@@ -442,6 +443,20 @@ function digestValue(value: unknown): string {
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(stableValue(value)) ?? "null";
+}
+
+function comparableSourceString(sourceName: AcademicSnapshotSourceName, value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return stableStringify(value);
+  const ignored = sourceName === "blackboardDeadlines"
+    ? new Set(["daysLeft"])
+    : sourceName === "grades"
+      ? new Set(["gpaPoints"])
+      : sourceName === "exams"
+        ? new Set(["weekday", "weekdayEn"])
+        : new Set<string>();
+  return stableStringify(Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([key]) => !ignored.has(key)),
+  ));
 }
 
 function stableValue(value: unknown): unknown {
