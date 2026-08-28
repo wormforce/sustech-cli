@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,7 +18,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
   const text = run(["version"]);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /:\*##: :#######:/);
-  assert.match(text.stdout, /sustech-cli 0\.8\.4/);
+  assert.match(text.stdout, /sustech-cli 0\.9\.0/);
   assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
@@ -27,7 +27,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.8.4", runtime: `node ${process.version}` },
+    data: { version: "0.9.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -236,8 +236,69 @@ test("context accepts calendar-level and help documents it", () => {
 
   const help = run(["--help"]);
   assert.equal(help.status, 0);
+  assert.match(help.stdout, /sustech describe COMMAND\.\.\. \[--json\|--jsonl\]/);
   assert.match(help.stdout, /sustech context \[--date YYYY-MM-DD\] \[--calendar-level undergraduate\|graduate\] \[--level terse\|normal\|verbose\] \[--live\] \[--credentials-file PATH\]/);
+  assert.match(help.stdout, /sustech academic changes BEFORE AFTER/);
+  assert.match(help.stdout, /sustech academic watch --state PATH \[--semester YYYY-YYYY-N\] \[--include-blackboard\] \[--overwrite\]/);
+  assert.match(help.stdout, /sustech library search QUERY \[--limit N\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech library detail CONTEXT:DOC_ID \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech tis plan explain COURSE_OR_RWH --round ROUND/);
+  assert.match(help.stdout, /sustech tis plan recommend \[CODE\.\.\.\] --round ROUND/);
   assert.match(help.stdout, /sustech tis degree missing \[--semester YYYY-YYYY-N\]/);
+});
+
+test("describe exposes structured command metadata without parsing the full help text", () => {
+  const result = run(["describe", "bb", "submit", "apply", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "describe");
+  assert.equal(envelope.data.command, "bb submit apply");
+  assert.equal(envelope.data.capability.kind, "mutation");
+  assert.equal(envelope.data.capability.authentication, "bb");
+  assert.ok(Array.isArray(envelope.data.usage));
+  assert.ok(envelope.data.usage[0].startsWith("sustech bb submit apply"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--expected-sha256"));
+  assert.ok(envelope.data.options.some((entry: { name: string; shared: boolean }) => entry.name === "--json" && entry.shared === true));
+  assert.ok(envelope.data.consequences.some((entry: { operation: string }) => entry.operation === "blackboard.submit"));
+});
+
+test("describe exposes typed public library catalog reads", () => {
+  const result = run(["describe", "library", "detail", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "describe");
+  assert.equal(envelope.data.command, "library detail");
+  assert.equal(envelope.data.capability.kind, "read");
+  assert.equal(envelope.data.capability.authentication, "none");
+  assert.ok(envelope.data.usage.some((entry: string) => entry.startsWith("sustech library detail ")));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--interactive"));
+});
+
+test("describe exposes academic watch safety metadata and local state options", () => {
+  const result = run(["describe", "academic", "watch", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "describe");
+  assert.equal(envelope.data.command, "academic watch");
+  assert.equal(envelope.data.capability.kind, "mutation");
+  assert.equal(envelope.data.capability.authentication, "sustech-cas");
+  assert.ok(envelope.data.usage.some((entry: string) => entry.startsWith("sustech academic watch --state PATH")));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--state"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--include-blackboard"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--overwrite"));
+  assert.ok(envelope.data.consequences.some((entry: { operation: string }) => entry.operation === "academic.snapshot.save"));
+});
+
+test("describe exposes advisory TIS plan decision commands and their live-read options", () => {
+  const result = run(["describe", "tis", "plan", "recommend", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.data.command, "tis plan recommend");
+  assert.equal(envelope.data.capability.kind, "plan");
+  assert.equal(envelope.data.capability.authentication, "tis");
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--round"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--max"));
 });
 
 test("blackboard content attachment commands keep selection and local writes explicit", () => {
@@ -340,6 +401,8 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const degreeMissing = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis degree missing");
   const snapshotSave = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot save");
   const snapshotDiff = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic snapshot diff");
+  const academicChanges = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic changes");
+  const academicWatch = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "academic watch");
   const tisIcal = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis ical");
   const profileShow = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "profile show");
   const profileExport = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "profile export");
@@ -394,6 +457,11 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(snapshotSave.confirmation, "none");
   assert.equal(snapshotDiff.kind, "local");
   assert.equal(snapshotDiff.network, false);
+  assert.equal(academicChanges.kind, "local");
+  assert.equal(academicChanges.network, false);
+  assert.equal(academicWatch.kind, "mutation");
+  assert.equal(academicWatch.authentication, "sustech-cas");
+  assert.equal(academicWatch.confirmation, "none");
   assert.equal(tisIcal.kind, "mutation");
   assert.equal(tisIcal.authentication, "selected-service");
   assert.equal(profileShow.kind, "read");
@@ -464,6 +532,11 @@ test("new local Agent surfaces remain machine-readable and mutation-free", () =>
   assert.equal(JSON.parse(exactSelection.stdout).data.applyAvailable, true);
   assert.match(JSON.parse(exactSelection.stdout).data.confirmation.command, /tis selection apply cart\.remove/);
 
+  const missingLibraryDetail = run(["library", "detail", "--json"]);
+  assert.equal(missingLibraryDetail.status, 2);
+  assert.equal(JSON.parse(missingLibraryDetail.stdout).command, "library detail");
+  assert.equal(JSON.parse(missingLibraryDetail.stdout).error.code, "USAGE");
+
   const library = run(["library", "search-url", "machine", "learning", "--json"]);
   assert.equal(library.status, 0);
   const libraryData = JSON.parse(library.stdout).data;
@@ -529,9 +602,38 @@ test("TIS plan subcommands persist local planning state without network", () => 
     const shown = JSON.parse(show.stdout).data;
     assert.equal(shown.path, planPath);
     assert.equal(shown.plan.preferences.weights.campusSwitch, 9);
+
+    const explain = runWithoutCredentials([
+      "tis", "plan", "explain", "MA101",
+      "--round", "bxxk",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(explain.status, 2);
+    assert.equal(JSON.parse(explain.stdout).command, "tis plan explain");
+    assert.equal(JSON.parse(explain.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+    const recommend = runWithoutCredentials([
+      "tis", "plan", "recommend",
+      "--round", "bxxk",
+      "--path", planPath,
+      "--json",
+    ]);
+    assert.equal(recommend.status, 2);
+    assert.equal(JSON.parse(recommend.stdout).command, "tis plan recommend");
+    assert.equal(JSON.parse(recommend.stdout).error.code, "CREDENTIALS_REQUIRED");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("library interactive mode never starts implicitly without the explicit browser transport", () => {
+  const result = run(["library", "search", "machine learning", "--interactive", "--json"]);
+  assert.equal(result.status, 2);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "library search");
+  assert.equal(envelope.error.code, "USAGE");
+  assert.match(envelope.error.message, /--interactive requires --browser/);
 });
 
 test("TIS plan preference flags reject invalid ranges before local writes", () => {
@@ -586,15 +688,25 @@ test("degree-missing validates optional semester locally and otherwise requires 
   assert.equal(JSON.parse(missingCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
 });
 
-test("academic snapshot CLI validates save destinations before auth and diffs verified files offline", () => {
+test("academic snapshot and watch CLI validate local arguments before auth and compare verified files offline", () => {
   const missingDestination = runWithoutCredentials(["academic", "snapshot", "save", "--json"]);
   assert.equal(missingDestination.status, 2);
   assert.equal(JSON.parse(missingDestination.stdout).command, "academic snapshot save");
   assert.equal(JSON.parse(missingDestination.stdout).error.code, "USAGE");
 
+  const missingState = runWithoutCredentials(["academic", "watch", "--json"]);
+  assert.equal(missingState.status, 2);
+  assert.equal(JSON.parse(missingState.stdout).command, "academic watch");
+  assert.equal(JSON.parse(missingState.stdout).error.code, "USAGE");
+
   const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-academic-snapshot-cli-"));
   const beforePath = join(tempDir, "before.json");
   const afterPath = join(tempDir, "after.json");
+  const statePath = join(tempDir, "state.json");
+  const stateTarget = join(tempDir, "state-target.json");
+  const stateLink = join(tempDir, "state-link.json");
+  const stateParentTarget = join(tempDir, "state-parent-target");
+  const stateParentLink = join(tempDir, "state-parent-link");
   const before = buildAcademicSnapshot({
     semester: "2026-2027-1",
     generatedAt: "2026-08-27T00:00:00.000Z",
@@ -609,12 +721,37 @@ test("academic snapshot CLI validates save destinations before auth and diffs ve
   try {
     writeFileSync(beforePath, JSON.stringify(before), "utf8");
     writeFileSync(afterPath, JSON.stringify(after), "utf8");
-    const result = run(["academic", "snapshot", "diff", beforePath, afterPath, "--json"]);
-    assert.equal(result.status, 0);
-    const envelope = JSON.parse(result.stdout);
-    assert.equal(envelope.command, "academic snapshot diff");
-    assert.equal(envelope.data.summary.changed, 1);
-    assert.equal(envelope.data.summary.hasChanges, true);
+    writeFileSync(stateTarget, "{}", "utf8");
+    symlinkSync(stateTarget, stateLink, "file");
+    mkdirSync(stateParentTarget);
+    symlinkSync(stateParentTarget, stateParentLink, "dir");
+
+    const diffResult = run(["academic", "snapshot", "diff", beforePath, afterPath, "--json"]);
+    assert.equal(diffResult.status, 0);
+    const diffEnvelope = JSON.parse(diffResult.stdout);
+    assert.equal(diffEnvelope.command, "academic snapshot diff");
+    assert.equal(diffEnvelope.data.summary.changed, 1);
+    assert.equal(diffEnvelope.data.summary.hasChanges, true);
+
+    const changesResult = run(["academic", "changes", beforePath, afterPath, "--json"]);
+    assert.equal(changesResult.status, 0);
+    const changesEnvelope = JSON.parse(changesResult.stdout);
+    assert.equal(changesEnvelope.command, "academic changes");
+    assert.equal(changesEnvelope.data.summary.totalChanges, 1);
+    assert.equal(changesEnvelope.data.state, "changed");
+
+    const unsafeState = runWithoutCredentials(["academic", "watch", "--state", stateLink, "--json"]);
+    assert.equal(unsafeState.status, 2);
+    assert.equal(JSON.parse(unsafeState.stdout).error.code, "UNSAFE_LOCAL_PATH");
+
+    const unsafeParent = runWithoutCredentials(["academic", "watch", "--state", join(stateParentLink, "state.json"), "--json"]);
+    assert.equal(unsafeParent.status, 2);
+    assert.equal(JSON.parse(unsafeParent.stdout).error.code, "UNSAFE_LOCAL_PATH");
+
+    const needsCredentials = runWithoutCredentials(["academic", "watch", "--state", statePath, "--json"]);
+    assert.equal(needsCredentials.status, 2);
+    assert.equal(JSON.parse(needsCredentials.stdout).command, "academic watch");
+    assert.equal(JSON.parse(needsCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -859,18 +996,24 @@ function run(args: string[]): { status: number | null; stdout: string; stderr: s
 }
 
 function runWithoutCredentials(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      SUSTECH_SID: "",
-      SUSTECH_PASSWORD: "",
-      SUSTECH_CREDENTIALS_FILE: "",
-      SUSTECH_PROFILE: "",
-      XDG_CONFIG_HOME: join(tmpdir(), `sustech-cli-empty-config-${process.pid}`),
-    },
-  });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  const configRoot = mkdtempSync(join(tmpdir(), "sustech-cli-empty-config-"));
+  try {
+    const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SUSTECH_SID: "",
+        SUSTECH_PASSWORD: "",
+        SUSTECH_CREDENTIALS_FILE: "",
+        SUSTECH_DISABLE_SYSTEM_KEYRING: "1",
+        SUSTECH_PROFILE: "",
+        XDG_CONFIG_HOME: configRoot,
+      },
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  } finally {
+    rmSync(configRoot, { recursive: true, force: true });
+  }
 }
 
 function exists(path: string): boolean {

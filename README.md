@@ -10,9 +10,9 @@ JSONL are available for software. Python is not required at runtime.
 
 > [!WARNING]
 > This is an independent community project, not an official SUSTech service.
-> The npm `0.8.4` release is a preview, and `main` may contain additional
-> next-release work. Inspect `sustech version` and `sustech capabilities` on the
-> installed copy before relying on a command or allowing it to change state.
+> Published npm releases may lag `main`. Inspect `sustech version` and
+> `sustech capabilities` on the installed copy before relying on a command or
+> allowing it to change state.
 
 ## Install
 
@@ -41,6 +41,7 @@ Public data does not require an account:
 sustech calendar day 2026-09-01
 sustech faculty search "computer vision"
 sustech transit lines
+sustech library search "graph neural networks" --limit 5
 ```
 
 Authenticated services use a named local profile:
@@ -48,6 +49,11 @@ Authenticated services use a named local profile:
 ```bash
 sustech auth login
 sustech auth status
+sustech context --live --level verbose
+sustech academic watch --state ./academic-state.json --include-blackboard
+sustech academic changes before.json after.json
+sustech tis plan recommend CS330 MA203 --round bxxk --max 5
+sustech tis plan explain CS330 --round bxxk
 sustech tis degree missing
 sustech tis degree progress
 sustech bb calendar --type GradebookColumn
@@ -118,17 +124,19 @@ version's exact command, authentication, network, and confirmation metadata.
 | Area | Examples | Access |
 | --- | --- | --- |
 | Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
-| Academic context | calendar, live context, profile reports, academic snapshots | Public and authenticated reads; guarded local exports |
-| TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
+| Academic context | calendar, Context v2 live summaries, profile reports, academic snapshots, `academic changes`, one-shot `academic watch` | Public and authenticated reads; guarded local exports |
+| TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, `tis plan solve/explain/recommend`, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
 | Blackboard | courses, deadlines, calendar reads, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; the native calendar link is a separate stored secret and local writes are guarded |
-| Campus services | WS programs, eHall booking, library booking, PMS jobs and usage | Authenticated reads; booking and queue writes are confirm-gated |
-| Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths |
+| Library and campus services | Primo catalog search/detail, WS programs, eHall booking, library booking, PMS jobs and usage | Public catalog reads plus authenticated reads; booking and queue writes are confirm-gated |
+| Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths; NCES remains community reference only |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
 
 For the structured TIS-reported `tis degree progress` response, the derived
 `tis degree missing` report, and how both differ from local JSON
 `tis degree audit`, see
 [docs/DEGREE_PROGRESS.md](docs/DEGREE_PROGRESS.md). For the
+snapshot save/diff/change/watch workflow, see
+[docs/ACADEMIC_SNAPSHOTS.md](docs/ACADEMIC_SNAPSHOTS.md). For the
 `tis degree audit` requirements-file format, matching semantics, and current
 runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
 
@@ -170,7 +178,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.8.4",
+    "version": "0.9.0",
     "runtime": "node v22.19.0"
   }
 }
@@ -260,10 +268,82 @@ selection and bid changes, booking and library-booking create/cancel actions,
 and PMS upload/delete actions. An ambiguous remote write result includes
 `DO_NOT_RETRY_AUTOMATICALLY` and must not be retried automatically.
 
+Booking and library-booking previews now also try to read exact point-in-time
+room availability before any write. If the live room calendar, room open-times,
+or reservation metadata cannot safely rule out an overlap, preview fails closed
+instead of guessing that the slot is free.
+
+## Academic change tracking
+
+```bash
+sustech academic snapshot save --destination ./before.json --include-blackboard
+sustech academic changes before.json after.json
+sustech academic watch --state ./academic-state.json --include-blackboard
+```
+
+`academic changes BEFORE AFTER` is the read-only diff command for two saved
+snapshots. `academic watch --state PATH` is a one-shot command: it reads live
+academic state once, compares it against the existing local state file when
+present, reports the changes, and updates that local file. It does not poll, it
+does not loop in the background, and it does not write any remote campus state.
+
+## Context v2
+
+```bash
+sustech context --level terse
+sustech context --live --level normal
+sustech context --live --level verbose
+```
+
+`context` now has three explicit detail levels:
+
+- `terse`: compact calendar and near-term summary
+- `normal`: adds the next deadline, next evaluation, and next exam when known
+- `verbose`: adds public weather, AQI, and library-status observations when
+  `--live` is enabled
+
+`--live` keeps source status explicit. Missing or failed live sources stay
+marked as missing or partial; they are not silently backfilled.
+
+## Library catalog
+
+```bash
+sustech library search "graph neural networks" --limit 5
+sustech library detail PC:cdi_proquest_miscellaneous_1901310093
+sustech library search "graph neural networks" --browser --interactive
+sustech library detail L:alma991234567890106575 --browser
+```
+
+`library search` and `library detail` are read-only Primo catalog commands.
+`--browser` forces the browser-backed path. If that path redirects to CAS, the
+user must complete authentication manually in the browser window. The CLI does
+not accept browser credentials, does not solve CAPTCHAs, and does not persist
+browser cookies. On some hosts, public Primo HTTP access may still be limited by
+runtime TLS behavior; `--browser` is the supported fallback.
+
+## Conservative course planning
+
+```bash
+sustech tis plan recommend CS330 MA203 --round bxxk --path ./tis-plan.json --max 5
+sustech tis plan explain CS330 --round bxxk --path ./tis-plan.json
+```
+
+These commands are read-only planning helpers. They do not add courses, do not
+submit selection writes, do not treat NCES as official data, and do not guess
+prerequisites. `recommend` ranks candidate sections using the current
+selectable-course snapshot, timetable-fit evidence, seat observations, optional
+degree-progress or degree-missing data, and optional NCES matches. `explain`
+shows the same evidence for one exact course code or RWH. Degree relevance stays
+conservative: if the available evidence is ambiguous, the result stays in manual
+review instead of being promoted to a definite requirement match.
+
 ## Current limitations
 
 - Blackboard submission follows official Learn REST attempt/upload endpoints
   and is fixture-tested, but it has not yet performed a real Blackboard write.
+- Primo catalog access has both direct and browser-backed paths, but direct
+  public HTTP access can still depend on the local runtime's TLS behavior. When
+  in doubt, use `--browser` and complete any CAS step manually.
 - Fresh CAS logins for TIS- and Blackboard-backed commands may stop before
   password submission with `CAS_INTERACTIVE_CHALLENGE_REQUIRED` when CAS serves
   an interactive slide CAPTCHA. The CLI will not bypass that challenge. A

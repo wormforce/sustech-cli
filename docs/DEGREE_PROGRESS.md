@@ -94,6 +94,34 @@ None of these commands is a final graduation determination. Use the applicable
 official cultivation plan as the primary reference, and confirm discrepancies
 with the department secretary or Teaching Affairs Office (教学工作部).
 
+## Read-only plan explain and recommend
+
+The planning surface also includes two read-only advisory commands:
+
+```bash
+sustech tis plan explain COURSE_OR_RWH --round ROUND
+sustech tis plan explain COURSE_OR_RWH --round ROUND --semester 2026-2027-1 --path ./tis-plan.json
+sustech tis plan recommend [CODE...] --round ROUND --max 5
+sustech tis plan recommend [CODE...] --round ROUND --semester 2026-2027-1 --path ./tis-plan.json --json --pretty
+```
+
+These commands explain or rank candidate sections without adding anything to
+the user's plan and without performing any TIS selection write. Their evidence
+is intentionally conservative:
+
+- timetable-fit and score-breakdown details come from the saved/local plan plus
+  the existing timetable solver
+- seat observations come from the current selectable-course snapshot for the
+  requested `--round`
+- degree relevance is attached only when the current `tis degree progress` or
+  `tis degree missing` evidence supports it directly
+- NCES matches are optional community references only; they are not official
+  TIS data and are never treated as prerequisite or degree authority
+
+Ambiguous degree matching stays in `manualReview` instead of being promoted to
+an exact requirement claim. The CLI also does not guess prerequisites from
+course names, NCES comments, or teacher history.
+
 ## Authentication note
 
 TIS currently may require an interactive slide CAPTCHA at CAS login. The CLI

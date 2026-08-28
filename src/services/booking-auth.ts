@@ -14,6 +14,7 @@ type BookingMutationMethod = "AddMeeting" | "CancelMeeting";
 
 export const BOOKING_READ_ONLY_PATHS = new Set<string>([
   GET_USER_PROFILE_PATH,
+  "/api/SystemApi/GetMeetingByMeetingRoomList",
   "/api/SystemApi/GetMeetingRoomAllByCondition",
   "/api/SystemApi/GetMyMeetings",
 ]);

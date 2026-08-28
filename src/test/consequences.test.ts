@@ -6,6 +6,7 @@ import { CONSEQUENCES, consequenceByOperation } from "../core/consequences.js";
 const MUTATION_CONSEQUENCES: Readonly<Record<string, readonly string[]>> = {
   "profile export": ["profile.export"],
   "academic snapshot save": ["academic.snapshot.save"],
+  "academic watch": ["academic.snapshot.save"],
   "papers fetch-oa": ["papers.fetch-oa"],
   "bb download": ["blackboard.download"],
   "bb sync": ["blackboard.sync"],

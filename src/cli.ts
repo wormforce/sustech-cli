@@ -1,5 +1,13 @@
 #!/usr/bin/env node
+import { resolve as resolvePath } from "node:path";
 import { parseArgs } from "node:util";
+import {
+  comparableAcademicSnapshotSourceCount,
+  diffAcademicSnapshotChanges,
+  evaluateAcademicSnapshotWatch,
+  formatAcademicSnapshotChanges,
+  formatAcademicSnapshotWatch,
+} from "./academic/changes.js";
 import {
   academicSnapshotError,
   academicSnapshotSource,
@@ -22,10 +30,12 @@ import {
 import { inferCommandName } from "./core/argv.js";
 import { formatBrandArt, shouldUseBrandColor } from "./core/branding.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
+import { CLI_PARSE_OPTIONS, COMMAND_OPTIONS, SHARED_OUTPUT_OPTION_NAMES, type CliOptionName } from "./core/command-metadata.js";
 import { CONSEQUENCES, consequenceByOperation, formatConsequences } from "./core/consequences.js";
 import { resolveCredentials, type Credentials } from "./core/credentials.js";
 import { formatDashboard } from "./core/dashboard.js";
 import { CliError, ConfirmationRequiredError } from "./core/errors.js";
+import { assertPathAndParentsAreNotSymlinks } from "./core/local-store.js";
 import {
   DEFAULT_CREDENTIAL_PROFILE,
   deleteStoredCredentials,
@@ -56,6 +66,11 @@ import { CLI_VERSION } from "./core/version.js";
 import { AcademicCalendar, CalendarClient } from "./calendar/client.js";
 import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
 import type { CalendarLevel } from "./calendar/types.js";
+import {
+  fetchContextAirQuality,
+  fetchContextLibraryStatus,
+  fetchContextWeather,
+} from "./context/live.js";
 import { ContextService } from "./context/service.js";
 import type { ContextLevel, DeadlineSummary } from "./context/types.js";
 import {
@@ -92,6 +107,12 @@ import { auditDegreeRequirements, loadDegreeRequirements } from "./tis/degree-au
 import { gradesBySemester, summariseGrades } from "./tis/academics.js";
 import { TisSession } from "./tis/auth.js";
 import { TisClient, type TisSelectionState } from "./tis/client.js";
+import {
+  buildCourseDecisionNcesLookupRequests,
+  recommendCourseSections,
+  selectCourseDecisionCandidates,
+} from "./tis/course-decision.js";
+import { formatCourseRecommendationReport } from "./tis/course-decision-text.js";
 import { deriveTisDegreeMissing } from "./tis/degree-missing.js";
 import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
 import { addPlanEntries, createPlanDocument, loadPlan, removePlanEntries, savePlan } from "./tis/plan.js";
@@ -104,7 +125,6 @@ import {
   buildIcsContent,
   buildSelectionPreview,
   ensureSelectionVerified,
-  EvaluationStatusClient,
   inferWeekOneMonday,
   holidayToIcsEvent,
   nearestUpcomingExam,
@@ -124,6 +144,7 @@ import {
   type IcsAnchor,
   type IcsEvent,
   type BidPick,
+  type EvaluationCourseStatus,
   type EvaluationStatusFilter,
   type SelectionApplyTarget,
   type SelectionBidWhere,
@@ -165,12 +186,16 @@ import {
   downloadOpenAccessPdf,
   downloadBlackboardContentAttachment,
   evaluateBlackboardSubmissionPreflight,
+  formatBrowserPrimoCatalogDetail,
+  formatBrowserPrimoCatalogSearch,
   formatServiceStatuses,
   getBlackboardAttempt,
   getBlackboardContentItem,
   getBlackboardUser,
   getBlackboardUploadSettings,
   getLibraryBookingUser,
+  getLibraryCatalogDetail,
+  getPrimoCatalogDetailByBrowser,
   getLibraryIdleSummary,
   getLibraryReservationCount,
   getNcesCourseDetail,
@@ -191,6 +216,7 @@ import {
   listLibraryReservationsPage,
   listLibraryRooms,
   listMyBookingMeetings,
+  createPrimoPublicAdapter,
   buildPmsPrintDeletePreview,
   buildPmsPrintUploadPreview,
   findPmsPrintJob,
@@ -206,6 +232,9 @@ import {
   pmsPaperName,
   readBlackboardSubmissionPayload,
   readPmsUploadPayload,
+  resolveNcesCourseLookups,
+  searchLibraryCatalog,
+  searchPrimoCatalogByBrowser,
   selectBlackboardAssignment,
   searchCrossref,
   searchNces,
@@ -259,6 +288,8 @@ import {
   formatLibraryBookingCreateSuccess,
   formatLibraryBookingCancelPreview,
   formatLibraryBookingCancelSuccess,
+  formatLibraryCatalogDetail,
+  formatLibraryCatalogSearch,
   formatLibraryIdleSummary,
   formatLibraryLabs,
   formatLibraryReservations,
@@ -284,6 +315,7 @@ const HELP = `sustech — SUSTech services for humans and agents
 Usage:
   sustech version [--json|--jsonl]
   sustech capabilities [--json|--jsonl]
+  sustech describe COMMAND... [--json|--jsonl]
   sustech consequences [OPERATION] [--json|--jsonl]
   sustech doctor [--profile NAME] [--credentials-file PATH] [--service all|tis,bb,ws,booking,lib-booking,pms] [--live]
   sustech auth login [--profile NAME] [--sid SID] [--service bb|tis|ws|booking|lib-booking|pms] [--password-stdin]
@@ -294,6 +326,8 @@ Usage:
   sustech calendar day [YYYY-MM-DD|--date YYYY-MM-DD] [--calendar-level undergraduate|graduate]
   sustech academic snapshot save --destination PATH [--semester YYYY-YYYY-N] [--include-blackboard] [--overwrite]
   sustech academic snapshot diff BEFORE AFTER
+  sustech academic changes BEFORE AFTER
+  sustech academic watch --state PATH [--semester YYYY-YYYY-N] [--include-blackboard] [--overwrite]
   sustech faculty departments
   sustech faculty list DEPARTMENT [--full] [--limit N]
   sustech faculty get SLUG
@@ -331,6 +365,8 @@ Usage:
   sustech bb submit apply --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH --expected-sha256 HEX [--comment TEXT] [--allow-late] --confirm
   sustech ws programs [KEYWORD] [--page N] [--page-size N]
   sustech ws detail ID [--program-code CODE] [--program-token TOKEN]
+  sustech library search QUERY [--limit N] [--browser [--interactive]]
+  sustech library detail CONTEXT:DOC_ID [--browser [--interactive]]
   sustech library search-url QUERY [--limit N]
   sustech booking whoami
   sustech booking rooms [QUERY] [--available] [--page N] [--page-size N]
@@ -373,6 +409,8 @@ Usage:
     [--early-period-threshold N] [--weight-early-session N] [--weight-gap-segment N] [--weight-gap-period N] [--weight-distinct-weekday N] [--weight-campus-switch N]
   sustech tis plan remove [CODE...] [--block MON:1-4] [--path PATH]
   sustech tis plan solve [--path PATH] [--semester YYYY-YYYY-N] [--max N] [--refresh]
+  sustech tis plan explain COURSE_OR_RWH --round ROUND [--semester YYYY-YYYY-N] [--path PATH]
+  sustech tis plan recommend [CODE...] --round ROUND [--semester YYYY-YYYY-N] [--path PATH] [--max N]
   sustech tis classroom rooms [KEYWORD] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom occupancy ROOM --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
   sustech tis classroom free --week N --day N [--period-start N --period-end N] [--semester YYYY-YYYY-N] [--refresh]
@@ -435,6 +473,7 @@ type Values = OutputFlags & {
   comment?: string;
   "expected-sha256"?: string;
   destination?: string;
+  state?: string;
   overwrite?: boolean;
   days?: string;
   course?: string;
@@ -507,6 +546,8 @@ type Values = OutputFlags & {
   "url-stdin"?: boolean;
   reveal?: boolean;
   "include-blackboard"?: boolean;
+  browser?: boolean;
+  interactive?: boolean;
   "early-period-threshold"?: string;
   "weight-early-session"?: string;
   "weight-gap-segment"?: string;
@@ -518,132 +559,9 @@ type Values = OutputFlags & {
 
 type AuthService = "tis" | "bb" | "ws" | "booking" | "lib-booking" | "pms";
 
-const SHARED_OUTPUT_OPTIONS = new Set(["output", "json", "jsonl", "pretty"]);
-
 function brandArt(): string {
   return formatBrandArt(shouldUseBrandColor(process.stdout.isTTY));
 }
-
-const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  "auth login": ["profile", "sid", "service", "password-stdin"],
-  "auth status": ["profile"],
-  "auth logout": ["profile"],
-  "auth check": ["service", "credentials-file", "profile"],
-  doctor: ["profile", "credentials-file", "service", "live"],
-  "calendar terms": ["year", "calendar-level"],
-  "calendar day": ["date", "calendar-level"],
-  "academic snapshot save": ["credentials-file", "semester", "destination", "include-blackboard", "overwrite"],
-  "academic snapshot diff": [],
-  "faculty list": ["full", "limit"],
-  "faculty search": ["department", "limit"],
-  context: ["date", "calendar-level", "level", "live", "credentials-file"],
-  "profile show": ["credentials-file", "profile"],
-  "profile export": ["credentials-file", "profile", "destination", "overwrite"],
-  "resources list": ["category"],
-  "resources search": ["category"],
-  "wifi events": ["minutes"],
-  "papers search": ["max", "min-year", "open-access", "resolve-oa"],
-  "papers fetch-oa": ["destination", "overwrite"],
-  "nces browse": ["page", "page-size", "sort"],
-  "bb user": ["credentials-file"],
-  "bb courses": ["credentials-file"],
-  "bb content": ["credentials-file", "parent-id"],
-  "bb attachments": ["credentials-file"],
-  "bb download": ["credentials-file", "destination", "overwrite"],
-  "bb assignments": ["credentials-file"],
-  "bb deadlines": ["credentials-file", "days", "course"],
-  "bb calendar": ["credentials-file", "course-id", "type", "since", "until"],
-  "bb calendar-link set": ["profile", "url-stdin"],
-  "bb calendar-link show": ["profile", "reveal"],
-  "bb calendar-link fetch": ["profile", "destination", "overwrite"],
-  "bb calendar-link delete": ["profile"],
-  "bb search": ["credentials-file", "course", "kind", "attachments", "page", "page-size"],
-  "bb sync": ["credentials-file", "content-id", "destination", "overwrite"],
-  "bb attempts": ["credentials-file", "content-id", "column-id", "status"],
-  "bb submit preview": ["credentials-file", "course-id", "content-id", "column-id", "file", "comment"],
-  "bb submit apply": ["credentials-file", "course-id", "content-id", "column-id", "file", "expected-sha256", "comment", "allow-late", "confirm"],
-  "ws programs": ["credentials-file", "page", "page-size"],
-  "ws detail": ["credentials-file", "program-code", "program-token"],
-  "library search-url": ["limit"],
-  "booking whoami": ["credentials-file"],
-  "booking rooms": ["credentials-file", "available", "page", "page-size"],
-  "booking my-meetings": ["credentials-file", "page", "page-size"],
-  "booking create preview": ["credentials-file", "room-id", "start", "end", "title", "participants", "description"],
-  "booking create apply": ["credentials-file", "room-id", "start", "end", "title", "participants", "description", "confirm"],
-  "booking cancel preview": ["credentials-file", "meeting-id"],
-  "booking cancel apply": ["credentials-file", "meeting-id", "confirm"],
-  "lib-booking whoami": ["credentials-file"],
-  "lib-booking home-summary": ["credentials-file"],
-  "lib-booking labs": ["credentials-file", "class-kind"],
-  "lib-booking rooms": ["credentials-file", "kind-id", "lab-id", "class-kind"],
-  "lib-booking reservation-count": ["credentials-file"],
-  "lib-booking reservations": ["credentials-file", "start", "end", "need-status", "page", "page-size"],
-  "lib-booking create preview": ["credentials-file", "kind-id", "lab-id", "dev-id", "start", "end", "title", "class-kind", "member-kind", "member", "memo"],
-  "lib-booking create apply": ["credentials-file", "kind-id", "lab-id", "dev-id", "start", "end", "title", "class-kind", "member-kind", "member", "memo", "confirm"],
-  "lib-booking cancel preview": ["credentials-file", "reservation-id"],
-  "lib-booking cancel apply": ["credentials-file", "reservation-id", "confirm"],
-  "pms check": ["credentials-file"],
-  "pms server-groups": ["credentials-file"],
-  "pms stations": ["credentials-file", "server-group"],
-  "pms jobs": ["credentials-file"],
-  "pms scan-jobs": ["credentials-file"],
-  "pms usage": ["credentials-file", "begin", "end", "type", "page", "page-size"],
-  "pms upload preview": ["credentials-file", "file", "color", "paper", "duplex", "page-from", "page-to", "copies"],
-  "pms upload apply": ["credentials-file", "file", "expected-sha256", "color", "paper", "duplex", "page-from", "page-to", "copies", "confirm"],
-  "pms delete preview": ["credentials-file"],
-  "pms delete apply": ["credentials-file", "confirm"],
-  "tis courses search": ["credentials-file", "semester", "limit", "refresh"],
-  "tis courses available": ["credentials-file", "semester", "limit", "round"],
-  "tis enrolled": ["credentials-file", "semester"],
-  "tis schedule": ["credentials-file", "semester", "week", "all"],
-  "tis grades": ["credentials-file", "semester"],
-  "tis exams": ["credentials-file"],
-  "tis plan init": [
-    "semester",
-    "block",
-    "path",
-    "early-period-threshold",
-    "weight-early-session",
-    "weight-gap-segment",
-    "weight-gap-period",
-    "weight-distinct-weekday",
-    "weight-campus-switch",
-  ],
-  "tis plan show": ["path"],
-  "tis plan add": [
-    "block",
-    "path",
-    "early-period-threshold",
-    "weight-early-session",
-    "weight-gap-segment",
-    "weight-gap-period",
-    "weight-distinct-weekday",
-    "weight-campus-switch",
-  ],
-  "tis plan remove": ["block", "path"],
-  "tis plan solve": ["credentials-file", "semester", "refresh", "max", "path"],
-  "tis classroom rooms": ["credentials-file", "semester", "refresh"],
-  "tis classroom occupancy": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
-  "tis classroom free": ["credentials-file", "semester", "refresh", "week", "day", "period-start", "period-end"],
-  "tis classroom live": ["credentials-file", "semester"],
-  "tis classroom now": ["credentials-file", "semester"],
-  "tis evals": ["credentials-file", "semester", "status"],
-  "tis ical": ["credentials-file", "semester", "week-one-monday", "teaching-start", "calendar-level", "calendar-name", "include", "destination", "overwrite"],
-  "tis timetable": ["credentials-file", "semester", "refresh", "max", "block"],
-  "tis degree audit": ["credentials-file", "semester", "requirements"],
-  "tis degree progress": ["credentials-file", "details"],
-  "tis degree missing": ["credentials-file", "semester"],
-  "tis enroll preview": ["semester", "course-id", "rwh", "round", "bid"],
-  "tis selection preview": ["semester", "course-id", "rwh", "round", "bid", "where", "cultivation"],
-  "tis selection apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "where", "cultivation", "confirm"],
-  "tis bid plan": ["semester", "pick", "bid-limit", "where", "round", "cultivation"],
-  "tis bid apply": ["credentials-file", "semester", "pick", "where", "round", "cultivation", "confirm"],
-  "tis enroll apply": ["credentials-file", "semester", "course-id", "rwh", "round", "bid", "confirm"],
-  "transit find": ["limit"],
-  "transit lines": ["day"],
-  "transit schedule": ["route-index", "day"],
-  "transit stops": ["direction"],
-};
 
 async function main(argv: string[]): Promise<void> {
   let parsed: ReturnType<typeof parseArgs>;
@@ -652,114 +570,7 @@ async function main(argv: string[]): Promise<void> {
       args: argv,
       allowPositionals: true,
       strict: true,
-      options: {
-        semester: { type: "string" },
-        limit: { type: "string" },
-        refresh: { type: "boolean", default: false },
-        round: { type: "string" },
-        "credentials-file": { type: "string" },
-        "course-id": { type: "string" },
-        rwh: { type: "string" },
-        bid: { type: "string" },
-        confirm: { type: "boolean", default: false },
-        week: { type: "string" },
-        all: { type: "boolean", default: false },
-        max: { type: "string" },
-        block: { type: "string", multiple: true },
-        day: { type: "string" },
-        direction: { type: "string" },
-        "route-index": { type: "string" },
-        status: { type: "string" },
-        "content-id": { type: "string" },
-        "column-id": { type: "string" },
-        file: { type: "string" },
-        comment: { type: "string" },
-        "expected-sha256": { type: "string" },
-        destination: { type: "string" },
-        overwrite: { type: "boolean", default: false },
-        days: { type: "string" },
-        course: { type: "string" },
-        kind: { type: "string" },
-        attachments: { type: "string" },
-        live: { type: "boolean", default: false },
-        "allow-late": { type: "boolean", default: false },
-        "period-start": { type: "string" },
-        "period-end": { type: "string" },
-        "week-one-monday": { type: "string" },
-        "teaching-start": { type: "string" },
-        "calendar-name": { type: "string" },
-        include: { type: "string", multiple: true },
-        where: { type: "string" },
-        pick: { type: "string", multiple: true },
-        "bid-limit": { type: "string" },
-        cultivation: { type: "string" },
-        year: { type: "string" },
-        "calendar-level": { type: "string" },
-        date: { type: "string" },
-        level: { type: "string" },
-        department: { type: "string" },
-        full: { type: "boolean", default: false },
-        minutes: { type: "string" },
-        category: { type: "string" },
-        page: { type: "string" },
-        "page-size": { type: "string" },
-        sort: { type: "string" },
-        "min-year": { type: "string" },
-        "open-access": { type: "boolean", default: false },
-        "resolve-oa": { type: "boolean", default: false },
-        "parent-id": { type: "string" },
-        "program-code": { type: "string" },
-        "program-token": { type: "string" },
-        available: { type: "boolean", default: false },
-        start: { type: "string" },
-        end: { type: "string" },
-        begin: { type: "string" },
-        "kind-id": { type: "string" },
-        "lab-id": { type: "string" },
-        "class-kind": { type: "string" },
-        "need-status": { type: "string" },
-        "room-id": { type: "string" },
-        "meeting-id": { type: "string" },
-        title: { type: "string" },
-        participants: { type: "string" },
-        description: { type: "string" },
-        "dev-id": { type: "string" },
-        "member-kind": { type: "string" },
-        member: { type: "string", multiple: true },
-        memo: { type: "string" },
-        "reservation-id": { type: "string" },
-        "server-group": { type: "string" },
-        type: { type: "string" },
-        color: { type: "string" },
-        paper: { type: "string" },
-        duplex: { type: "string" },
-        copies: { type: "string" },
-        "page-from": { type: "string" },
-        "page-to": { type: "string" },
-        service: { type: "string" },
-        profile: { type: "string" },
-        sid: { type: "string" },
-        "password-stdin": { type: "boolean", default: false },
-        path: { type: "string" },
-        requirements: { type: "string" },
-        details: { type: "boolean", default: false },
-        since: { type: "string" },
-        until: { type: "string" },
-        "url-stdin": { type: "boolean", default: false },
-        reveal: { type: "boolean", default: false },
-        "include-blackboard": { type: "boolean", default: false },
-        "early-period-threshold": { type: "string" },
-        "weight-early-session": { type: "string" },
-        "weight-gap-segment": { type: "string" },
-        "weight-gap-period": { type: "string" },
-        "weight-distinct-weekday": { type: "string" },
-        "weight-campus-switch": { type: "string" },
-        output: { type: "string" },
-        json: { type: "boolean", default: false },
-        jsonl: { type: "boolean", default: false },
-        pretty: { type: "boolean", default: false },
-        help: { type: "boolean", short: "h", default: false },
-      },
+      options: CLI_PARSE_OPTIONS,
     });
   } catch (error) {
     throw new CliError(error instanceof Error ? error.message : String(error), "USAGE", 2, {
@@ -812,6 +623,10 @@ async function main(argv: string[]): Promise<void> {
       items: capabilities,
       summary: { total: capabilities.length, schemaVersion: "1" },
     }, output);
+    return;
+  }
+  if (group === "describe") {
+    runDescribe(parsed.positionals, output);
     return;
   }
   if (group === "consequences") {
@@ -891,7 +706,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (group === "library") {
-    runLibrary(parsed.positionals, values, output);
+    await runLibrary(parsed.positionals, values, output);
     return;
   }
   if (group === "booking") {
@@ -1097,6 +912,10 @@ async function main(argv: string[]): Promise<void> {
     }, output);
     return;
   }
+  if (command === "plan" && (operation === "explain" || operation === "recommend")) {
+    await runTisPlanDecision(parsed.positionals, values, output);
+    return;
+  }
   if (command === "classroom" && operation === "rooms") {
     const semester = parseSemester(values.semester);
     const client = await tisClient(values);
@@ -1247,12 +1066,8 @@ async function main(argv: string[]): Promise<void> {
   if (command === "evals" && operation === undefined) {
     const semester = parseSemester(values.semester);
     const status = evaluationStatus(values.status);
-    const { session } = await authenticatedSession(values);
-    const me = objectValue(await session.getJson("/user/me"));
-    const userId = firstValue(me, "yhdm", "studentId", "sid", "id");
-    if (!userId) throw new CliError("TIS user profile did not include an evaluation user ID.", "TIS_PROTOCOL_ERROR", 1);
-    const client = new EvaluationStatusClient(session, userId);
-    const evaluations = await client.listCourses(semester.value, status);
+    const client = await tisClient(values);
+    const evaluations = await client.evaluations(semester.value, status);
     const summary = summariseEvaluationStatuses(evaluations);
     writeSuccess({
       command: "tis evals",
@@ -2541,46 +2356,8 @@ async function runAcademic(
 
   if (command === "snapshot" && operation === "save" && positionals.length === 3) {
     const destination = required(values.destination, "--destination");
-    const semester = parseSemester(values.semester);
-    const client = await tisClient(values);
-    const sources: Partial<Record<"schedule" | "grades" | "exams" | "blackboardDeadlines", AcademicSnapshotSource>> = {
-      schedule: await captureAcademicSource(() => client.schedule(semester)),
-      grades: await captureAcademicSource(() => client.grades(semester)),
-      exams: await captureAcademicExamSource(client, semester),
-    };
-
-    if (values["include-blackboard"]) {
-      try {
-        const report = await listBlackboardDeadlines(await casServiceAdapter(values, "bb"));
-        const failures: AcademicSnapshotFailure[] = report.failures.map((failure) => ({
-          code: failure.code || "BLACKBOARD_DEADLINE_READ_FAILED",
-          message: failure.message,
-        }));
-        sources.blackboardDeadlines = academicSnapshotSource(report.deadlines, {
-          status: failures.length > 0 ? "partial" : "ok",
-          failures,
-        });
-      } catch (error) {
-        sources.blackboardDeadlines = academicSnapshotError(error);
-      }
-    }
-
-    if (Object.values(sources).every((source) => source?.status === "error")) {
-      throw new CliError(
-        "No academic source could be captured; no snapshot was written.",
-        "ACADEMIC_SNAPSHOT_NO_DATA",
-        1,
-        { sources: Object.fromEntries(Object.entries(sources).map(([name, source]) => [name, source?.status])) },
-      );
-    }
-    const snapshot = buildAcademicSnapshot({ semester: semester.value, sources });
+    const { semester, snapshot, sourceItems } = await captureAcademicSnapshot(values);
     const path = await saveAcademicSnapshot(destination, snapshot, { overwrite: values.overwrite });
-    const sourceItems = Object.entries(snapshot.sources).map(([name, source]) => ({
-      source: name,
-      status: source?.status,
-      total: source?.items.length ?? 0,
-      failures: source?.failures.length ?? 0,
-    }));
     writeSuccess({
       command: "academic snapshot save",
       data: { path, snapshot, localMutation: true, remoteMutation: false },
@@ -2617,7 +2394,281 @@ async function runAcademic(
     return;
   }
 
+  if (command === "changes" && positionals.length === 4) {
+    const [beforePath, afterPath] = positionals.slice(2);
+    const [before, after] = await Promise.all([
+      loadAcademicSnapshot(required(beforePath, "before snapshot path")),
+      loadAcademicSnapshot(required(afterPath, "after snapshot path")),
+    ]);
+    const changes = diffAcademicSnapshotChanges(before, after);
+    writeSuccess({
+      command: "academic changes",
+      data: changes,
+      text: formatAcademicSnapshotChanges(changes),
+      items: changes.changes,
+      summary: changes.summary,
+    }, output);
+    return;
+  }
+
+  if (command === "watch" && positionals.length === 2) {
+    const requestedState = required(values.state, "--state");
+    const statePath = await resolveAcademicWatchStatePath(requestedState);
+    const previous = await loadAcademicWatchBaseline(statePath);
+    const { snapshot, sourceItems } = await captureAcademicSnapshot(values);
+    if (!previous || values.overwrite) assertAcademicWatchBaselineSeed(snapshot, previous ? "reset" : "create");
+    const watch = evaluateAcademicSnapshotWatch(previous, snapshot, { overwrite: values.overwrite });
+    const baselinePath = watch.baselineUpdated
+      ? await saveAcademicSnapshot(statePath, snapshot, { overwrite: Boolean(previous) || values.overwrite })
+      : statePath;
+    writeSuccess({
+      command: "academic watch",
+      data: {
+        path: baselinePath,
+        watch,
+        snapshot,
+        localMutation: watch.baselineUpdated,
+        remoteMutation: false,
+      },
+      text: formatAcademicSnapshotWatch(watch, baselinePath),
+      items: sourceItems,
+      summary: {
+        path: baselinePath,
+        semester: snapshot.semester,
+        digest: snapshot.digest,
+        state: watch.state,
+        noComparison: watch.noComparison,
+        comparisonAvailable: watch.comparisonAvailable,
+        baselineUpdated: watch.baselineUpdated,
+        comparableSources: watch.changes?.summary.comparableSources ?? 0,
+        unavailableSources: watch.changes?.summary.unavailableSources ?? 0,
+        totalChanges: watch.changes?.summary.totalChanges ?? 0,
+      },
+    }, output);
+    return;
+  }
+
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function captureAcademicSnapshot(
+  values: Values,
+): Promise<{
+  semester: Semester;
+  snapshot: ReturnType<typeof buildAcademicSnapshot>;
+  sourceItems: Array<{ source: string; status: string | undefined; total: number; failures: number }>;
+}> {
+  const semester = parseSemester(values.semester);
+  const client = await tisClient(values);
+  const sources: Partial<Record<"schedule" | "grades" | "exams" | "blackboardDeadlines", AcademicSnapshotSource>> = {
+    schedule: await captureAcademicSource(() => client.schedule(semester)),
+    grades: await captureAcademicSource(() => client.grades(semester)),
+    exams: await captureAcademicExamSource(client, semester),
+  };
+
+  if (values["include-blackboard"]) {
+    try {
+      const report = await listBlackboardDeadlines(await casServiceAdapter(values, "bb"));
+      const failures: AcademicSnapshotFailure[] = report.failures.map((failure) => ({
+        code: failure.code || "BLACKBOARD_DEADLINE_READ_FAILED",
+        message: failure.message,
+      }));
+      sources.blackboardDeadlines = academicSnapshotSource(report.deadlines, {
+        status: failures.length > 0 ? "partial" : "ok",
+        failures,
+      });
+    } catch (error) {
+      sources.blackboardDeadlines = academicSnapshotError(error);
+    }
+  }
+
+  if (Object.values(sources).every((source) => source?.status === "error")) {
+    throw new CliError(
+      "No academic source could be captured; no snapshot was written.",
+      "ACADEMIC_SNAPSHOT_NO_DATA",
+      1,
+      { sources: Object.fromEntries(Object.entries(sources).map(([name, source]) => [name, source?.status])) },
+    );
+  }
+  const snapshot = buildAcademicSnapshot({ semester: semester.value, sources });
+  return { semester, snapshot, sourceItems: academicSnapshotSourceItems(snapshot) };
+}
+
+function academicSnapshotSourceItems(
+  snapshot: ReturnType<typeof buildAcademicSnapshot>,
+): Array<{ source: string; status: string | undefined; total: number; failures: number }> {
+  return Object.entries(snapshot.sources).map(([name, source]) => ({
+    source: name,
+    status: source?.status,
+    total: source?.items.length ?? 0,
+    failures: source?.failures.length ?? 0,
+  }));
+}
+
+function assertAcademicWatchBaselineSeed(
+  snapshot: ReturnType<typeof buildAcademicSnapshot>,
+  mode: "create" | "reset",
+): void {
+  const comparableSources = comparableAcademicSnapshotSourceCount(snapshot);
+  if (comparableSources > 0) return;
+  throw new CliError(
+    `Academic watch needs at least one complete source to ${mode} a baseline.`,
+    "ACADEMIC_WATCH_NO_COMPARABLE_BASELINE",
+    1,
+    {
+      mode,
+      sources: academicSnapshotSourceItems(snapshot).map(({ source, status }) => ({ source, status })),
+    },
+  );
+}
+
+async function resolveAcademicWatchStatePath(value: string): Promise<string> {
+  const path = resolvePath(value.trim());
+  await assertPathAndParentsAreNotSymlinks(path);
+  return path;
+}
+
+async function loadAcademicWatchBaseline(path: string): Promise<Awaited<ReturnType<typeof loadAcademicSnapshot>> | undefined> {
+  try {
+    return await loadAcademicSnapshot(path);
+  } catch (error) {
+    if (error instanceof CliError && error.code === "ACADEMIC_SNAPSHOT_NOT_FOUND") return undefined;
+    throw error;
+  }
+}
+
+async function runTisPlanDecision(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const operation = positionals[2];
+  const explicitSelectors = positionals.slice(3);
+  if (operation === "explain" && explicitSelectors.length !== 1) {
+    throw usageError("Usage: sustech tis plan explain COURSE_OR_RWH --round ROUND [--semester YYYY-YYYY-N] [--path PATH]");
+  }
+  const round = opaqueToken(required(values.round, "--round"), "--round");
+  const view = await loadPlan(values.path);
+  const semester = values.semester
+    ? parseSemester(values.semester)
+    : view.plan.semester
+      ? parseSemester(view.plan.semester)
+      : parseSemester(undefined);
+  const selectors = operation === "recommend" && explicitSelectors.length === 0
+    ? view.plan.requestedCodes
+    : explicitSelectors;
+  if (selectors.length === 0) {
+    throw usageError("tis plan recommend needs one or more course codes, either as arguments or in the saved plan.");
+  }
+  const maxResults = operation === "recommend" ? parsePositiveInteger(values.max, 20, "--max") : undefined;
+  if (maxResults !== undefined && maxResults > 50) throw usageError("--max cannot exceed 50 for plan recommendations.");
+
+  const client = await tisClient(values);
+  const selectable = await client.searchAvailable(semester, { keyword: "", round, limit: 500 });
+  const selection = selectCourseDecisionCandidates(selectable.courses, selectors);
+  const selectableTruncated = selectable.total > selectable.courses.length;
+  if (selection.matched.length === 0) {
+    throw new CliError(
+      selectableTruncated
+        ? "No requested section was visible in the truncated selectable-course snapshot; narrow or re-check the live round before relying on this result."
+        : "No selectable section matched the requested exact course code or RWH.",
+      selectableTruncated ? "COURSE_RECOMMENDATION_INCOMPLETE" : "COURSE_SELECTOR_NOT_FOUND",
+      1,
+      {
+        semester: semester.value,
+        round,
+        selectors,
+        missingSelectors: selection.missingSelectors,
+        observed: selectable.courses.length,
+        reportedTotal: selectable.total,
+      },
+    );
+  }
+  if (selection.matched.length > 50) {
+    throw new CliError(
+      "The requested selectors matched more than 50 sections; use a more exact course code or RWH.",
+      "COURSE_RECOMMENDATION_TOO_BROAD",
+      2,
+      { matched: selection.matched.length, limit: 50 },
+    );
+  }
+
+  let degreeMissing: Awaited<ReturnType<typeof deriveTisDegreeMissing>> | undefined;
+  let degreeFailure: string | undefined;
+  try {
+    degreeMissing = await deriveTisDegreeMissing(client, { semester });
+  } catch (error) {
+    degreeFailure = errorMessage(error);
+  }
+
+  const ncesBatch = await resolveNcesCourseLookups(
+    buildCourseDecisionNcesLookupRequests(selection.matched),
+  );
+  const baseReport = recommendCourseSections({
+    selectableCourses: selectable.courses,
+    candidates: selection.matched,
+    plan: view.plan,
+    ...(degreeMissing ? { degreeMissing } : {}),
+    ncesByKey: ncesBatch.items,
+    ...(maxResults !== undefined ? { maxResults } : {}),
+  });
+  const extraWarnings = [
+    ...(selection.missingSelectors.length > 0
+      ? [`No selectable section matched: ${selection.missingSelectors.join(", ")}.`]
+      : []),
+    ...(selectableTruncated
+      ? [`TIS reported ${selectable.total} selectable sections, but only ${selectable.courses.length} were inspected; the recommendation is incomplete.`]
+      : []),
+    ...(view.plan.semester && view.plan.semester !== semester.value
+      ? [`The saved plan targets ${view.plan.semester}, while this run inspected ${semester.value}.`]
+      : []),
+    ...(degreeFailure ? [`TIS degree-gap evidence was unavailable: ${degreeFailure}`] : []),
+  ];
+  const sourceStatuses = {
+    ...baseReport.sourceStatuses,
+    ...(selectableTruncated
+      ? { selectable: { state: "partial" as const, message: "The selectable-course response was truncated at 500 sections." } }
+      : {}),
+    ...(degreeFailure
+      ? { degree: { state: "unavailable" as const, message: "TIS degree-gap evidence could not be loaded for this run." } }
+      : {}),
+  };
+  const warnings = [...new Set([...baseReport.warnings, ...extraWarnings])];
+  const report = {
+    ...baseReport,
+    partial: baseReport.partial || extraWarnings.length > 0,
+    sourceStatuses,
+    warnings,
+  };
+  const commandName = `tis plan ${operation}`;
+  writeSuccess({
+    command: commandName,
+    data: {
+      mutation: false,
+      path: view.path,
+      semester,
+      round,
+      selectors,
+      missingSelectors: selection.missingSelectors,
+      selectable: { observed: selectable.courses.length, total: selectable.total, truncated: selectableTruncated },
+      report,
+    },
+    text: formatCourseRecommendationReport(
+      report,
+      operation === "explain" ? "Course explanation" : "Course recommendations",
+    ),
+    items: report.items,
+    summary: {
+      path: view.path,
+      semester: semester.value,
+      round,
+      total: report.items.length,
+      partial: report.partial,
+      missingSelectors: selection.missingSelectors,
+      sourceStatuses: report.sourceStatuses,
+    },
+    meta: { advisory: report.advisory, warnings: report.warnings },
+  }, output);
 }
 
 async function captureAcademicSource(load: () => Promise<readonly unknown[]>): Promise<AcademicSnapshotSource> {
@@ -2669,13 +2720,17 @@ async function runContext(
   const level = contextLevel(values.level);
   const service = new ContextService();
   const now = contextReferenceTime(date, values.live);
-  const live = values.live ? await loadLiveContext(date, now, calendar, values) : undefined;
+  const live = values.live ? await loadLiveContext(date, now, calendar, values, level) : undefined;
   const snapshot = service.build({
     now,
     calendar,
     ...(live?.schedule ? { schedule: live.schedule } : {}),
     ...(live?.nextDeadline ? { nextDeadline: live.nextDeadline } : {}),
+    ...(live?.nextEvaluation ? { nextEvaluation: live.nextEvaluation } : {}),
     ...(live?.nextExam ? { nextExam: live.nextExam } : {}),
+    ...(live?.weather ? { weather: live.weather } : {}),
+    ...(live?.airQuality ? { airQuality: live.airQuality } : {}),
+    ...(live?.libraryStatus ? { libraryStatus: live.libraryStatus } : {}),
   }, level);
   const liveText = live ? formatContextLiveSources(live.liveSources) : [];
   writeSuccess({
@@ -2704,35 +2759,64 @@ async function loadLiveContext(
   now: Date,
   calendar: AcademicCalendar,
   values: Values,
+  level: ContextLevel,
 ): Promise<{
   schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
   nextDeadline?: DeadlineSummary;
+  nextEvaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
   nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
   liveSources: {
     tisSchedule: ContextLiveSourceStatus;
     tisExams: ContextLiveSourceStatus;
     blackboardDeadlines: ContextLiveSourceStatus;
+    tisEvaluations?: ContextLiveSourceStatus;
+    weather?: ContextLiveSourceStatus;
+    airQuality?: ContextLiveSourceStatus;
+    libraryStatus?: ContextLiveSourceStatus;
   };
+  weather?: { condition: string; icon?: string; tempC?: number; feelsLikeC?: number; humidity?: number; windKmh?: number; precipitationMm?: number };
+  airQuality?: { aqi: number; level?: string; pm25?: number; pm10?: number; ozone?: number };
+  libraryStatus?: string;
 }> {
   const liveSources: {
     tisSchedule: ContextLiveSourceStatus;
     tisExams: ContextLiveSourceStatus;
     blackboardDeadlines: ContextLiveSourceStatus;
+    tisEvaluations?: ContextLiveSourceStatus;
+    weather?: ContextLiveSourceStatus;
+    airQuality?: ContextLiveSourceStatus;
+    libraryStatus?: ContextLiveSourceStatus;
   } = {
     tisSchedule: { state: "missing" },
     tisExams: { state: "missing" },
     blackboardDeadlines: { state: "missing" },
+    ...(contextLoadsNormalFields(level) ? { tisEvaluations: { state: "missing" as const } } : {}),
+    ...(contextLoadsVerboseFields(level)
+      ? {
+          weather: { state: "missing" as const },
+          airQuality: { state: "missing" as const },
+          libraryStatus: { state: "missing" as const },
+        }
+      : {}),
   };
 
   const result: {
     schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
     nextDeadline?: DeadlineSummary;
+    nextEvaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
     nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
     liveSources: {
       tisSchedule: ContextLiveSourceStatus;
       tisExams: ContextLiveSourceStatus;
       blackboardDeadlines: ContextLiveSourceStatus;
+      tisEvaluations?: ContextLiveSourceStatus;
+      weather?: ContextLiveSourceStatus;
+      airQuality?: ContextLiveSourceStatus;
+      libraryStatus?: ContextLiveSourceStatus;
     };
+    weather?: { condition: string; icon?: string; tempC?: number; feelsLikeC?: number; humidity?: number; windKmh?: number; precipitationMm?: number };
+    airQuality?: { aqi: number; level?: string; pm25?: number; pm10?: number; ozone?: number };
+    libraryStatus?: string;
   } = { liveSources };
 
   const calendarDay = calendar.day(date);
@@ -2750,12 +2834,16 @@ async function loadLiveContext(
     const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
     liveSources.tisSchedule = { state, message };
     liveSources.tisExams = { state, message };
+    if (liveSources.tisEvaluations) liveSources.tisEvaluations = { state, message };
   }
 
   if (tis) {
-    const [scheduleResult, examsResult] = await Promise.allSettled([
+    const [scheduleResult, examsResult, evaluationsResult] = await Promise.allSettled([
       currentWeek > 0 ? tis.schedule(semester) : Promise.resolve([] as PersonalScheduleEntry[]),
       tis.exams(),
+      contextLoadsNormalFields(level)
+        ? tis.evaluations(semester.value, "all")
+        : Promise.resolve(undefined),
     ]);
 
     if (scheduleResult.status === "fulfilled") {
@@ -2804,6 +2892,23 @@ async function loadLiveContext(
         message: errorMessage(examsResult.reason),
       };
     }
+
+    if (liveSources.tisEvaluations) {
+      if (evaluationsResult.status === "fulfilled") {
+        const selection = nextPendingEvaluationSummary(evaluationsResult.value ?? [], now);
+        if (selection.evaluation) result.nextEvaluation = selection.evaluation;
+        liveSources.tisEvaluations = {
+          state: selection.state,
+          omissionCount: selection.omissionCount,
+          ...(selection.message ? { message: selection.message } : {}),
+        };
+      } else {
+        liveSources.tisEvaluations = {
+          state: "error",
+          message: errorMessage(evaluationsResult.reason),
+        };
+      }
+    }
   }
 
   try {
@@ -2823,6 +2928,23 @@ async function loadLiveContext(
       state: error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error",
       message,
     };
+  }
+
+  if (contextLoadsVerboseFields(level)) {
+    const [weatherResult, airQualityResult, libraryStatusResult] = await Promise.allSettled([
+      fetchContextWeather(),
+      fetchContextAirQuality(),
+      fetchContextLibraryStatus(),
+    ]);
+
+    liveSources.weather = settledContextPublicSource(weatherResult);
+    if (weatherResult.status === "fulfilled" && weatherResult.value) result.weather = weatherResult.value;
+
+    liveSources.airQuality = settledContextPublicSource(airQualityResult);
+    if (airQualityResult.status === "fulfilled" && airQualityResult.value) result.airQuality = airQualityResult.value;
+
+    liveSources.libraryStatus = settledContextPublicSource(libraryStatusResult);
+    if (libraryStatusResult.status === "fulfilled" && libraryStatusResult.value) result.libraryStatus = libraryStatusResult.value;
   }
 
   return result;
@@ -2847,16 +2969,126 @@ function formatContextLiveSources(sources: {
   tisSchedule: ContextLiveSourceStatus;
   tisExams: ContextLiveSourceStatus;
   blackboardDeadlines: ContextLiveSourceStatus;
+  tisEvaluations?: ContextLiveSourceStatus;
+  weather?: ContextLiveSourceStatus;
+  airQuality?: ContextLiveSourceStatus;
+  libraryStatus?: ContextLiveSourceStatus;
 }): string[] {
-  return [
-    `Live sources: ${
-      [
-        formatContextLiveSource("TIS schedule", sources.tisSchedule),
-        formatContextLiveSource("TIS exams", sources.tisExams),
-        formatContextLiveSource("Blackboard deadlines", sources.blackboardDeadlines),
-      ].join(" | ")
-    }`,
+  const parts = [
+    formatContextLiveSource("TIS schedule", sources.tisSchedule),
+    formatContextLiveSource("TIS exams", sources.tisExams),
+    formatContextLiveSource("Blackboard deadlines", sources.blackboardDeadlines),
+    ...(sources.tisEvaluations ? [formatContextLiveSource("TIS evaluations", sources.tisEvaluations)] : []),
+    ...(sources.weather ? [formatContextLiveSource("Weather", sources.weather)] : []),
+    ...(sources.airQuality ? [formatContextLiveSource("Air quality", sources.airQuality)] : []),
+    ...(sources.libraryStatus ? [formatContextLiveSource("Library status", sources.libraryStatus)] : []),
   ];
+  return [
+    `Live sources: ${parts.join(" | ")}`,
+  ];
+}
+
+function contextLoadsNormalFields(level: ContextLevel): boolean {
+  return level === "normal" || level === "verbose";
+}
+
+function contextLoadsVerboseFields(level: ContextLevel): boolean {
+  return level === "verbose";
+}
+
+function nextPendingEvaluationSummary(
+  rows: readonly EvaluationCourseStatus[] | undefined,
+  now: Date,
+): {
+  state: ContextLiveSourceState;
+  omissionCount: number;
+  message?: string;
+  evaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
+} {
+  const actionable = (rows ?? []).filter((row) => !row.submitted);
+  if (actionable.length === 0) return { state: "missing", omissionCount: 0 };
+
+  const dated = actionable
+    .map((row) => ({ row, due: parseContextDueAt(row.deadline) }))
+    .filter((
+      entry,
+    ): entry is { row: EvaluationCourseStatus; due: { epochMs: number; label: string; date: string } } => entry.due !== undefined)
+    .sort((left, right) => left.due.epochMs - right.due.epochMs || left.row.courseCode.localeCompare(right.row.courseCode));
+  const missingDeadlineCount = actionable.length - dated.length;
+  const next = dated.find((entry) => entry.due.epochMs >= now.getTime()) ?? dated[0];
+  if (next) {
+    return {
+      state: missingDeadlineCount > 0 ? "partial" : "provided",
+      omissionCount: missingDeadlineCount,
+      ...(missingDeadlineCount > 0 ? { message: `${missingDeadlineCount} evaluation task(s) did not expose a parseable deadline.` } : {}),
+      evaluation: {
+        course: [next.row.courseCode, next.row.courseName].filter(Boolean).join(" ").trim() || next.row.courseName,
+        name: next.row.rawStatus === "3" ? "教学评估（已保存）" : "教学评估",
+        dueAt: next.due.label,
+        daysLeft: daysLeftFromShenzhen(now, next.due.date),
+      },
+    };
+  }
+  const fallback = actionable[0];
+  return {
+    state: "partial",
+    omissionCount: missingDeadlineCount || actionable.length,
+    message: "Evaluation tasks were available, but none exposed a parseable upcoming deadline.",
+    evaluation: {
+      course: [fallback?.courseCode, fallback?.courseName].filter(Boolean).join(" ").trim() || fallback?.courseName || "Teaching evaluation",
+      name: fallback?.rawStatus === "3" ? "教学评估（已保存）" : "教学评估",
+    },
+  };
+}
+
+function parseContextDueAt(value: string | undefined): { epochMs: number; label: string; date: string } | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return {
+      epochMs: new Date(`${text}T23:59:59+08:00`).getTime(),
+      label: text,
+      date: text,
+    };
+  }
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)) {
+    const iso = text.replace(" ", "T");
+    const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : `${iso}+08:00`;
+    const parsed = new Date(normalized);
+    if (!Number.isNaN(parsed.getTime())) {
+      return {
+        epochMs: parsed.getTime(),
+        label: iso,
+        date: iso.slice(0, 10),
+      };
+    }
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return {
+    epochMs: parsed.getTime(),
+    label: text,
+    date: text.slice(0, 10),
+  };
+}
+
+function daysLeftFromShenzhen(now: Date, dueDate: string): number {
+  const start = new Date(`${todayInShenzhen(now)}T00:00:00+08:00`).getTime();
+  const end = new Date(`${dueDate}T00:00:00+08:00`).getTime();
+  return Math.floor((end - start) / (24 * 60 * 60 * 1000));
+}
+
+function settledContextPublicSource<T>(result: PromiseSettledResult<T | null | string | undefined>): ContextLiveSourceStatus {
+  if (result.status === "rejected") {
+    return {
+      state: "error",
+      message: errorMessage(result.reason),
+    };
+  }
+  if (result.value === undefined || result.value === null || result.value === "") {
+    return { state: "missing" };
+  }
+  return { state: "provided" };
 }
 
 type TisIcalInclude = "schedule" | "exams" | "deadlines" | "holidays";
@@ -3772,29 +4004,85 @@ async function runWs(
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
 }
 
-function runLibrary(
+async function runLibrary(
   positionals: string[],
   values: Values,
   output: ReturnType<typeof resolveOutputOptions>,
-): void {
-  if (positionals[1] !== "search-url") throw usageError(`Unknown command: ${positionals.join(" ")}`);
-  const query = positionals.slice(2).join(" ").trim();
-  if (!query) throw usageError("A library search query is required.");
-  const limit = parsePositiveInteger(values.limit, 10, "--limit");
-  const url = buildPrimoSearchUrl({ query, limit });
-  const status = serviceStatus("library-catalog");
-  const data = {
-    query,
-    url,
-    availability: "browser-required",
-    mutation: false,
-    ...(status ? { service: status } : {}),
-  };
-  writeSuccess({
-    command: "library search-url",
-    data,
-    text: `Library search URL · browser required\n${url}\nNo catalog result was fabricated by the CLI.`,
-  }, output);
+): Promise<void> {
+  const command = positionals[1];
+  if (command === "search") {
+    const query = positionals.slice(2).join(" ").trim();
+    if (!query) throw usageError("A library search query is required.");
+    if (values.interactive && !values.browser) throw usageError("--interactive requires --browser for library catalog commands.");
+    const limit = parsePositiveInteger(values.limit, 10, "--limit");
+    if (limit > 50) throw usageError("--limit cannot exceed 50 for library catalog search.");
+    if (values.browser) {
+      const page = await searchPrimoCatalogByBrowser(
+        { query, limit, scope: "default" },
+        { interactive: values.interactive },
+      );
+      writeSuccess({
+        command: "library search",
+        data: { mutation: false, transport: "browser", page },
+        text: formatBrowserPrimoCatalogSearch(page),
+        items: page.results,
+        summary: { query, shown: page.totalReturned, transport: "browser", authentication: page.authentication },
+      }, output);
+      return;
+    }
+    const page = await searchLibraryCatalog(createPrimoPublicAdapter(), { query, limit });
+    writeSuccess({
+      command: "library search",
+      data: { mutation: false, transport: "public-json", page },
+      text: formatLibraryCatalogSearch(page),
+      items: page.items,
+      summary: { query, total: page.total, shown: page.items.length, first: page.first, last: page.last, transport: "public-json" },
+    }, output);
+    return;
+  }
+  if (command === "detail" && positionals.length === 3) {
+    const reference = inlineText(required(positionals[2], "Primo record reference"), "Primo record reference", 2048);
+    if (values.interactive && !values.browser) throw usageError("--interactive requires --browser for library catalog commands.");
+    if (values.browser) {
+      const detail = await getPrimoCatalogDetailByBrowser(reference, { interactive: values.interactive });
+      writeSuccess({
+        command: "library detail",
+        data: { mutation: false, transport: "browser", detail },
+        text: formatBrowserPrimoCatalogDetail(detail),
+        summary: { reference: detail.reference, transport: "browser", authentication: detail.authentication },
+      }, output);
+      return;
+    }
+    const detail = await getLibraryCatalogDetail(createPrimoPublicAdapter(), reference);
+    writeSuccess({
+      command: "library detail",
+      data: { mutation: false, transport: "public-json", detail },
+      text: formatLibraryCatalogDetail(detail),
+      summary: { reference: detail.reference, transport: "public-json" },
+    }, output);
+    return;
+  }
+  if (command === "search-url") {
+    const query = positionals.slice(2).join(" ").trim();
+    if (!query) throw usageError("A library search query is required.");
+    const limit = parsePositiveInteger(values.limit, 10, "--limit");
+    const url = buildPrimoSearchUrl({ query, limit });
+    const status = serviceStatus("library-catalog");
+    const data = {
+      query,
+      url,
+      availability: "browser-required",
+      mutation: false,
+      ...(status ? { service: status } : {}),
+    };
+    writeSuccess({
+      command: "library search-url",
+      data,
+      text: `Library search URL · browser required\n${url}\nNo catalog result was fabricated by the CLI.`,
+    }, output);
+    return;
+  }
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
 }
 
 async function runBooking(
@@ -4962,11 +5250,11 @@ function buildBlackboardSubmitApplyConfirmation(
 }
 
 function validateCommandOptions(command: string, argv: readonly string[]): void {
-  if (!CAPABILITIES.some((entry) => entry.command === command)) return;
+  if (!CAPABILITIES.some((entry) => entry.command === command) && command !== "describe") return;
   const allowed = new Set(COMMAND_OPTIONS[command] ?? []);
   if (allowed.has("credentials-file")) allowed.add("profile");
   for (const option of suppliedOptionNames(argv)) {
-    if (SHARED_OUTPUT_OPTIONS.has(option) || allowed.has(option)) continue;
+    if (SHARED_OUTPUT_OPTION_NAMES.includes(option as typeof SHARED_OUTPUT_OPTION_NAMES[number]) || allowed.has(option as CliOptionName)) continue;
     throw usageError(`Option '--${option}' is not valid for '${command}'.`);
   }
 }
@@ -4983,6 +5271,138 @@ function suppliedOptionNames(argv: readonly string[]): Set<string> {
     names.add(argument.slice(2).split("=", 1)[0]);
   }
   return names;
+}
+
+interface CommandDescription {
+  command: string;
+  found: boolean;
+  usage: string[];
+  options: Array<{ name: string; type: "string" | "boolean"; multiple: boolean; shared: boolean }>;
+  capability?: (typeof CAPABILITIES)[number];
+  consequences: Array<{ operation: string; severity: string; irreversible: boolean; verification: string }>;
+}
+
+function runDescribe(
+  positionals: string[],
+  output: ReturnType<typeof resolveOutputOptions>,
+): void {
+  const targetArgv = positionals.slice(1);
+  if (targetArgv.length === 0) throw usageError("Usage: sustech describe COMMAND...");
+  const command = inferCommandName(targetArgv);
+  const capability = CAPABILITIES.find((entry) => entry.command === command);
+  if (!capability) throw usageError(`Unknown command to describe: ${targetArgv.join(" ")}`);
+  const description: CommandDescription = {
+    command,
+    found: true,
+    usage: commandUsageLines(command),
+    options: commandOptionDescriptions(command),
+    capability,
+    consequences: describeConsequencesForCommand(command),
+  };
+  writeSuccess({
+    command: "describe",
+    data: description,
+    text: formatCommandDescription(description),
+    items: description.options,
+    summary: {
+      command: description.command,
+      options: description.options.length,
+      consequences: description.consequences.length,
+      usageLines: description.usage.length,
+    },
+  }, output);
+}
+
+function commandUsageLines(command: string): string[] {
+  const usageLines = HELP.split("\n").slice(3);
+  const prefix = `  sustech ${command}`;
+  const start = usageLines.findIndex((line) => line.startsWith(prefix));
+  if (start < 0) return [`sustech ${command}`];
+  const collected: string[] = [];
+  for (let index = start; index < usageLines.length; index += 1) {
+    const line = usageLines[index];
+    if (!line) break;
+    if (index > start && line.startsWith("  sustech ")) break;
+    if (index > start && !line.startsWith("    ")) break;
+    collected.push(line.trimEnd());
+  }
+  return collected.map((line) => line.trim());
+}
+
+function commandOptionDescriptions(command: string): CommandDescription["options"] {
+  const specific = [...(COMMAND_OPTIONS[command] ?? [])]
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => ({
+      name: `--${name}`,
+      type: CLI_PARSE_OPTIONS[name].type,
+      multiple: Boolean("multiple" in CLI_PARSE_OPTIONS[name] && CLI_PARSE_OPTIONS[name].multiple),
+      shared: false,
+    }));
+  const shared = SHARED_OUTPUT_OPTION_NAMES.map((name) => ({
+    name: `--${name}`,
+    type: CLI_PARSE_OPTIONS[name].type,
+    multiple: false,
+    shared: true,
+  }));
+  return [...specific, ...shared];
+}
+
+function describeConsequencesForCommand(command: string): CommandDescription["consequences"] {
+  return commandConsequenceOperations(command)
+    .map((operation) => consequenceByOperation(operation))
+    .filter((entry): entry is NonNullable<ReturnType<typeof consequenceByOperation>> => entry !== undefined)
+    .map((entry) => ({
+      operation: entry.operation,
+      severity: entry.severity,
+      irreversible: entry.irreversible,
+      verification: entry.verification,
+    }));
+}
+
+function commandConsequenceOperations(command: string): string[] {
+  const direct: Partial<Record<string, readonly string[]>> = {
+    "auth login": ["credentials.store"],
+    "auth logout": ["credentials.delete"],
+    "profile export": ["profile.export"],
+    "academic snapshot save": ["academic.snapshot.save"],
+    "academic watch": ["academic.snapshot.save"],
+    "tis ical": ["tis.ical.export"],
+    "tis enroll apply": ["tis.enroll"],
+    "tis bid apply": ["tis.bid"],
+    "bb download": ["blackboard.download"],
+    "bb sync": ["blackboard.sync"],
+    "bb calendar-link set": ["blackboard.calendar-link.store"],
+    "bb calendar-link fetch": ["blackboard.calendar-link.fetch"],
+    "bb calendar-link delete": ["blackboard.calendar-link.delete"],
+    "bb submit apply": ["blackboard.submit"],
+    "booking create apply": ["booking.create"],
+    "booking cancel apply": ["booking.cancel"],
+    "lib-booking create apply": ["library-booking.create"],
+    "lib-booking cancel apply": ["library-booking.cancel"],
+    "pms upload apply": ["pms.upload"],
+    "pms delete apply": ["pms.delete"],
+  };
+  if (command === "tis selection apply") return ["tis.cart.update", "tis.drop", "tis.bid"];
+  return [...(direct[command] ?? [])];
+}
+
+function formatCommandDescription(description: CommandDescription): string {
+  const lines = [
+    `Command description · ${description.command}`,
+    `Kind ${description.capability?.kind ?? "local"} · auth ${description.capability?.authentication ?? "none"} · confirmation ${description.capability?.confirmation ?? "none"} · ${description.capability?.network ? "network" : "local"}${description.capability?.status === "preview" ? " · preview" : ""}`,
+  ];
+  if (description.capability?.summary) lines.push(description.capability.summary);
+  lines.push("Usage:");
+  lines.push(...description.usage.map((line) => `  ${line}`));
+  if (description.options.length > 0) {
+    lines.push("Options:");
+    lines.push(...description.options.map((option) => `  ${option.name} [${option.type}${option.multiple ? ", multiple" : ""}${option.shared ? ", shared" : ""}]`));
+  }
+  if (description.consequences.length > 0) {
+    lines.push("Consequences:");
+    lines.push(...description.consequences.map((entry) => `  ${entry.operation} [${entry.severity}${entry.irreversible ? ", irreversible" : ""}]`));
+  }
+  return lines.join("\n");
 }
 
 function bookingCreateTarget(values: Values): {
@@ -5437,13 +5857,13 @@ function addIsoDays(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function todayInShenzhen(): string {
+function todayInShenzhen(now: Date = new Date()): string {
   return new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
+  }).format(now);
 }
 
 function timeInShenzhen(): string {

@@ -75,6 +75,11 @@ test("BookingSession completes the CAS ticket and GetUserProfile handshake befor
         assert.equal(headers.get("cookie"), "BOOKINGSESSID=booking-cookie");
         return jsonResponse({ IsSuccess: true, Data: { rows: [] } });
       }
+      if (url === "https://booking.sustech.edu.cn/api/SystemApi/GetMeetingByMeetingRoomList") {
+        assert.equal(headers.get("authorization"), token);
+        assert.equal(headers.get("cookie"), "BOOKINGSESSID=booking-cookie");
+        return jsonResponse({ IsSuccess: true, Data: { rows: [] } });
+      }
       if (url === "https://booking.sustech.edu.cn/api/SystemApi/GetMeetingRoomAllByCondition") {
         return textResponse("", 307, {
           location: "https://booking.sustech.edu.cn/api/SystemApi/AddMeeting",
@@ -94,8 +99,18 @@ test("BookingSession completes the CAS ticket and GetUserProfile handshake befor
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ MessageType: 1002, MessageID: "m-1", Data: { page: 1 } }),
   });
+  const calendarResponse = await session.fetch("https://booking.sustech.edu.cn/api/SystemApi/GetMeetingByMeetingRoomList", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      MessageType: 5001,
+      MessageID: "m-2",
+      Data: { meetingroomid: "ZC02", currentdate: "2026-08-28T02:00:00.000Z" },
+    }),
+  });
 
   assert.equal(response.status, 200);
+  assert.equal(calendarResponse.status, 200);
   assert.deepEqual(session.userProfile, {
     name: "Test Student",
     sid: credentials.sid,
@@ -111,6 +126,7 @@ test("BookingSession completes the CAS ticket and GetUserProfile handshake befor
     "GET https://booking.sustech.edu.cn/home",
     "POST https://booking.sustech.edu.cn/api/SystemApi/GetUserProfile",
     "POST https://booking.sustech.edu.cn/api/SystemApi/GetMyMeetings",
+    "POST https://booking.sustech.edu.cn/api/SystemApi/GetMeetingByMeetingRoomList",
   ]);
   await assert.rejects(
     () => session.fetch("https://booking.sustech.edu.cn/api/SystemApi/GetMeetingRoomAllByCondition", {

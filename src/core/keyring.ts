@@ -422,6 +422,16 @@ async function resolveBackendForNamespace(
       store: options.store,
     };
   }
+  const env = options.env ?? process.env;
+  if (env.SUSTECH_DISABLE_SYSTEM_KEYRING?.trim() === "1") {
+    return {
+      backend: "unavailable",
+      available: false,
+      persistent: false,
+      reason: "System credential storage was disabled by SUSTECH_DISABLE_SYSTEM_KEYRING=1.",
+      remediation: "Unset SUSTECH_DISABLE_SYSTEM_KEYRING to re-enable the operating-system credential store.",
+    };
+  }
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") return await resolveMacosKeychain(options.env, namespace);
   if (platform === "win32") return await resolveWindowsCredentialManager(namespace);

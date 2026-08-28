@@ -1,88 +1,10 @@
-const VALUE_OPTIONS = new Set([
-  "--semester",
-  "--limit",
-  "--round",
-  "--credentials-file",
-  "--course-id",
-  "--rwh",
-  "--bid",
-  "--output",
-  "--week",
-  "--max",
-  "--block",
-  "--day",
-  "--direction",
-  "--route-index",
-  "--status",
-  "--period-start",
-  "--period-end",
-  "--week-one-monday",
-  "--teaching-start",
-  "--calendar-name",
-  "--include",
-  "--where",
-  "--pick",
-  "--bid-limit",
-  "--cultivation",
-  "--year",
-  "--calendar-level",
-  "--date",
-  "--level",
-  "--department",
-  "--minutes",
-  "--category",
-  "--page",
-  "--page-size",
-  "--sort",
-  "--min-year",
-  "--parent-id",
-  "--content-id",
-  "--column-id",
-  "--file",
-  "--comment",
-  "--expected-sha256",
-  "--destination",
-  "--program-code",
-  "--program-token",
-  "--start",
-  "--end",
-  "--begin",
-  "--kind-id",
-  "--lab-id",
-  "--class-kind",
-  "--need-status",
-  "--room-id",
-  "--meeting-id",
-  "--title",
-  "--participants",
-  "--description",
-  "--dev-id",
-  "--member-kind",
-  "--member",
-  "--memo",
-  "--reservation-id",
-  "--server-group",
-  "--type",
-  "--color",
-  "--paper",
-  "--duplex",
-  "--copies",
-  "--page-from",
-  "--page-to",
-  "--service",
-  "--profile",
-  "--sid",
-  "--path",
-  "--requirements",
-  "--since",
-  "--until",
-  "--early-period-threshold",
-  "--weight-early-session",
-  "--weight-gap-segment",
-  "--weight-gap-period",
-  "--weight-distinct-weekday",
-  "--weight-campus-switch",
-]);
+import { CLI_PARSE_OPTIONS } from "./command-metadata.js";
+
+const VALUE_OPTIONS = new Set(
+  Object.entries(CLI_PARSE_OPTIONS)
+    .filter(([, definition]) => definition.type === "string")
+    .map(([name]) => `--${name}`),
+);
 
 export function inferCommandName(argv: string[]): string {
   const positionals: string[] = [];
@@ -98,7 +20,7 @@ export function inferCommandName(argv: string[]): string {
 
   const [group, command] = positionals;
   if (!group) return "unknown";
-  if (group === "version" || group === "capabilities" || group === "context" || group === "consequences") return group;
+  if (group === "version" || group === "capabilities" || group === "context" || group === "consequences" || group === "describe") return group;
   if (!command) return group;
   if (
     (group === "tis" && ["courses", "enroll", "classroom", "selection", "bid", "plan", "degree"].includes(command))

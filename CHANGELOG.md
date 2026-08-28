@@ -2,6 +2,45 @@
 
 All notable changes to `sustech-cli` are documented in this file.
 
+## [Unreleased]
+
+## [0.9.0] - 2026-08-28
+
+### Added
+
+- Added `academic changes BEFORE AFTER` and the one-shot `academic watch
+  --state PATH` workflow for conservative snapshot comparison and guarded local
+  baseline refresh.
+- Added `sustech describe COMMAND...` for structured usage, option, capability,
+  and consequence metadata without parsing human help text.
+- Added Context v2 live aggregation for TIS schedule, exams, evaluations,
+  Blackboard deadlines, weather, air quality, and library opening status, with
+  explicit per-source states.
+- Added read-only `tis plan explain` and `tis plan recommend` helpers with
+  conservative degree relevance, seat and timetable evidence, and NCES
+  advisory signals.
+- Added real public Primo catalog search and detail reads plus an explicit
+  `--browser [--interactive]` fallback using an ephemeral local browser session.
+
+### Changed
+
+- Made eHall and library-booking create previews check exact room availability
+  and fail closed when calendar, open-time, or reservation evidence is malformed
+  or ambiguous.
+- Stabilized time-dependent booking tests and expanded command, snapshot,
+  Context, course-decision, catalog, and mutation regression coverage.
+- Updated repository documentation and the bundled `skills/sustech-cli/SKILL.md`
+  for the new read-only workflows and existing preview/confirm/read-back
+  boundaries.
+
+### Security
+
+- Kept Primo browser authentication human-only: the CLI accepts no browser
+  credentials, never solves CAPTCHAs, persists no cookies, and redacts secrets
+  from browser diagnostics.
+- Rejected academic watch state paths whose file or parent components are
+  symbolic links.
+
 ## [0.8.4] - 2026-08-27
 
 ### Added
