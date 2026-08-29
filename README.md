@@ -40,6 +40,8 @@ Public data does not require an account:
 ```bash
 sustech calendar day 2026-09-01
 sustech faculty search "computer vision"
+sustech online talks list --limit 10
+sustech online contact search "教学"
 sustech transit lines
 sustech library search "graph neural networks" --limit 5
 ```
@@ -111,10 +113,15 @@ For an agent without Skill support, provide this short instruction:
 > secrets, and never add `--confirm` without approval for the exact target.
 
 A Skill is the onboarding layer; the CLI remains the executable source of
-truth. An MCP server may be useful later for native tool registration or remote
-execution, but wrapping every command in MCP now would duplicate the existing
-JSON interface. A repository-level `AGENTS.md` alone would only help agents
-that cloned the source.
+truth. The package also ships a local `stdio` MCP entrypoint, `sustech-mcp`, for
+clients that support native tools. It needs no hosted server and exposes `33`
+typed public/local read-only tools plus JSON resources, resource templates, and
+prompts for discovery, public campus data, library, faculty, transit, NCES,
+papers, and selected SUSTech Online reads. Authenticated data, browser flows,
+local writes, and remote mutations remain unavailable through MCP. See
+[docs/MCP.md](docs/MCP.md) for configuration and the complete boundary.
+A repository-level `AGENTS.md` alone would only help agents that cloned the
+source.
 
 ## What it covers
 
@@ -128,8 +135,9 @@ version's exact command, authentication, network, and confirmation metadata.
 | TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, `tis plan solve/explain/recommend`, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
 | Blackboard | courses, deadlines, calendar reads, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; the native calendar link is a separate stored secret and local writes are guarded |
 | Library and campus services | Primo catalog search/detail, WS programs, eHall booking, library booking, PMS jobs and usage | Public catalog reads plus authenticated reads; booking and queue writes are confirm-gated |
-| Research and courses | Crossref/OA papers, NCES browse and search | Public; OA downloads use guarded local paths; NCES remains community reference only |
+| Research and courses | Crossref/OA papers, NCES browse and search, SUSTech Online talks | Public; OA downloads use guarded local paths; NCES and SUSTech Online remain community references only |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
+| Community directory | Selected institutional SUSTech Online contacts with provenance and freshness advisories | Public community source; emergency, financial, personal, dining/chat, and professor-list sections are excluded |
 
 For the structured TIS-reported `tis degree progress` response, the derived
 `tis degree missing` report, and how both differ from local JSON
@@ -139,6 +147,8 @@ snapshot save/diff/change/watch workflow, see
 [docs/ACADEMIC_SNAPSHOTS.md](docs/ACADEMIC_SNAPSHOTS.md). For the
 `tis degree audit` requirements-file format, matching semantics, and current
 runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
+For the selected SUSTech Online source scope, provenance fields, freshness
+labels, and contact exclusions, see [docs/ONLINE.md](docs/ONLINE.md).
 
 Remote-state mutations are deliberately limited to these apply commands, all
 of which require an exact target plus `--confirm`:
@@ -178,7 +188,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.9.0",
+    "version": "0.10.0",
     "runtime": "node v22.19.0"
   }
 }

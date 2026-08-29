@@ -1,6 +1,6 @@
 ---
 name: sustech-cli
-description: Use the installed sustech CLI for SUSTech campus reads, planning, guarded exports, and confirm-gated workflows across TIS, Blackboard, profile/context, booking, library booking, PMS, transit, faculty, papers, and NCES. Do not use for unrelated universities or invent commands the installed CLI does not report.
+description: Use the installed sustech CLI for SUSTech campus reads, planning, guarded exports, and confirm-gated workflows across TIS, Blackboard, profile/context, booking, library booking, PMS, transit, faculty, papers, NCES, and selected SUSTech Online public information. Do not use for unrelated universities or invent commands the installed CLI does not report.
 ---
 
 # SUSTech CLI
@@ -35,7 +35,8 @@ includes these high-value areas:
   `resources list`, `resources search`, `wifi status`, `wifi events`,
   `faculty departments`, `faculty list`, `faculty get`, `faculty search`,
   `faculty render`, `transit facilities`, `transit find`, `transit lines`,
-  `transit schedule`, `transit stops`, `transit live`.
+  `transit schedule`, `transit stops`, `transit live`, `online search`,
+  `online talks list/search/get`, `online contact search/get`.
 - Academic profile and audits: `profile show`, `profile export`,
   `academic snapshot save`, `academic changes`, `academic watch`, `doctor`.
 - Research helpers: `papers search`, `papers fetch-oa`, `nces browse`,
@@ -100,6 +101,29 @@ Some useful routing hints:
 - `library search` and `library detail` are read-only Primo catalog commands.
   Use `--browser` or `--browser --interactive` when the direct public HTTP path
   cannot complete on the current host. Browser auth stays manual.
+- Treat every `online` result as community-maintained. Preserve its source URL,
+  repository path, fetch/update times, CC BY-SA license, and advisories. Talk
+  records may be model-processed. The selected contact surface deliberately
+  excludes emergency, medical/crisis, financial/bank, personal, dining/chat,
+  QQ-group, and professor-email-list sections; do not use it as an emergency
+  directory or invent excluded records. Recheck consequential contact or event
+  details against the linked official source.
+
+## Use the local MCP surface when present
+
+Some installations expose `sustech-mcp` as a local `stdio` server. It requires
+no hosted service and provides a stable typed allowlist plus JSON resources and
+prompts. Start with `sustech_discover`, `sustech_describe`, or the
+`sustech://mcp/policy` resource. Then prefer the dedicated public tools for
+calendar, resources, services status, papers, NCES, library, faculty, transit,
+and `sustech_online_*` when their schemas match the request.
+
+There is intentionally no generic MCP shell/run tool and no MCP mutation tool.
+Do not try to route `auth login`, `* apply`, exports/downloads, persistent TIS
+plan edits, confirmation flags, secret reveal, credentials files, or
+interactive browser flows through MCP. MCP also excludes authenticated personal
+data plus local/private machine state such as Wi-Fi and live Context. Use the
+direct CLI and the approval workflow below when state must change.
 
 ## Consume output safely
 

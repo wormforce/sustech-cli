@@ -27,6 +27,9 @@ test("command inference skips option values in machine-readable errors", () => {
   assert.equal(inferCommandName(["describe", "bb", "submit", "apply", "--json"]), "describe");
   assert.equal(inferCommandName(["library", "search", "machine learning", "--limit", "5", "--json"]), "library search");
   assert.equal(inferCommandName(["library", "detail", "L:alma991234567890106561", "--json"]), "library detail");
+  assert.equal(inferCommandName(["online", "search", "AI", "--section", "talks", "--json"]), "online search");
+  assert.equal(inferCommandName(["online", "talks", "search", "AI safety", "--limit", "5", "--json"]), "online talks search");
+  assert.equal(inferCommandName(["online", "contact", "get", "teaching:教学工作部", "--json"]), "online contact get");
   assert.equal(inferCommandName(["profile", "show", "--profile", "personal", "--json"]), "profile show");
   assert.equal(inferCommandName(["profile", "export", "--destination", "/tmp/profile.json", "--overwrite", "--json"]), "profile export");
   assert.equal(inferCommandName(["auth", "login", "--profile", "personal", "--sid", "12410000"]), "auth login");

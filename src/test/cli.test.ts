@@ -18,7 +18,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
   const text = run(["version"]);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /:\*##: :#######:/);
-  assert.match(text.stdout, /sustech-cli 0\.9\.0/);
+  assert.match(text.stdout, /sustech-cli 0\.10\.0/);
   assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
@@ -27,7 +27,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.9.0", runtime: `node ${process.version}` },
+    data: { version: "0.10.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -81,6 +81,21 @@ test("calendar and selection inputs reject normalized or silently-coerced values
   ]);
   assert.equal(invalidCultivation.status, 2);
   assert.equal(JSON.parse(invalidCultivation.stdout).error.code, "USAGE");
+});
+
+test("online commands are registered and reject unsafe IDs before network access", () => {
+  const unsafe = run(["online", "talks", "get", "%2F", "--json"]);
+  assert.equal(unsafe.status, 2);
+  assert.equal(JSON.parse(unsafe.stdout).command, "online talks get");
+  assert.equal(JSON.parse(unsafe.stdout).error.code, "ONLINE_SOURCE_NOT_ALLOWED");
+
+  const invalidDate = run(["online", "talks", "list", "--since", "2026-02-30", "--json"]);
+  assert.equal(invalidDate.status, 2);
+  assert.equal(JSON.parse(invalidDate.stdout).error.code, "USAGE");
+
+  const described = run(["describe", "online", "talks", "search", "--json"]);
+  assert.equal(described.status, 0);
+  assert.equal(JSON.parse(described.stdout).data.command, "online talks search");
 });
 
 test("enrollment preview is a no-network command with an exact apply handoff", () => {
@@ -242,6 +257,7 @@ test("context accepts calendar-level and help documents it", () => {
   assert.match(help.stdout, /sustech academic watch --state PATH \[--semester YYYY-YYYY-N\] \[--include-blackboard\] \[--overwrite\]/);
   assert.match(help.stdout, /sustech library search QUERY \[--limit N\] \[--browser \[--interactive\]\]/);
   assert.match(help.stdout, /sustech library detail CONTEXT:DOC_ID \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech online talks search QUERY \[--since YYYY-MM-DD\] \[--until YYYY-MM-DD\] \[--limit N\]/);
   assert.match(help.stdout, /sustech tis plan explain COURSE_OR_RWH --round ROUND/);
   assert.match(help.stdout, /sustech tis plan recommend \[CODE\.\.\.\] --round ROUND/);
   assert.match(help.stdout, /sustech tis degree missing \[--semester YYYY-YYYY-N\]/);
@@ -501,7 +517,11 @@ test("auth profile commands are machine-readable without exposing or inventing c
 test("new local Agent surfaces remain machine-readable and mutation-free", () => {
   const services = run(["services", "status", "--json"]);
   assert.equal(services.status, 0);
-  assert.ok(JSON.parse(services.stdout).data.statuses.length >= 8);
+  assert.ok(JSON.parse(services.stdout).data.statuses.length >= 9);
+
+  const onlineService = run(["services", "status", "sustech-online", "--json"]);
+  assert.equal(onlineService.status, 0);
+  assert.equal(JSON.parse(onlineService.stdout).data.statuses[0].availability, "implemented");
 
   const risks = run(["consequences", "tis.drop", "--json"]);
   assert.equal(risks.status, 0);

@@ -1,0 +1,27 @@
+export const PUBLIC_MCP_TOOL_BY_COMMAND = {
+  consequences: "sustech_consequences",
+  "calendar terms": "sustech_calendar_terms",
+  "resources list": "sustech_resources_list",
+  "resources search": "sustech_resources_search",
+  "services status": "sustech_services_status",
+  "papers search": "sustech_papers_search",
+  "nces browse": "sustech_nces_browse",
+  "nces search": "sustech_nces_search",
+  "nces course": "sustech_nces_course",
+  "library search": "sustech_library_search",
+  "library detail": "sustech_library_detail",
+  "library search-url": "sustech_library_search_url",
+  "faculty departments": "sustech_faculty_departments",
+  "faculty list": "sustech_faculty_list",
+  "faculty get": "sustech_faculty_get",
+  "faculty search": "sustech_faculty_search",
+  "faculty render": "sustech_faculty_render",
+  "transit facilities": "sustech_transit_facilities",
+  "transit find": "sustech_transit_find",
+  "transit lines": "sustech_transit_lines",
+  "transit schedule": "sustech_transit_schedule",
+  "transit stops": "sustech_transit_stops",
+  "transit live": "sustech_transit_live",
+} as const;
+
+export type PublicMcpExposedCommand = keyof typeof PUBLIC_MCP_TOOL_BY_COMMAND;
