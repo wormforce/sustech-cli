@@ -33,8 +33,10 @@ output renderer       text | versioned JSON | streaming JSONL
   missing-course classification, local degree audit, live classroom/context
   helpers, multi-source ICS export, read-only plan explain/recommend
   enrichment, and guarded enroll/cart/drop/bid write paths.
-- `src/calendar`, `src/faculty`, `src/transit`, `src/resources`, and
-  `src/wifi` own public or local-only data sources.
+- `src/calendar`, `src/faculty`, `src/online`, `src/transit`, `src/resources`,
+  and `src/wifi` own public or local-only data sources. `src/online` uses exact
+  path allowlists and retains community provenance, freshness, and license
+  metadata instead of presenting the source as official.
 - `src/context` composes a truthful snapshot from whichever sources are
   available, exposes Context v2 `level`/`live` enrichments, and marks missing
   or partial inputs explicitly.
@@ -53,6 +55,11 @@ output renderer       text | versioned JSON | streaming JSONL
   masking, safe same-origin fetch, and bounded ICS parsing for the stored
   Blackboard calendar subscription workflow.
 - `src/core/capabilities.ts` is the machine-discoverable safety registry.
+- `src/mcp` exposes a local `stdio` MCP adapter over that registry. It uses a
+  typed tool allowlist plus JSON resources and prompts, launches the packaged
+  CLI without a shell, propagates MCP cancellation to the child CLI process,
+  and rejects authenticated personal data, remote mutations, browser-assisted
+  flows, local private state, and known local state writes.
 - Services must not write to stdout or stderr.
 - Machine-readable output is versioned by `schemaVersion`.
 - Text is the default; agents opt into `--json` or `--jsonl` explicitly.

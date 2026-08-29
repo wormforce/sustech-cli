@@ -4,6 +4,30 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-29
+
+### Added
+
+- Added public `online talks` and institutional `online contact` reads from
+  selected SUSTech Online pages, retaining community authority, source URL,
+  source update/fetch time, and freshness advisories in structured output.
+- Added a local `sustech-mcp` `stdio` server with `33` typed public/local
+  read-only tools, `5` static JSON resources, `5` JSON resource templates, and
+  `4` prompts; it requires no hosted service, supports `--help` and
+  `--version`, and reuses CLI JSON output.
+
+### Security
+
+- MCP uses a typed command allowlist and rejects remote mutations, persistent
+  local TIS-plan edits, authenticated personal data, local private state,
+  browser/interactive flows, confirmation/output overrides, stdin secrets,
+  explicit credential files, secret reveal, command changes, timeouts, and
+  oversized inputs or outputs. Client cancellation now terminates the
+  underlying CLI subprocess.
+- MCP resource templates now validate command names and identifier/path
+  variables before the CLI subprocess starts, instead of leaving malformed
+  template values to fail later inside downstream handlers.
+
 ## [0.9.0] - 2026-08-28
 
 ### Added

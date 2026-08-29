@@ -1,11 +1,12 @@
 {
   "name": "sustech-cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Human-friendly and agent-ready command-line access to SUSTech services.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "bin": {
-    "sustech": "dist/cli.js"
+    "sustech": "dist/cli.js",
+    "sustech-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist/cli.d.ts",
@@ -20,6 +21,8 @@
     "dist/core",
     "dist/doctor",
     "dist/faculty",
+    "dist/mcp",
+    "dist/online",
     "dist/profile",
     "dist/resources",
     "dist/services",
@@ -46,6 +49,8 @@
     "sustech",
     "cli",
     "agent",
+    "mcp",
+    "sustech-online",
     "tis",
     "course-selection"
   ],
@@ -54,7 +59,7 @@
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc --project tsconfig.json",
-    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
+    "postbuild": "node -e \"const fs=require('node:fs'); for (const file of ['dist/cli.js','dist/mcp/server.js']) fs.chmodSync(file, 0o755)\"",
     "check": "tsc --noEmit --project tsconfig.json",
     "prepare": "npm run build",
     "start": "node dist/cli.js",
@@ -63,11 +68,14 @@
   },
   "packageManager": "npm@10.9.3",
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@types/node": "^22.15.30",
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
     "@napi-rs/keyring": "1.3.0",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "^1.62.1",
+    "zod": "^4.5.2"
   }
 }

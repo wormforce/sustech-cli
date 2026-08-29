@@ -29,6 +29,7 @@ while the CLI already supplies that transport for a specific command family.
 | `pms` | `implemented` | PMS auth token, RSA login, OSESSIONID cookie, campus reachability | `pms check`, `pms server-groups`, `pms stations`, `pms jobs`, `pms scan-jobs`, `pms usage`, `pms upload preview/apply`, `pms delete preview/apply` | CLI performs the PMS auth flow directly, keeps OSESSIONID in memory, and uses transient RSA login material. Queue mutations are fixture-tested only. A first browser-side account link may still be needed on some accounts. |
 | `nces` | `implemented` | none | `nces browse`, `nces search`, `nces course` | Public HTTP API backed by `ncesnext.com`; callers should avoid aggressive polling. |
 | `papers` | `implemented` | none | `papers search`, `papers fetch-oa` | Uses CrossRef bibliographic relevance plus optional Unpaywall resolution. OA downloads require an explicit guarded destination and validate redirects, PDF bytes, size, and SHA-256. |
+| `sustech-online` | `implemented` | none | `online search`, `online talks list/search/get`, `online contact search/get` | Reads exact allowlisted public Markdown and optional rendered-page freshness metadata. Results remain community-labelled and CC BY-SA attributed; high-stakes, financial, personal, dining/chat, and professor-list contact sections are excluded. |
 
 ## Authenticated transport guards
 

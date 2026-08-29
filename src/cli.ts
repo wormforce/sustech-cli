@@ -82,6 +82,20 @@ import {
 import { formatDoctorReport } from "./doctor/text.js";
 import { FacultyClient } from "./faculty/client.js";
 import { formatDepartments, formatFaculty } from "./faculty/text.js";
+import {
+  formatOnlineContact,
+  formatOnlineContactSearch,
+  formatOnlineSearchHits,
+  formatOnlineTalk,
+  formatOnlineTalkSearch,
+  formatOnlineTalks,
+  getOnlineContact,
+  getOnlineTalk,
+  listOnlineTalks,
+  searchOnline,
+  searchOnlineContacts,
+  searchOnlineTalks,
+} from "./online/index.js";
 import { searchResources, type ResourceCategory } from "./resources/catalog.js";
 import { formatResources } from "./resources/text.js";
 import {
@@ -333,6 +347,12 @@ Usage:
   sustech faculty get SLUG
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
+  sustech online search QUERY [--section talks|contact] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
+  sustech online talks list [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
+  sustech online talks search QUERY [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
+  sustech online talks get ID
+  sustech online contact search QUERY [--limit N]
+  sustech online contact get ID
   sustech context [--date YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
   sustech profile show [--profile NAME] [--credentials-file PATH]
   sustech profile export --destination PATH [--overwrite] [--profile NAME] [--credentials-file PATH]
@@ -499,6 +519,7 @@ type Values = OutputFlags & {
   full?: boolean;
   minutes?: string;
   category?: string;
+  section?: string;
   page?: string;
   "page-size"?: string;
   sort?: string;
@@ -667,6 +688,10 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "faculty") {
     await runFaculty(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "online") {
+    await runOnline(parsed.positionals, values, output);
     return;
   }
   if (group === "context") {
@@ -2254,6 +2279,111 @@ async function runFaculty(
     return;
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+async function runOnline(
+  positionals: string[],
+  values: Values,
+  output: ReturnType<typeof resolveOutputOptions>,
+): Promise<void> {
+  const section = positionals[1];
+  const operation = positionals[2];
+  const limit = parsePositiveInteger(values.limit, 20, "--limit");
+  if (limit > 200) throw usageError("--limit cannot exceed 200 for SUSTech Online queries.");
+  const since = values.since === undefined ? undefined : isoDate(values.since, "--since");
+  const until = values.until === undefined ? undefined : isoDate(values.until, "--until");
+  if (since && until && since > until) throw usageError("--since cannot be later than --until.");
+  const meta = {
+    authority: "community",
+    official: false,
+    project: "SUSTech Online",
+    license: "CC-BY-SA-4.0",
+  };
+
+  if (section === "search") {
+    const query = positionals.slice(2).join(" ").trim();
+    if (!query) throw usageError("A SUSTech Online search query is required.");
+    const selectedSection = onlineSection(values.section);
+    if (selectedSection === "contact" && (since || until)) {
+      throw usageError("--since and --until apply only to talk searches.");
+    }
+    const hits = await searchOnline(query, {
+      section: selectedSection,
+      since,
+      until,
+      limit,
+    });
+    writeSuccess({
+      command: "online search",
+      data: { query, section: selectedSection ?? "all", hits, total: hits.length },
+      text: formatOnlineSearchHits(hits, query),
+      items: hits,
+      summary: { query, section: selectedSection ?? "all", total: hits.length },
+      meta,
+    }, output);
+    return;
+  }
+
+  if (section === "talks" && operation === "list" && positionals.length === 3) {
+    const talks = await listOnlineTalks({ since, until, limit });
+    writeSuccess({
+      command: "online talks list",
+      data: { since, until, talks, total: talks.length },
+      text: formatOnlineTalks(talks),
+      items: talks,
+      summary: { since, until, total: talks.length },
+      meta,
+    }, output);
+    return;
+  }
+  if (section === "talks" && operation === "search") {
+    const query = positionals.slice(3).join(" ").trim();
+    if (!query) throw usageError("A talk search query is required.");
+    const talks = await searchOnlineTalks(query, { since, until, limit });
+    writeSuccess({
+      command: "online talks search",
+      data: { query, since, until, talks, total: talks.length },
+      text: formatOnlineTalkSearch(talks, query),
+      items: talks,
+      summary: { query, since, until, total: talks.length },
+      meta,
+    }, output);
+    return;
+  }
+  if (section === "talks" && operation === "get" && positionals.length === 4) {
+    const talk = await getOnlineTalk(required(positionals[3], "talk id"));
+    writeSuccess({ command: "online talks get", data: talk, text: formatOnlineTalk(talk), meta }, output);
+    return;
+  }
+
+  if (section === "contact" && operation === "search") {
+    const query = positionals.slice(3).join(" ").trim();
+    if (!query) throw usageError("A contact search query is required.");
+    const contacts = await searchOnlineContacts(query, { limit });
+    writeSuccess({
+      command: "online contact search",
+      data: { query, contacts, total: contacts.length },
+      text: formatOnlineContactSearch(contacts, query),
+      items: contacts,
+      summary: { query, total: contacts.length },
+      meta,
+    }, output);
+    return;
+  }
+  if (section === "contact" && operation === "get" && positionals.length >= 4) {
+    const identifier = positionals.slice(3).join(" ").trim();
+    const contact = await getOnlineContact(required(identifier, "contact id"));
+    writeSuccess({ command: "online contact get", data: contact, text: formatOnlineContact(contact), meta }, output);
+    return;
+  }
+
+  throw usageError(`Unknown command: ${positionals.join(" ")}`);
+}
+
+function onlineSection(value?: string): "talks" | "contact" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "talks" || value === "contact") return value;
+  throw usageError("--section must be talks or contact.");
 }
 
 async function runProfile(

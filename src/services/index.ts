@@ -4,6 +4,7 @@ import { LIBRARY_BOOKING_STATUS, LIBRARY_CATALOG_STATUS } from "./library.js";
 import { NCES_STATUS } from "./nces.js";
 import { PAPERS_STATUS } from "./papers.js";
 import { PMS_STATUS } from "./pms.js";
+import { SUSTECH_ONLINE_STATUS } from "./sustech-online.js";
 import { WS_STATUS } from "./ws.js";
 import type { ServiceStatus } from "./base.js";
 
@@ -16,6 +17,7 @@ export const SERVICE_STATUSES: readonly ServiceStatus[] = [
   PMS_STATUS,
   NCES_STATUS,
   PAPERS_STATUS,
+  SUSTECH_ONLINE_STATUS,
 ] as const;
 
 export function serviceStatus(name: string): ServiceStatus | undefined {
@@ -62,4 +64,5 @@ export * from "./nces.js";
 export * from "./papers.js";
 export * from "./pms-auth.js";
 export * from "./pms.js";
+export * from "./sustech-online.js";
 export * from "./ws.js";
