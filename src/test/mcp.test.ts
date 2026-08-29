@@ -65,8 +65,11 @@ test("MCP client cancellation reaches the server tool and terminates its CLI pro
   const slowCliPath = fileURLToPath(new URL("./fixtures/slow-cli.js", import.meta.url));
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "sustech-mcp-cancel-"));
   const markerPath = join(temporaryDirectory, "cancelled.txt");
+  const readyMarkerPath = join(temporaryDirectory, "ready.txt");
   const previousMarker = process.env.SUSTECH_MCP_TEST_CANCEL_MARKER;
+  const previousReadyMarker = process.env.SUSTECH_MCP_TEST_READY_MARKER;
   process.env.SUSTECH_MCP_TEST_CANCEL_MARKER = markerPath;
+  process.env.SUSTECH_MCP_TEST_READY_MARKER = readyMarkerPath;
   const server = createSustechMcpServer({ runner: { cliPath: slowCliPath } });
   const client = new Client({ name: "sustech-cli-cancel-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -78,19 +81,28 @@ test("MCP client cancellation reaches the server tool and terminates its CLI pro
       { name: "sustech_version", arguments: {} },
       { signal: controller.signal },
     );
-    setTimeout(() => controller.abort(), 25);
+    await waitForFile(readyMarkerPath);
+    controller.abort();
     await assert.rejects(pending, /abort|cancel/u);
-    for (let attempt = 0; attempt < 20 && !existsSync(markerPath); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForFile(markerPath);
     assert.equal(readFileSync(markerPath, "utf8").trim(), "cancelled");
   } finally {
     if (previousMarker === undefined) delete process.env.SUSTECH_MCP_TEST_CANCEL_MARKER;
     else process.env.SUSTECH_MCP_TEST_CANCEL_MARKER = previousMarker;
+    if (previousReadyMarker === undefined) delete process.env.SUSTECH_MCP_TEST_READY_MARKER;
+    else process.env.SUSTECH_MCP_TEST_READY_MARKER = previousReadyMarker;
     await Promise.allSettled([client.close(), server.close()]);
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (existsSync(path)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for test marker: ${path}`);
+}
 
 test("MCP runner rejects pre-cancelled and timed-out commands", async () => {
   const slowCliPath = fileURLToPath(new URL("./fixtures/slow-cli.js", import.meta.url));
