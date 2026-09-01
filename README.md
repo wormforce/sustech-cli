@@ -210,7 +210,10 @@ in the operating system's native credential store:
 The password is entered through a hidden prompt, is never accepted as a normal
 command-line argument, and is never written to the CLI config. If no safe
 backend is available, the CLI returns `CREDENTIAL_STORE_UNAVAILABLE` instead of
-falling back to plaintext.
+falling back to plaintext. Linux writes are verified by immediate read-back;
+locked collections and broken desktop D-Bus sessions produce distinct safe
+remediation in `auth status --json` instead of being reported as an expired
+password.
 
 ```bash
 sustech auth login --profile main
@@ -256,6 +259,19 @@ sustech tis enroll preview \
 sustech tis enroll apply \
   --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2 --confirm
 ```
+
+Availability JSON groups lecture/lab rows into credit-deduplicated bundles and
+labels the exact `courseId` (`p_id`) and component `rwh` roles. If apply returns
+`TIS_SELECTION_OUTCOME_UNKNOWN`, preserve that exact pair and reconcile without
+repeating the write:
+
+```bash
+sustech tis selection reconcile enroll \
+  --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --attempts 3 --json
+```
+
+See [docs/SELECTION_CONTRACTS.md](docs/SELECTION_CONTRACTS.md) for bundle,
+identifier, bounded reconciliation, and grade-free planning-output contracts.
 
 Blackboard attachment and submission example:
 

@@ -157,10 +157,25 @@ export async function saveStoredCredentials(
 
   const account = existing?.account ?? credentialAccount(profile, sid);
   let previousPassword: string | undefined;
+  let secretTouched = false;
   try {
     previousPassword = await store.get(account);
     await store.set(account, password);
+    secretTouched = true;
+    const verifiedPassword = await store.get(account);
+    if (verifiedPassword !== password) {
+      throw credentialStoreDiagnostic(
+        "Credential store write could not be verified by an immediate read-back.",
+        "CREDENTIAL_WRITE_NOT_VERIFIED",
+        store.backend === "linux-secret-service"
+          ? "Unlock the desktop login keyring, then run auth login again in the same graphical session."
+          : "Unlock the operating-system credential store, then run auth login again.",
+      );
+    }
   } catch (error) {
+    if (secretTouched && !await restoreSecret(store, account, previousPassword)) {
+      throw credentialRollbackError("save", store.backend);
+    }
     throw storeAccessError("credentials", "write", store.backend, error);
   }
 
@@ -295,6 +310,7 @@ export async function getCredentialStatus(
       storedAt: stored.storedAt,
       profiles,
       reason: safeStoreReason(error),
+      ...(storeRemediation(error) ? { remediation: storeRemediation(error) } : {}),
     };
   }
 }
@@ -573,7 +589,7 @@ async function resolveLinuxSecretService(
         "lookup", "service", namespace.service, "account", account,
       ], undefined, env);
       if (result.code === 1 && !result.stdout.trim() && !result.stderr.trim()) return undefined;
-      if (result.code !== 0) throw new Error("Secret Service lookup failed.");
+      if (result.code !== 0) throw secretServiceCommandError("lookup", result);
       return result.stdout.replace(/\r?\n$/, "") || undefined;
     },
     async set(account, password) {
@@ -583,14 +599,14 @@ async function resolveLinuxSecretService(
         "service", namespace.service,
         "account", account,
       ], `${password}\n`, env);
-      if (result.code !== 0) throw new Error("Secret Service write failed.");
+      if (result.code !== 0) throw secretServiceCommandError("write", result);
     },
     async delete(account) {
       const result = await runCredentialCommand(executable, [
         "clear", "service", namespace.service, "account", account,
       ], undefined, env);
       if (result.code === 1 && !result.stderr.trim()) return false;
-      if (result.code !== 0) throw new Error("Secret Service delete failed.");
+      if (result.code !== 0) throw secretServiceCommandError("delete", result);
       return true;
     },
   };
@@ -677,8 +693,50 @@ function storeAccessError(subject: string, operation: string, backend: Credentia
     `Could not ${operation} ${subject} using ${backend}.`,
     "CREDENTIAL_STORE_ERROR",
     2,
-    { backend, operation, reason: safeStoreReason(error) },
+    {
+      backend,
+      operation,
+      reason: safeStoreReason(error),
+      ...(storeRemediation(error) ? { remediation: storeRemediation(error) } : {}),
+    },
   );
+}
+
+function secretServiceCommandError(
+  operation: "lookup" | "write" | "delete",
+  result: { code: number; stderr: string },
+): Error {
+  const stderr = result.stderr.slice(0, 4096);
+  if (/locked|is locked|collection.*lock/i.test(stderr)) {
+    return credentialStoreDiagnostic(
+      "The Secret Service collection is locked.",
+      "SECRET_SERVICE_LOCKED",
+      "Unlock the desktop login keyring and retry in the same graphical session; do not delete the profile metadata.",
+    );
+  }
+  if (/D-Bus|dbus|cannot autolaunch|serviceunknown|connection (?:refused|closed)|no such file/i.test(stderr)) {
+    return credentialStoreDiagnostic(
+      "The desktop Secret Service session is unavailable.",
+      "SECRET_SERVICE_SESSION_UNAVAILABLE",
+      "Run the command inside the same unlocked desktop session that owns DBUS_SESSION_BUS_ADDRESS, or inject process-scoped credentials from an external secret manager.",
+    );
+  }
+  if (/denied|permission|dismissed|cancelled/i.test(stderr)) {
+    return credentialStoreDiagnostic(
+      "The Secret Service request was denied.",
+      "SECRET_SERVICE_ACCESS_DENIED",
+      "Allow the keyring prompt and verify that the login collection is unlocked before retrying.",
+    );
+  }
+  return credentialStoreDiagnostic(
+    `Secret Service ${operation} failed with exit code ${result.code}.`,
+    "SECRET_SERVICE_COMMAND_FAILED",
+    "Run `sustech auth status --json` in the desktop session and verify secret-tool can access the unlocked login collection.",
+  );
+}
+
+function credentialStoreDiagnostic(message: string, code: string, remediation: string): Error {
+  return Object.assign(new Error(message), { code, remediation });
 }
 
 function validateStoredSecret(value: string, subject: string, code: string): string {
@@ -725,10 +783,19 @@ function credentialRollbackError(operation: "save" | "delete", backend: Credenti
 }
 
 function safeStoreReason(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    if (/^(?:The Secret Service|Secret Service|Credential store write)/.test(error.message)) return error.message;
+  }
   if (error && typeof error === "object" && "code" in error) return `Credential store error ${String(error.code)}.`;
   return error instanceof Error && /^Secret Service /.test(error.message)
     ? error.message
     : "The operating-system credential store rejected or could not complete the request.";
+}
+
+function storeRemediation(error: unknown): string | undefined {
+  return error && typeof error === "object" && "remediation" in error && typeof error.remediation === "string"
+    ? error.remediation
+    : undefined;
 }
 
 async function readCredentialConfig(options: CredentialStoreOptions): Promise<CredentialConfig> {

@@ -3,9 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { CliError } from "../core/errors.js";
 import type { Semester } from "../core/semester.js";
 import type { TisSession } from "../tis/auth.js";
 import { TisClient } from "../tis/client.js";
+import { buildSelectionPreview } from "../tis/remaining-selection.js";
 
 const SEMESTER: Semester = { xn: "2025-2026", xq: "1", value: "2025-2026-1" };
 
@@ -58,6 +60,42 @@ test("available-course parsing preserves nested round metadata", async () => {
   } as unknown as TisSession;
   const result = await new TisClient(session).searchAvailable(SEMESTER, { round: "bxxk", limit: 20 });
   assert.deepEqual(result.round, { xkfsdm: "bxxk", lcmc: "通识必修" });
+});
+
+test("selection mutation transport failures distinguish known pre-send failure from uncertain submission", async () => {
+  const preview = buildSelectionPreview({ semester:SEMESTER, cultivation:"1", currentTerm:{} }, {
+    operation:"cart.add",
+    courseId:"selection-id",
+    rwh:"task-id",
+    clientRequestId:"00000000-0000-4000-8000-000000000001",
+  });
+  const beforeSend = new TisClient({
+    async postForm(): Promise<unknown> {
+      throw new CliError("synthetic", "NETWORK_ERROR", 1, { requestPhase:"before-send" });
+    },
+  } as unknown as TisSession);
+  await assert.rejects(
+    beforeSend.selectionWrite(preview),
+    (error: unknown) => error instanceof CliError
+      && error.code === "TIS_SELECTION_NOT_SUBMITTED"
+      && error.exitCode === 4
+      && error.details?.warning === "NO_MUTATION_PERFORMED",
+  );
+
+  const afterSend = new TisClient({
+    async postForm(): Promise<unknown> {
+      throw new CliError("synthetic", "NETWORK_TIMEOUT", 1);
+    },
+  } as unknown as TisSession);
+  await assert.rejects(
+    afterSend.selectionWrite(preview),
+    (error: unknown) => error instanceof CliError
+      && error.code === "TIS_SELECTION_OUTCOME_UNKNOWN"
+      && error.exitCode === 5
+      && error.details?.warning === "DO_NOT_RETRY_AUTOMATICALLY"
+      && (error.details.target as { clientRequestId?: string; rwh?: string })?.clientRequestId === preview.clientRequestId
+      && (error.details.target as { rwh?: string })?.rwh === "task-id",
+  );
 });
 
 test("grade filtering accepts both compact and descriptive TIS semester labels", async () => {

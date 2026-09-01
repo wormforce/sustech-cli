@@ -68,6 +68,13 @@ Linux deliberately requires a desktop D-Bus session and the distribution's
 `secret-tool`/`libsecret-tools` package. It does not silently fall back to a
 plaintext file or a session-only kernel keyring.
 
+Credential writes are verified by an immediate read-back before profile
+metadata is committed. Linux errors distinguish a locked collection, a missing
+desktop D-Bus/Secret Service session, an access denial, and an unclassified
+`secret-tool` failure. Run `sustech auth status --json` in the same unlocked
+graphical session and follow its `remediation`; do not delete profile metadata
+or assume the password expired merely because the collection is locked.
+
 ## Profiles
 
 The default profile is named `default`. Multiple accounts use explicit names:

@@ -27,12 +27,27 @@ export interface Course {
   language: string;
   teachers: string[];
   schedule: ScheduleSlot[];
+  selection?: CourseSelectionContract;
+}
+
+export type CourseComponentType = "lecture" | "lab" | "tutorial" | "other" | "unknown";
+
+export interface CourseSelectionContract {
+  bundleId: string;
+  componentId: string;
+  componentType: CourseComponentType;
+  required: boolean;
+  creditBearing?: boolean;
+  identifiers: {
+    task: { field: "rwh"; value: string };
+    mutation?: { field: "courseId"; payloadField: "p_id"; value: string };
+  };
 }
 
 export interface TisWriteResult {
+  clientRequestId: string;
   jg: string;
   message: string;
-  raw: Record<string, unknown>;
 }
 
 export interface PersonalScheduleEntry {

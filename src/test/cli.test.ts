@@ -904,6 +904,24 @@ test("selection and bid apply require --confirm before any credential lookup or 
   assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
+test("selection reconciliation is bounded, read-only, and validates locally before credentials", () => {
+  const invalid = runWithoutCredentials([
+    "tis", "selection", "reconcile", "cart.add",
+    "--course-id", "selection-id",
+    "--rwh", "task-id",
+    "--round", "bxxk",
+    "--attempts", "1",
+    "--json",
+  ]);
+  assert.equal(invalid.status, 2);
+  assert.equal(JSON.parse(invalid.stdout).error.code, "USAGE");
+
+  const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities;
+  const reconcile = capabilities.find((entry: { command:string }) => entry.command === "tis selection reconcile");
+  assert.equal(reconcile.kind, "read");
+  assert.equal(reconcile.confirmation, "none");
+});
+
 test("context live supports calendar level and degrades gracefully when credentials are unavailable", () => {
   const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"]);
   assert.equal(result.status, 0);

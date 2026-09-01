@@ -125,6 +125,7 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("tis degree audit", "Audit live grade records against a local JSON requirement file without auto-resolving ambiguous matches.", "plan", { authentication: "tis", status: "preview" }),
   capability("tis enroll preview", "Build an exact enrollment action without network or mutation.", "plan", { network: false, status: "preview" }),
   capability("tis selection preview", "Build typed enroll, drop, cart, or bid payloads without sending them, with optional exact RWH handoff for apply.", "plan", { network: false, status: "preview" }),
+  capability("tis selection reconcile", "Poll an exact courseId/RWH/round target after an uncertain selection write without repeating the mutation.", "read", { authentication: "tis", status: "preview" }),
   capability("tis selection apply", "Submit an exact cart, drop, or bid mutation to TIS after live revalidation.", "mutation", { authentication: "tis", confirmation: "required", status: "preview" }),
   capability("tis bid plan", "Validate a multi-course bid budget and build local write previews.", "plan", { network: false, status: "preview" }),
   capability("tis bid apply", "Submit exact multi-course bid updates to TIS after live revalidation.", "mutation", { authentication: "tis", confirmation: "required", status: "preview" }),

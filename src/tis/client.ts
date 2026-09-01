@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CliError } from "../core/errors.js";
@@ -26,6 +27,7 @@ import {
   type EvaluationStatusFilter,
 } from "./remaining-evaluation.js";
 import type { SelectionPreview } from "./remaining-selection.js";
+import { bundleSelectionCourses, type SelectionCourseBundle } from "./selection-bundles.js";
 import type {
   Course,
   ExamRecord,
@@ -82,14 +84,24 @@ export class TisClient {
   public async searchAvailable(
     semester: Semester,
     options: { keyword?: string; round: string; limit: number },
-  ): Promise<{ courses: Course[]; total: number; enrolled: unknown[]; cart: unknown[]; round: Record<string, unknown> }> {
+  ): Promise<{
+    courses: Course[];
+    bundles: SelectionCourseBundle[];
+    total: number;
+    enrolled: unknown[];
+    cart: unknown[];
+    round: Record<string, unknown>;
+    reportedAt: string;
+  }> {
     const state = await this.selectionState(semester, options);
     return {
       courses: state.courses,
+      bundles: bundleSelectionCourses(state.courses),
       total: state.total,
       enrolled: state.enrolled,
       cart: state.cart,
       round: state.round,
+      reportedAt: new Date().toISOString(),
     };
   }
 
@@ -293,18 +305,29 @@ export class TisClient {
   public async addCourse(input: {
     semester: Semester;
     courseId: string;
+    rwh: string;
     round: string;
     bid: number;
     cultivation: "1" | "2";
   }): Promise<TisWriteResult> {
+    const clientRequestId = randomUUID();
     const dq = asRecord(await this.session.postForm("/Xsxk/queryXkdqXnxq", {}));
-    const response = asRecord(
-      await this.session.postForm(
+    let response: Record<string, unknown>;
+    try {
+      response = asRecord(await this.session.postForm(
         "/Xsxk/addXuanke",
         buildWritePayload(input, dq),
-      ),
-    );
-    return { jg: stringValue(response.jg), message: stringValue(response.message), raw: response };
+      ));
+    } catch (error) {
+      throw mutationTransportError(error, {
+        clientRequestId,
+        operation: "enroll",
+        courseId: input.courseId,
+        rwh: input.rwh,
+        round: input.round,
+      });
+    }
+    return { clientRequestId, jg: stringValue(response.jg), message: stringValue(response.message) };
   }
 
   public async selectionWrite(preview: SelectionPreview): Promise<TisWriteResult> {
@@ -314,8 +337,21 @@ export class TisClient {
         endpoint: preview.endpoint,
       });
     }
-    const response = asRecord(await this.session.postForm(preview.endpoint, preview.payload));
-    return { jg: stringValue(response.jg), message: stringValue(response.message), raw: response };
+    let response: Record<string, unknown>;
+    try {
+      response = asRecord(await this.session.postForm(preview.endpoint, preview.payload));
+    } catch (error) {
+      throw mutationTransportError(error, {
+        clientRequestId: preview.clientRequestId,
+        operation: preview.operation,
+        ...preview.exactTarget,
+      });
+    }
+    return {
+      clientRequestId: preview.clientRequestId,
+      jg: stringValue(response.jg),
+      message: stringValue(response.message),
+    };
   }
 
   private async fetchCatalog(semester: Semester): Promise<Course[]> {
@@ -566,4 +602,38 @@ function selectionWriteAllowed(preview: SelectionPreview): boolean {
     return preview.endpoint === "/Xsxk/addGouwuche" || preview.endpoint === "/Xsxk/updXkxsByyx";
   }
   return false;
+}
+
+function mutationTransportError(
+  error: unknown,
+  target: Record<string, unknown> & { clientRequestId: string; operation: string },
+): CliError {
+  const requestPhase = error instanceof CliError && error.details?.requestPhase === "before-send"
+    ? "before-send"
+    : "submission-may-have-started";
+  if (requestPhase === "before-send") {
+    return new CliError(
+      "The selection request failed before submission; no mutation was performed.",
+      "TIS_SELECTION_NOT_SUBMITTED",
+      4,
+      {
+        target,
+        upstreamCode: error instanceof CliError ? error.code : "UNKNOWN",
+        requestPhase,
+        warning: "NO_MUTATION_PERFORMED",
+      },
+    );
+  }
+  return new CliError(
+    "The selection request lost a conclusive response after submission may have started.",
+    "TIS_SELECTION_OUTCOME_UNKNOWN",
+    5,
+    {
+      target,
+      upstreamCode: error instanceof CliError ? error.code : "UNKNOWN",
+      requestPhase,
+      warning: "DO_NOT_RETRY_AUTOMATICALLY",
+      next: "Run `sustech tis selection reconcile` for this exact courseId/rwh/round target; do not repeat the mutation.",
+    },
+  );
 }

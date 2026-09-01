@@ -128,6 +128,14 @@ import {
 } from "./tis/course-decision.js";
 import { formatCourseRecommendationReport } from "./tis/course-decision-text.js";
 import { deriveTisDegreeMissing } from "./tis/degree-missing.js";
+import {
+  PLANNING_PROJECTION_FIELDS,
+  assertPlanningProjection,
+  projectDegreeMissingForPlanning,
+  projectDegreeProgressForPlanning,
+  projectEnrollmentForPlanning,
+  projectSelectionRoundForPlanning,
+} from "./tis/planning-projection.js";
 import { parseBlockedTime, solveTimetables } from "./tis/planner.js";
 import { addPlanEntries, createPlanDocument, loadPlan, removePlanEntries, savePlan } from "./tis/plan.js";
 import {
@@ -146,6 +154,7 @@ import {
   parseShenzhenExamTimeRange,
   planBidUpdates,
   projectBidTotal,
+  reconcileSelectionSnapshots,
   revalidateSelectionWrite,
   resolveLiveRoom,
   scheduleIcsEvents,
@@ -442,6 +451,7 @@ Usage:
   sustech tis degree missing [--semester YYYY-YYYY-N]
   sustech tis degree audit --requirements FILE [--semester YYYY-YYYY-N]
   sustech tis selection preview OP --course-id ID [--rwh RWH] [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2]
+  sustech tis selection reconcile OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] [--attempts 2-5]
   sustech tis selection apply OP --course-id ID --rwh RWH [--semester YYYY-YYYY-N] [--round ROUND] [--bid N] [--where cart|enrolled] [--cultivation 1|2] --confirm
   sustech tis bid plan --pick COURSE_ID:BID|RWH:COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--bid-limit N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2]
   sustech tis bid apply --pick RWH:COURSE_ID:BID [--pick ...] [--semester YYYY-YYYY-N] [--where cart|enrolled] [--round ROUND] [--cultivation 1|2] --confirm
@@ -562,6 +572,7 @@ type Values = OutputFlags & {
   path?: string;
   requirements?: string;
   details?: boolean;
+  attempts?: string;
   since?: string;
   until?: string;
   "url-stdin"?: boolean;
@@ -773,13 +784,21 @@ async function main(argv: string[]): Promise<void> {
     if (limit > 500) throw usageError("--limit cannot exceed 500 for selectable-course queries.");
     const keyword = parsed.positionals.slice(3).join(" ") || undefined;
     const result = await client.searchAvailable(semester, { keyword, round, limit });
-    const data = { semester, ...result };
+    const data = {
+      semester,
+      round: projectSelectionRoundForPlanning(result.round),
+      bundles: result.bundles,
+      total: result.total,
+      reportedAt: result.reportedAt,
+      projection: { mode:"planning-minimum", fieldAllowlist:PLANNING_PROJECTION_FIELDS.availability },
+    };
+    assertPlanningProjection(data);
     writeSuccess({
       command: "tis courses available",
       data,
       text: formatAvailableCourses({ semester, courses: result.courses, total: result.total, round }),
-      items: result.courses,
-      summary: { semester: semester.value, round, total: result.total, shown: result.courses.length },
+      items: result.bundles,
+      summary: { semester: semester.value, round, total: result.total, shown: result.bundles.length },
       meta: { enrolledCount: result.enrolled.length, cartCount: result.cart.length },
     }, output);
     return;
@@ -788,13 +807,20 @@ async function main(argv: string[]): Promise<void> {
     const semester = parseSemester(values.semester);
     const client = await tisClient(values);
     const courses = await client.enrolled(semester);
-    const data = { semester, courses, total: courses.length };
+    const projectedCourses = projectEnrollmentForPlanning(courses);
+    const data = {
+      semester,
+      courses: projectedCourses,
+      total: projectedCourses.length,
+      reportedAt: new Date().toISOString(),
+      projection: { mode:"planning-minimum", fieldAllowlist:PLANNING_PROJECTION_FIELDS.enrollment },
+    };
     writeSuccess({
       command: "tis enrolled",
       data,
       text: formatEnrolledCourses(semester, courses),
-      items: courses,
-      summary: { semester: semester.value, total: courses.length },
+      items: projectedCourses,
+      summary: { semester: semester.value, total: projectedCourses.length },
     }, output);
     return;
   }
@@ -1352,6 +1378,7 @@ async function main(argv: string[]): Promise<void> {
       {
         operation: selectionOperation,
         courseId,
+        ...(rwh ? { rwh } : {}),
         ...(values.round ? { round: opaqueToken(values.round, "--round") } : {}),
         bid,
         where,
@@ -1394,6 +1421,54 @@ async function main(argv: string[]): Promise<void> {
     }, output);
     return;
   }
+  if (command === "selection" && operation === "reconcile" && parsed.positionals.length === 4) {
+    const selectionOperation = selectionOperationValue(required(parsed.positionals[3], "selection operation"));
+    const semester = parseSemester(values.semester);
+    const cultivation = selectionCultivation(values.cultivation);
+    const target = selectionApplyTarget(values, selectionOperation);
+    const attempts = parsePositiveInteger(values.attempts, 3, "--attempts");
+    if (attempts < 2 || attempts > 5) throw usageError("--attempts must be between 2 and 5.");
+    const client = await tisClient(values);
+    const states: TisSelectionState[] = [];
+    const readErrors: string[] = [];
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        states.push(await client.selectionState(semester, {
+          keyword: "",
+          round: target.round,
+          limit: 500,
+          cultivation,
+        }));
+      } catch (error) {
+        readErrors.push(error instanceof CliError ? error.code : "UNKNOWN_READ_ERROR");
+      }
+      if (attempt < attempts) await boundedWait(750);
+    }
+    const base = reconcileSelectionSnapshots(states, target);
+    const reconciliation = readErrors.length > 0
+      ? {
+          ...base,
+          status: "still_uncertain" as const,
+          readErrors,
+          message: "At least one bounded read-back failed; the outcome remains uncertain and must not be retried automatically.",
+        }
+      : base;
+    writeSuccess({
+      command: "tis selection reconcile",
+      data: { semester, cultivation, reconciliation },
+      text: [
+        `Reconciliation: ${reconciliation.status}`,
+        `Exact target: ${target.courseId} / ${target.rwh} / ${target.round}`,
+        `Read-back attempts: ${attempts}`,
+        reconciliation.message,
+        "Automatic retry: forbidden",
+      ].join("\n"),
+      items: reconciliation.observations,
+      summary: { status: reconciliation.status, attempts, readErrors: readErrors.length },
+      meta: { warning: "DO_NOT_RETRY_AUTOMATICALLY" },
+    }, output);
+    return;
+  }
   if (command === "selection" && operation === "apply" && parsed.positionals.length === 4) {
     const selectionOperation = selectionOperationValue(required(parsed.positionals[3], "selection operation"));
     if (selectionOperation === "enroll") {
@@ -1431,6 +1506,7 @@ async function main(argv: string[]): Promise<void> {
       {
         operation: target.operation,
         courseId: target.courseId,
+        rwh: target.rwh,
         round: target.round,
         bid: target.bid,
         where: target.where,
@@ -1441,6 +1517,7 @@ async function main(argv: string[]): Promise<void> {
       throw new CliError(result.message || "TIS rejected the selection mutation.", "TIS_WRITE_REJECTED", 4, {
         target,
         tisCode: result.jg,
+        clientRequestId: result.clientRequestId,
       });
     }
     let verification;
@@ -1595,6 +1672,7 @@ async function main(argv: string[]): Promise<void> {
         {
           operation: "bid.update",
           courseId: pick.courseId,
+          rwh: pick.rwh!,
           round,
           bid: pick.bid,
           where,
@@ -1608,6 +1686,7 @@ async function main(argv: string[]): Promise<void> {
             confirmed,
             unchanged,
             tisCode: result.jg,
+            clientRequestId: result.clientRequestId,
             result,
             warning: "DO_NOT_RETRY_AUTOMATICALLY",
           });
@@ -1617,6 +1696,7 @@ async function main(argv: string[]): Promise<void> {
           confirmed,
           unchanged,
           tisCode: result.jg,
+          clientRequestId: result.clientRequestId,
         });
       }
       try {
@@ -1711,11 +1791,12 @@ async function main(argv: string[]): Promise<void> {
   if (command === "degree" && operation === "progress" && parsed.positionals.length === 3) {
     const client = await tisClient(values);
     const progress = await client.degreeProgress({ details: values.details === true });
+    const projectedProgress = projectDegreeProgressForPlanning(progress, { includeGrades: values.details === true });
     writeSuccess({
       command: "tis degree progress",
-      data: progress,
+      data: projectedProgress,
       text: formatDegreeProgress(progress),
-      ...(progress.detailsIncluded && progress.courses ? { items: progress.courses } : {}),
+      ...(projectedProgress.detailsIncluded && projectedProgress.courses ? { items: projectedProgress.courses } : {}),
       summary: {
         dataAvailable: progress.dataAvailable,
         detailsRequested: progress.detailsRequested,
@@ -1736,10 +1817,11 @@ async function main(argv: string[]): Promise<void> {
     const semester = values.semester ? parseSemester(values.semester) : undefined;
     const client = await tisClient(values);
     const report = await deriveTisDegreeMissing(client, { semester });
+    const projectedReport = projectDegreeMissingForPlanning(report);
     writeSuccess({
       command: "tis degree missing",
-      data: report,
-      text: formatDegreeMissing(report),
+      data: projectedReport,
+      text: formatDegreeMissing(projectedReport),
       summary: {
         definiteMissingRequiredCourses: report.counts.definiteMissingRequiredCourses,
         inProgressRequiredCourses: report.counts.inProgressRequiredCourses,
@@ -1784,6 +1866,7 @@ async function main(argv: string[]): Promise<void> {
         action: "enroll",
         rwh: target.rwh,
         tisCode: result.jg,
+        clientRequestId: result.clientRequestId,
       });
     }
     let verification: { status: "confirmed" | "not_observed" | "unavailable"; message: string };
@@ -5888,6 +5971,10 @@ function defaultSelectionRound(operation: SelectionOperation): string {
 
 function defaultSelectionBid(operation: SelectionOperation): number {
   return operation === "drop" || operation === "cart.remove" ? 1 : 1;
+}
+
+function boundedWait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function buildEnrollApplyCommand(target: {
