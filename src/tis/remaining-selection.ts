@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Semester } from "../core/semester.js";
 import { CliError } from "../core/errors.js";
 import { asRecord, numberValue, stringValue } from "./remaining-shared.js";
@@ -33,11 +34,13 @@ export interface SelectionContext {
 export interface SelectionPreviewInput {
   operation: SelectionOperation;
   courseId: string;
+  rwh?: string;
   round?: string;
   bid?: number;
   where?: SelectionBidWhere;
   ignoreConflicts?: boolean;
   ignoreZeroCapacity?: boolean;
+  clientRequestId?: string;
 }
 
 export interface SelectionVerificationStep {
@@ -46,12 +49,24 @@ export interface SelectionVerificationStep {
 }
 
 export interface SelectionPreview {
+  clientRequestId: string;
+  exactTarget: { courseId: string; rwh?: string };
   operation: SelectionOperation;
   endpoint: string;
   payload: Record<string, string | number | string[]>;
   requiresExplicitConfirm: true;
   successHeuristic: string;
   verification: SelectionVerificationStep[];
+  identifierContract: {
+    mutationInput: "courseId";
+    mutationPayloadField: "p_id";
+    readbackIdentity: readonly ["courseId", "rwh"];
+  };
+  idempotency: {
+    upstreamKeySupported: false;
+    automaticRetry: "forbidden";
+    note: string;
+  };
 }
 
 export interface BidPlan {
@@ -79,7 +94,6 @@ export interface SelectionObservedEntry {
   bid?: number;
   courseIdObserved: boolean;
   courseIdMatches: boolean;
-  raw: Record<string, unknown>;
 }
 
 export interface SelectionStateObservation {
@@ -102,6 +116,20 @@ export interface SelectionVerificationResult {
   status: "confirmed" | "not_observed";
   message: string;
   observation: SelectionStateObservation;
+}
+
+export interface SelectionReconciliationResult {
+  schemaVersion: "1";
+  status: "applied" | "not_applied" | "still_uncertain";
+  target: SelectionApplyTarget;
+  attempts: number;
+  observations: Array<{
+    attempt: number;
+    state: "desired" | "inverse" | "conflicting";
+    message: string;
+  }>;
+  automaticRetryAllowed: false;
+  message: string;
 }
 
 export interface BidProjection {
@@ -138,12 +166,24 @@ export function buildSelectionPreview(context: SelectionContext, input: Selectio
   const endpoint = selectionEndpoint(input.operation, input.where);
   const payload = buildSelectionPayload(context, input);
   return {
+    clientRequestId: input.clientRequestId?.trim() || randomUUID(),
+    exactTarget: { courseId:input.courseId, ...(input.rwh?.trim() ? { rwh:input.rwh.trim() } : {}) },
     operation: input.operation,
     endpoint,
     payload,
     requiresExplicitConfirm: true,
     successHeuristic: successHeuristic(input.operation, input.where),
     verification: verificationSteps(input.operation, input.where),
+    identifierContract: {
+      mutationInput: "courseId",
+      mutationPayloadField: "p_id",
+      readbackIdentity: ["courseId", "rwh"],
+    },
+    idempotency: {
+      upstreamKeySupported: false,
+      automaticRetry: "forbidden",
+      note: "The client request ID is correlation metadata only and is not sent as an upstream idempotency key.",
+    },
   };
 }
 
@@ -240,6 +280,7 @@ export function planBidUpdates(
       .map((pick) => buildSelectionPreview(context, {
         operation: "bid.update",
         courseId: pick.courseId,
+        ...(pick.rwh ? { rwh:pick.rwh } : {}),
         round: options.round,
         bid: pick.bid,
         where: options.where,
@@ -400,6 +441,67 @@ export function verifySelectionWrite(
   return { status: "not_observed", message: "Unsupported selection operation.", observation };
 }
 
+export function reconcileSelectionSnapshots(
+  states: readonly SelectionStateSnapshot[],
+  target: SelectionApplyTarget,
+): SelectionReconciliationResult {
+  const observations = states.map((state, index) => ({
+    attempt: index + 1,
+    ...classifyReconciliationState(state, target),
+  }));
+  const hasConflict = observations.some((observation) => observation.state === "conflicting");
+  const desired = observations.filter((observation) => observation.state === "desired").length;
+  const inverse = observations.filter((observation) => observation.state === "inverse").length;
+  const finalState = observations.at(-1)?.state;
+  const status: SelectionReconciliationResult["status"] = hasConflict
+    ? "still_uncertain"
+    : finalState === "desired"
+      ? "applied"
+      : desired === 0 && inverse >= 2
+        ? "not_applied"
+        : "still_uncertain";
+  return {
+    schemaVersion: "1",
+    status,
+    target,
+    attempts: states.length,
+    observations,
+    automaticRetryAllowed: false,
+    message: status === "applied"
+      ? "The exact target reached the requested final state during bounded read-back."
+      : status === "not_applied"
+        ? "Two or more consistent exact read-backs retained the pre-mutation state. Review before issuing any new mutation."
+        : "Read-back was missing, changed across attempts, or conflicted on exact identity; do not retry automatically.",
+  };
+}
+
+function classifyReconciliationState(
+  state: SelectionStateSnapshot,
+  target: SelectionApplyTarget,
+): { state: "desired" | "inverse" | "conflicting"; message: string } {
+  const observation = observeSelectionState(state, target);
+  const candidates = [observation.cart, observation.enrolled].filter((entry) => entry !== undefined);
+  if (candidates.some((entry) => entry.courseIdObserved && !entry.courseIdMatches)) {
+    return { state: "conflicting", message: "The RWH was observed with a different course ID." };
+  }
+  const verification = verifySelectionWrite(state, target);
+  if (verification.status === "confirmed") return { state: "desired", message: verification.message };
+
+  const exact = target.operation === "cart.add"
+    ? observation.cart
+    : target.operation === "enroll" || target.operation === "drop"
+      ? observation.enrolled
+      : target.operation === "cart.remove"
+        ? observation.cart
+        : target.where === "cart"
+          ? observation.cart
+          : observation.enrolled;
+  if (exact?.courseIdMatches || (!exact && (target.operation === "cart.add" || target.operation === "enroll"))) {
+    return { state: "inverse", message: verification.message };
+  }
+  return { state: "conflicting", message: verification.message };
+}
+
 export function projectBidTotal(
   state: SelectionStateSnapshot,
   picks: readonly BidPick[],
@@ -534,7 +636,6 @@ function observedEntry(
       bid: numberValue(item.xkxs ?? item.XKXS),
       courseIdObserved: courseId !== undefined,
       courseIdMatches: courseId !== undefined && courseId === target.courseId,
-      raw: item,
     };
   }
   return undefined;

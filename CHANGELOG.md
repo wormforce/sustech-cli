@@ -4,6 +4,30 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added normalized lecture/lab selection bundles with explicit component,
+  credit-bearing, mutation-ID, task-RWH, and read-back contracts.
+- Added bounded `tis selection reconcile` reads for uncertain enrollment,
+  cart, drop, and bid outcomes.
+
+### Changed
+
+- Made planning-oriented availability, enrollment, degree-progress, and
+  degree-missing JSON use documented minimum-data projections; grade-free
+  output is the default.
+
+### Fixed
+
+- Linux Secret Service writes now require an immediate verified read-back and
+  report actionable locked-collection, D-Bus-session, and access-denied states.
+
+### Security
+
+- Selection transport ambiguity now returns an explicit non-retriable outcome
+  with a local correlation ID, while raw upstream mutation and personal
+  selection envelopes are excluded from default CLI output.
+
 ## [0.10.0] - 2026-08-29
 
 ### Added

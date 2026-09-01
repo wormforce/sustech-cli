@@ -52,8 +52,8 @@ includes these high-value areas:
   `tis ical`, `tis degree progress`, `tis degree missing`,
   `tis degree audit`.
 - TIS writes: `tis selection preview/apply` for `cart`, `drop`, and `bid`
-  style operations, `tis bid plan`, `tis bid apply`, `tis enroll preview`,
-  `tis enroll apply`.
+  style operations, read-only `tis selection reconcile`, `tis bid plan`, `tis
+  bid apply`, `tis enroll preview`, `tis enroll apply`.
 - Other authenticated campus services: `ws programs`, `ws detail`,
   `library search`, `library detail`, `booking whoami`, `booking rooms`,
   `booking my-meetings`, `booking create preview/apply`,
@@ -132,6 +132,14 @@ direct CLI and the approval workflow below when state must change.
   `meta`, and `schemaVersion` in the output envelope.
 - Do not parse human-readable text when a JSON mode is available.
 - Preserve IDs exactly as returned; Blackboard and TIS IDs are opaque strings.
+- For `tis courses available`, consume `data.bundles`, count bundle credits
+  once, include every required component, and use only its documented
+  `operationTargets`. `courseId` becomes upstream `p_id`; `rwh` identifies the
+  exact component for read-back. Never guess one from the other.
+- Planning output is minimum-data by default. `tis degree missing` is
+  grade-free, and course grades in `tis degree progress` require an explicit
+  `--details`; do not request details when summary/category/module evidence is
+  sufficient.
 
 ## Handle credentials
 
@@ -147,6 +155,10 @@ direct CLI and the approval workflow below when state must change.
   mechanism. Never create a plaintext fallback.
 - Use `sustech auth status --json` and the appropriate read-only
   `sustech auth check --service ... --json` before a workflow that needs login.
+- On Linux, a locked Secret Service collection or missing desktop D-Bus session
+  is not evidence that credentials expired. Follow the structured
+  `remediation`, keep profile metadata intact, and retry only after the same
+  graphical login collection is unlocked.
 - Use `--profile` when the task depends on a specific account identity.
 - If CAS returns `CAS_INTERACTIVE_CHALLENGE_REQUIRED`, report that the password
   was not submitted and stop. Do not bypass, solve, or repeatedly retry the
@@ -201,7 +213,10 @@ Important command-specific rules:
 - For file-bound applies such as Blackboard submission and PMS upload, preserve
   the exact previewed SHA-256 into apply.
 - If a result is ambiguous or contains `DO_NOT_RETRY_AUTOMATICALLY`, stop and
-  report it; do not retry the mutation automatically.
+  report it; do not retry the mutation automatically. For a TIS selection
+  timeout, run bounded `tis selection reconcile OP` with the exact
+  `courseId`/`rwh`/round from the error. Its `applied`, `not_applied`, or
+  `still_uncertain` result is read-only and never authorizes an automatic retry.
 
 ## Guard local writes and exports
 

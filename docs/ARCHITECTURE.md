@@ -145,6 +145,11 @@ commands for them.
 - Mutation commands use explicit preview/build phases and post-action
   verification. Any ambiguous remote result returns exit code 5 plus
   `DO_NOT_RETRY_AUTOMATICALLY` when write state cannot be determined safely.
+- TIS selection previews carry a local correlation ID but never claim upstream
+  idempotency. Transport ambiguity is reconciled through bounded exact
+  `{courseId, rwh, round}` reads rather than by repeating a mutation.
+- Planning-facing TIS output passes through field-allowlisted projections;
+  broad upstream rows and raw mutation responses remain outside CLI JSON.
 - Consequence metadata lives in `src/core/consequences.ts` so agents can inspect
   risks and follow-up checks without scraping prose.
 - New authenticated campus-service wrappers are validated with protocol fixtures

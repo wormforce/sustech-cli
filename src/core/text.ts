@@ -66,10 +66,12 @@ export function formatEnrolledCourses(semester: Semester, courses: PersonalSched
   const header = `Enrolled courses · ${semester.value}`;
   if (courses.length === 0) return `${header}\n\nNo enrolled courses returned by TIS.`;
   const blocks = courses.map((course, index) => {
-    const name = course.courseName || course.description || course.descriptionEn || "Unnamed course";
+    const name = course.courseName || course.rwh || "Unnamed course";
     const details = [
       course.teacher && `Teacher: ${course.teacher}`,
-      course.description && `Time: ${course.description}`,
+      course.day !== undefined && course.periodStart !== undefined
+        ? `Day ${course.day}, period ${course.periodStart}-${course.periodEnd ?? course.periodStart}`
+        : "",
       course.room && `Room: ${course.room}`,
     ].filter(Boolean).join(" · ");
     return `${index + 1}. ${course.courseCode ? `${course.courseCode} — ` : ""}${name}${details ? `\n   ${details}` : ""}`;

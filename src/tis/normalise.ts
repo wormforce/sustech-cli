@@ -1,4 +1,12 @@
-import type { Course, ExamRecord, GradeRecord, PersonalScheduleEntry, ScheduleSlot } from "./types.js";
+import type {
+  Course,
+  CourseComponentType,
+  CourseSelectionContract,
+  ExamRecord,
+  GradeRecord,
+  PersonalScheduleEntry,
+  ScheduleSlot,
+} from "./types.js";
 
 const DAY_CHARS = "一二三四五六日";
 const DAY_NAMES = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
@@ -9,6 +17,7 @@ export function normaliseCourse(raw: Record<string, unknown>): Course {
   const rwh = stringValue(raw.rwh);
   const classGroup = stringValue(raw.kxh) || rwh.split("-").at(-1) || "";
   const teachers = splitTeachers(stringValue(raw.dgjsmc));
+  const selection = normaliseCourseSelectionContract(raw, rwh);
 
   return {
     code: stringValue(raw.kcdm),
@@ -30,6 +39,36 @@ export function normaliseCourse(raw: Record<string, unknown>): Course {
     language: stringValue(raw.skyymc),
     teachers,
     schedule,
+    ...(selection ? { selection } : {}),
+  };
+}
+
+export function normaliseCourseSelectionContract(
+  raw: Record<string, unknown>,
+  taskId = stringValue(raw.rwh),
+): CourseSelectionContract | undefined {
+  if (!taskId) return undefined;
+  const mutationId = firstString(raw, ["id", "courseId", "course_id"]);
+  const explicitBundleId = firstString(raw, [
+    "bundleId", "bundle_id", "kczid", "KCZID", "zhrwid", "ZHRWID", "parentRwh", "PARENT_RWH",
+  ]);
+  const taskType = firstString(raw, ["componentType", "component_type", "rwlxmc", "rwlx"]);
+  const required = firstBoolean(raw, ["componentRequired", "component_required", "required", "sfbd"]);
+  const creditBearing = firstBoolean(raw, ["creditBearing", "credit_bearing", "sfxfjl"]);
+  return {
+    bundleId: explicitBundleId
+      ? `tis-bundle:${explicitBundleId}`
+      : mutationId
+        ? `tis-selection:${mutationId}`
+        : `tis-task:${taskId}`,
+    componentId: taskId,
+    componentType: componentType(taskType),
+    required: required ?? true,
+    ...(creditBearing !== undefined ? { creditBearing } : {}),
+    identifiers: {
+      task: { field: "rwh", value: taskId },
+      ...(mutationId ? { mutation: { field: "courseId" as const, payloadField: "p_id" as const, value: mutationId } } : {}),
+    },
   };
 }
 
@@ -194,6 +233,28 @@ function firstString(record: Record<string, unknown>, keys: string[]): string {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
+}
+
+function firstBoolean(record: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["1", "true", "yes", "required", "是", "必修"].includes(normalized)) return true;
+      if (["0", "false", "no", "optional", "否", "选修"].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+}
+
+function componentType(value: string): CourseComponentType {
+  const normalized = value.toLowerCase();
+  if (/实验|lab/.test(normalized)) return "lab";
+  if (/习题|辅导|tutorial/.test(normalized)) return "tutorial";
+  if (/讲授|理论|lecture/.test(normalized)) return "lecture";
+  return normalized ? "other" : "unknown";
 }
 
 function bitmapWeeks(bitmap: string): number[] {

@@ -7,6 +7,7 @@ import {
   ensureSelectionVerified,
   planBidUpdates,
   projectBidTotal,
+  reconcileSelectionSnapshots,
   revalidateSelectionWrite,
   selectionEndpoint,
   verifySelectionWrite,
@@ -29,6 +30,10 @@ test("selection previews keep write payloads typed and operation-specific", () =
   assert.equal(enroll.endpoint, "/Xsxk/addXuanke");
   assert.equal(enroll.payload.p_xktjz, "gwctjzyx");
   assert.equal(enroll.payload.p_xkxs, "3");
+  assert.match(enroll.clientRequestId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(enroll.identifierContract.readbackIdentity, ["courseId", "rwh"]);
+  assert.equal(enroll.idempotency.upstreamKeySupported, false);
+  assert.equal(enroll.idempotency.automaticRetry, "forbidden");
 
   const cartAdd = buildSelectionPreview(CONTEXT, {
     operation: "cart.add",
@@ -46,6 +51,38 @@ test("selection previews keep write payloads typed and operation-specific", () =
   });
   assert.equal(cartBid.endpoint, "/Xsxk/addGouwuche");
   assert.match(cartBid.successHeuristic, /cart bid value/i);
+});
+
+test("bounded reconciliation handles delayed visibility without repeating a mutation", () => {
+  const target = {
+    operation: "cart.add" as const,
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "bxxk",
+    bid: 1,
+    where: "cart" as const,
+  };
+  const absent = { courses:[{ id:"hex-id", rwh:"RWH-1" }], cart:[], enrolled:[], round:{ xkfsdm:"bxxk" } };
+  const present = { courses:[{ id:"hex-id", rwh:"RWH-1" }], cart:[{ id:"hex-id", rwh:"RWH-1", xkxs:"1" }], enrolled:[], round:{ xkfsdm:"bxxk" } };
+  const result = reconcileSelectionSnapshots([absent, absent, present], target);
+  assert.equal(result.status, "applied");
+  assert.equal(result.automaticRetryAllowed, false);
+});
+
+test("bounded reconciliation distinguishes stable not-applied from conflicting readback", () => {
+  const target = {
+    operation: "bid.update" as const,
+    courseId: "hex-id",
+    rwh: "RWH-1",
+    round: "yixuan",
+    bid: 5,
+    where: "cart" as const,
+  };
+  const unchanged = { courses:[{ id:"hex-id", rwh:"RWH-1" }], cart:[{ id:"hex-id", rwh:"RWH-1", xkxs:"2" }], enrolled:[], round:{ xkfsdm:"yixuan" } };
+  assert.equal(reconcileSelectionSnapshots([unchanged, structuredClone(unchanged)], target).status, "not_applied");
+
+  const conflicting = { courses:[{ id:"hex-id", rwh:"RWH-1" }], cart:[{ id:"other-id", rwh:"RWH-1", xkxs:"5" }], enrolled:[], round:{ xkfsdm:"yixuan" } };
+  assert.equal(reconcileSelectionSnapshots([unchanged, conflicting], target).status, "still_uncertain");
 });
 
 test("bid planning short-circuits when the round budget would be exceeded", () => {
