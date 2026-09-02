@@ -4,6 +4,12 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Made `auth status` use a metadata-only macOS Keychain lookup instead of
+  reading the stored password, and bounded credential-helper subprocesses to
+  five seconds with a structured `CREDENTIAL_STORE_TIMEOUT` status.
+
 ## [0.10.0] - 2026-08-29
 
 ### Added

@@ -212,6 +212,10 @@ command-line argument, and is never written to the CLI config. If no safe
 backend is available, the CLI returns `CREDENTIAL_STORE_UNAVAILABLE` instead of
 falling back to plaintext.
 
+On macOS, `auth status` checks Keychain item metadata without reading the
+password. Credential-helper commands are bounded to five seconds and report
+`CREDENTIAL_STORE_TIMEOUT` without an automatic retry.
+
 ```bash
 sustech auth login --profile main
 sustech auth check --profile main --service bb --json

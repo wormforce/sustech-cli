@@ -9,6 +9,7 @@ import { defaultConfigDirectory } from "./local-store.js";
 export const DEFAULT_CREDENTIAL_PROFILE = "default";
 export const SUSTECH_CREDENTIAL_SERVICE = "cn.edu.sustech.cli.cas";
 export const BLACKBOARD_CALENDAR_LINK_SERVICE = "cn.edu.sustech.cli.bb-calendar-link";
+export const DEFAULT_CREDENTIAL_COMMAND_TIMEOUT_MS = 5_000;
 
 export type CredentialBackend =
   | "macos-keychain"
@@ -18,6 +19,7 @@ export type CredentialBackend =
 export interface SecretStore {
   readonly backend: CredentialBackend;
   readonly persistent: true;
+  has?(account: string): Promise<boolean>;
   get(account: string): Promise<string | undefined>;
   set(account: string, password: string): Promise<void>;
   delete(account: string): Promise<boolean>;
@@ -28,6 +30,7 @@ export interface CredentialStoreOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   store?: SecretStore;
+  credentialCommandTimeoutMs?: number;
 }
 
 interface StoredProfile {
@@ -60,6 +63,7 @@ export interface CredentialProfileStatus {
   persistent: boolean;
   storedAt?: string;
   profiles: string[];
+  reasonCode?: "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT";
   reason?: string;
   remediation?: string;
 }
@@ -270,18 +274,20 @@ export async function getCredentialStatus(
   }
 
   try {
-    const password = await resolution.store.get(stored.account);
+    const credentialAvailable = resolution.store.has
+      ? await resolution.store.has(stored.account)
+      : Boolean(await resolution.store.get(stored.account));
     return {
       profile,
       configured: true,
-      credentialAvailable: Boolean(password),
+      credentialAvailable,
       maskedSid: maskSid(stored.sid),
       backend: stored.backend,
       backendAvailable: true,
       persistent: true,
       storedAt: stored.storedAt,
       profiles,
-      ...(!password ? { reason: "The profile metadata exists, but the secret is missing from the credential store." } : {}),
+      ...(!credentialAvailable ? { reason: "The profile metadata exists, but the secret is missing from the credential store." } : {}),
     };
   } catch (error) {
     return {
@@ -294,6 +300,7 @@ export async function getCredentialStatus(
       persistent: true,
       storedAt: stored.storedAt,
       profiles,
+      reasonCode: credentialStatusReasonCode(error),
       reason: safeStoreReason(error),
     };
   }
@@ -433,9 +440,9 @@ async function resolveBackendForNamespace(
     };
   }
   const platform = options.platform ?? process.platform;
-  if (platform === "darwin") return await resolveMacosKeychain(options.env, namespace);
+  if (platform === "darwin") return await resolveMacosKeychain(options, namespace);
   if (platform === "win32") return await resolveWindowsCredentialManager(namespace);
-  if (platform === "linux") return await resolveLinuxSecretService(options.env, namespace);
+  if (platform === "linux") return await resolveLinuxSecretService(options, namespace);
   return {
     backend: "unavailable",
     available: false,
@@ -446,12 +453,13 @@ async function resolveBackendForNamespace(
 }
 
 async function resolveMacosKeychain(
-  customEnv: NodeJS.ProcessEnv | undefined,
+  options: CredentialStoreOptions,
   namespace: SecretNamespace,
 ): Promise<BackendResolution> {
   const backend = "macos-keychain" as const;
   const executable = "/usr/bin/security";
-  const env = customEnv ?? process.env;
+  const env = options.env ?? process.env;
+  const timeoutMs = credentialCommandTimeoutMs(options);
   try {
     await access(executable, constants.X_OK);
     const { AsyncEntry } = await import("@napi-rs/keyring");
@@ -460,10 +468,13 @@ async function resolveMacosKeychain(
     const store: SecretStore = {
       backend,
       persistent: true,
+      async has(account) {
+        return await macosCredentialExists(executable, namespace.service, account, env, timeoutMs);
+      },
       async get(account) {
         const password = await new AsyncEntry(namespace.service, account).getPassword() ?? undefined;
         if (password !== undefined) return password;
-        if (!await macosCredentialExists(executable, namespace.service, account, env)) return undefined;
+        if (!await macosCredentialExists(executable, namespace.service, account, env, timeoutMs)) return undefined;
         throw new Error("macOS Keychain item exists, but its secret could not be read.");
       },
       async set(account, password) {
@@ -471,7 +482,7 @@ async function resolveMacosKeychain(
       },
       async delete(account) {
         const deleted = await new AsyncEntry(namespace.service, account).deleteCredential();
-        if (await macosCredentialExists(executable, namespace.service, account, env)) {
+        if (await macosCredentialExists(executable, namespace.service, account, env, timeoutMs)) {
           throw new Error("macOS Keychain delete could not be verified.");
         }
         return deleted;
@@ -494,10 +505,11 @@ async function macosCredentialExists(
   service: string,
   account: string,
   env: NodeJS.ProcessEnv,
+  timeoutMs: number,
 ): Promise<boolean> {
   const result = await runCredentialCommand(executable, [
     "find-generic-password", "-s", service, "-a", account,
-  ], undefined, env);
+  ], undefined, env, timeoutMs);
   if (macosItemNotFound(result)) return false;
   if (result.code !== 0) throw new Error("macOS Keychain metadata lookup failed.");
   return true;
@@ -542,10 +554,11 @@ async function resolveWindowsCredentialManager(namespace: SecretNamespace): Prom
 }
 
 async function resolveLinuxSecretService(
-  customEnv: NodeJS.ProcessEnv | undefined,
+  options: CredentialStoreOptions,
   namespace: SecretNamespace,
 ): Promise<BackendResolution> {
-  const env = customEnv ?? process.env;
+  const env = options.env ?? process.env;
+  const timeoutMs = credentialCommandTimeoutMs(options);
   if (!env.DBUS_SESSION_BUS_ADDRESS) {
     return {
       backend: "linux-secret-service",
@@ -571,7 +584,7 @@ async function resolveLinuxSecretService(
     async get(account) {
       const result = await runCredentialCommand(executable, [
         "lookup", "service", namespace.service, "account", account,
-      ], undefined, env);
+      ], undefined, env, timeoutMs);
       if (result.code === 1 && !result.stdout.trim() && !result.stderr.trim()) return undefined;
       if (result.code !== 0) throw new Error("Secret Service lookup failed.");
       return result.stdout.replace(/\r?\n$/, "") || undefined;
@@ -582,13 +595,13 @@ async function resolveLinuxSecretService(
         `--label=${namespace.linuxLabel} (${account.split(":", 1)[0]})`,
         "service", namespace.service,
         "account", account,
-      ], `${password}\n`, env);
+      ], `${password}\n`, env, timeoutMs);
       if (result.code !== 0) throw new Error("Secret Service write failed.");
     },
     async delete(account) {
       const result = await runCredentialCommand(executable, [
         "clear", "service", namespace.service, "account", account,
-      ], undefined, env);
+      ], undefined, env, timeoutMs);
       if (result.code === 1 && !result.stderr.trim()) return false;
       if (result.code !== 0) throw new Error("Secret Service delete failed.");
       return true;
@@ -620,12 +633,26 @@ async function runCredentialCommand(
   args: string[],
   input: string | undefined,
   env: NodeJS.ProcessEnv,
+  timeoutMs = DEFAULT_CREDENTIAL_COMMAND_TIMEOUT_MS,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, args, { env, stdio: ["pipe", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let size = 0;
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new CredentialCommandTimeoutError(timeoutMs));
+    }, timeoutMs);
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size <= 64 * 1024) stdout.push(chunk);
@@ -634,15 +661,37 @@ async function runCredentialCommand(
       size += chunk.length;
       if (size <= 64 * 1024) stderr.push(chunk);
     });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({
-      code: code ?? 1,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    }));
+    child.once("error", rejectOnce);
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        code: code ?? 1,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
     if (input !== undefined) child.stdin.end(input, "utf8");
     else child.stdin.end();
   });
+}
+
+class CredentialCommandTimeoutError extends Error {
+  public readonly code = "CREDENTIAL_STORE_TIMEOUT";
+
+  public constructor(timeoutMs: number) {
+    super(`Credential-store command exceeded its ${timeoutMs} ms deadline.`);
+    this.name = "CredentialCommandTimeoutError";
+  }
+}
+
+function credentialCommandTimeoutMs(options: CredentialStoreOptions): number {
+  const timeoutMs = options.credentialCommandTimeoutMs ?? DEFAULT_CREDENTIAL_COMMAND_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000) {
+    throw new Error("Credential-store command timeout must be an integer from 1 to 60000 milliseconds.");
+  }
+  return timeoutMs;
 }
 
 function requireAvailableStore(resolution: BackendResolution): SecretStore {
@@ -729,6 +778,12 @@ function safeStoreReason(error: unknown): string {
   return error instanceof Error && /^Secret Service /.test(error.message)
     ? error.message
     : "The operating-system credential store rejected or could not complete the request.";
+}
+
+function credentialStatusReasonCode(error: unknown): "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT" {
+  return error && typeof error === "object" && "code" in error && error.code === "CREDENTIAL_STORE_TIMEOUT"
+    ? "CREDENTIAL_STORE_TIMEOUT"
+    : "CREDENTIAL_STORE_ERROR";
 }
 
 async function readCredentialConfig(options: CredentialStoreOptions): Promise<CredentialConfig> {
