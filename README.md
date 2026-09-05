@@ -41,6 +41,7 @@ Public data does not require an account:
 sustech calendar day 2026-09-01
 sustech faculty search "computer vision"
 sustech online talks list --limit 10
+sustech talks list
 sustech online contact search "教学"
 sustech transit lines
 sustech library search "graph neural networks" --limit 5
@@ -165,6 +166,32 @@ Local state can also change through credential login/logout, persistent
 `bb download`, and `bb sync`. File commands reject unsafe symbolic-link paths
 and do not overwrite an existing target unless the command explicitly permits
 and requests it.
+
+## Official campus lectures
+
+Official university lectures are available without login:
+
+```bash
+sustech talks list
+sustech talks list --all
+sustech talks list --json --pretty
+sustech talks search "物理" --jsonl
+sustech talks search "物理" --all
+```
+
+These commands read the lecture section of the official
+[homepage events page](https://www.sustech.edu.cn/zh/home-events.html), excluding
+notices. The default view shows lectures whose Beijing start time is still in
+the future, ordered from nearest to furthest. Records with an unparseable time
+remain visible under “time to confirm” rather than being silently omitted.
+`--all` adds lectures whose advertised start time has passed; it means all
+lectures currently displayed on the homepage, not the complete historical
+archive. Search matches titles, speakers, venues, and time text, and follows the
+same upcoming-by-default behavior. Results include title, speaker, venue,
+original time text, a normalized Beijing start time when parseable, timing
+classification, detail URL, reference time, and official source/fetch metadata.
+The existing `online talks` commands continue to use the community-maintained
+SUSTech Online source. The new official commands are CLI-only at present.
 
 ## Output contract
 

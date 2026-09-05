@@ -96,6 +96,8 @@ import {
   searchOnlineContacts,
   searchOnlineTalks,
 } from "./online/index.js";
+import { OfficialTalksClient } from "./talks/client.js";
+import { formatOfficialTalks } from "./talks/text.js";
 import { searchResources, type ResourceCategory } from "./resources/catalog.js";
 import { formatResources } from "./resources/text.js";
 import {
@@ -348,6 +350,8 @@ Usage:
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
   sustech online search QUERY [--section talks|contact] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
+  sustech talks list [--all]
+  sustech talks search QUERY [--all]
   sustech online talks list [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
   sustech online talks search QUERY [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
   sustech online talks get ID
@@ -692,6 +696,33 @@ async function main(argv: string[]): Promise<void> {
   }
   if (group === "online") {
     await runOnline(parsed.positionals, values, output);
+    return;
+  }
+  if (group === "talks") {
+    const query = parsed.positionals.slice(2).join(" ").trim();
+    if (command !== "list" && command !== "search") throw usageError(`Unknown command: ${parsed.positionals.join(" ")}`);
+    if (command === "list" && parsed.positionals.length !== 2) throw usageError("talks list does not accept positional arguments.");
+    if (command === "search" && !query) throw usageError("A talk search query is required.");
+    const result = await new OfficialTalksClient().list({
+      ...(command === "search" ? { query } : {}),
+      all: values.all,
+    });
+    writeSuccess({
+      command: `talks ${command}`,
+      data: result,
+      text: formatOfficialTalks(result),
+      items: result.talks,
+      summary: {
+        total: result.total,
+        sourceTotal: result.sourceTotal,
+        scope: result.scope,
+        referenceTime: result.referenceTime,
+        unknownTimeCount: result.unknownTimeCount,
+        provenance: result.provenance,
+        warnings: result.warnings,
+      },
+      meta: result.provenance,
+    }, output);
     return;
   }
   if (group === "context") {

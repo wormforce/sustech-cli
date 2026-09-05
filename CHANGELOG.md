@@ -4,6 +4,12 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added public `talks list` and `talks search` commands for official SUSTech
+  homepage lectures, showing upcoming events by default and all currently
+  displayed events with `--all`, with source metadata and text/JSON/JSONL output.
+
 ### Fixed
 
 - Made `auth status` use a metadata-only macOS Keychain lookup instead of
