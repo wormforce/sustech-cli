@@ -131,7 +131,33 @@ test("context service exposes verbose environmental fields and explicit partial 
   assert.match(service.toText(snapshot), /Library: \[Main Hall: Open\]/);
 
   const record = service.toRecord(snapshot);
-  assert.deepEqual(record.weather, { condition: "晴", tempC: 26, feelsLikeC: 29 });
-  assert.deepEqual(record.airQuality, { aqi: 48, level: "Good" });
+  assert.deepEqual(record.weather, { condition: "晴", tempC: 26, feelsLikeC: 29, freshness: "unknown" });
+  assert.deepEqual(record.airQuality, { aqi: 48, level: "Good", freshness: "unknown" });
   assert.equal(record.libraryStatus, "Main Hall: Open");
+});
+
+test("daily context uses Shanghai midnight and distinguishes empty sources from unavailable ones", () => {
+  const service = new ContextService();
+  const snapshot = service.build({
+    now: "2026-09-06T16:05:00Z",
+    generatedAt: new Date("2026-09-06T16:06:00Z"),
+    nextDeadline: null,
+    weather: { condition: "Clear", observedAt: "2026-09-06T12:00:00Z" },
+    airQuality: { aqi: 30, standard: "US EPA", observedAt: "2026-09-06T16:00:00Z" },
+    schedule: { now: "Synthetic A", next: "Synthetic B", nextDetail: "09:00" },
+  });
+  assert.equal(snapshot.date, "2026-09-07");
+  assert.equal(snapshot.time, "00:05");
+  assert.equal(snapshot.weekday, "Monday");
+  assert.equal(snapshot.sourceStatus.nextDeadline, "empty");
+  assert.equal(snapshot.sourceStatus.nextExam, "missing");
+  assert.equal(snapshot.weather?.freshness, "stale");
+  assert.equal(snapshot.airQuality?.freshness, "fresh");
+  assert.match(service.toText(snapshot), /Now:.*Synthetic A/);
+  assert.match(service.toText(snapshot), /Next:.*Synthetic B/);
+  assert.match(service.toText(snapshot), /US EPA AQI/);
+  const record = service.toRecord(snapshot);
+  assert.equal(record.timezone, "Asia/Shanghai");
+  assert.equal(record.referenceAt, "2026-09-06T16:05:00.000Z");
+  assert.equal(record.generatedAt, "2026-09-06T16:06:00.000Z");
 });

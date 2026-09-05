@@ -72,7 +72,8 @@ import {
   fetchContextWeather,
 } from "./context/live.js";
 import { ContextService } from "./context/service.js";
-import type { ContextLevel, DeadlineSummary } from "./context/types.js";
+import { buildContextSchedule } from "./context/schedule.js";
+import type { ContextInput, ContextLevel, DeadlineSummary } from "./context/types.js";
 import {
   DOCTOR_SERVICES,
   buildDoctorReport,
@@ -150,7 +151,6 @@ import {
   resolveLiveRoom,
   scheduleIcsEvents,
   summariseEvaluationStatuses,
-  summariseCurrentOrNextClass,
   summariseLiveOccupancy,
   teachingPeriodAtShenzhenTime,
   verifySelectionWrite,
@@ -2858,36 +2858,40 @@ async function runContext(
 ): Promise<void> {
   if (positionals.length !== 1) throw usageError(`Unknown command: ${positionals.join(" ")}`);
   const date = isoDate(values.date ?? todayInShenzhen(), "--date");
+  if (values.live && date !== todayInShenzhen()) throw usageError("--live is only available for today's date in Asia/Shanghai. Omit --live for a calendar date preview.");
   const year = Number(date.slice(0, 4));
-  const calendar = await new CalendarClient().loadYear(year, calendarLevel(values["calendar-level"]));
   const level = contextLevel(values.level);
+  const requestedCalendarLevel = calendarLevel(values["calendar-level"]);
+  let calendar: AcademicCalendar | undefined;
+  let calendarError: string | undefined;
+  try {
+    calendar = await new CalendarClient().loadYear(year, requestedCalendarLevel);
+  } catch (error) {
+    calendarError = errorMessage(error);
+  }
   const service = new ContextService();
-  const now = contextReferenceTime(date, values.live);
+  const now = contextReferenceTime(date);
   const live = values.live ? await loadLiveContext(date, now, calendar, values, level) : undefined;
   const snapshot = service.build({
     now,
     calendar,
-    ...(live?.schedule ? { schedule: live.schedule } : {}),
-    ...(live?.nextDeadline ? { nextDeadline: live.nextDeadline } : {}),
-    ...(live?.nextEvaluation ? { nextEvaluation: live.nextEvaluation } : {}),
-    ...(live?.nextExam ? { nextExam: live.nextExam } : {}),
-    ...(live?.weather ? { weather: live.weather } : {}),
-    ...(live?.airQuality ? { airQuality: live.airQuality } : {}),
-    ...(live?.libraryStatus ? { libraryStatus: live.libraryStatus } : {}),
+    ...live,
   }, level);
   const liveText = live ? formatContextLiveSources(live.liveSources) : [];
   writeSuccess({
     command: "context",
     data: {
       ...service.toRecord(snapshot),
+      mode: date === todayInShenzhen() ? "daily" : "date-preview",
+      calendarSource: { state: calendar ? "provided" : "error", ...(calendarError ? { message: calendarError } : {}) },
       ...(live ? { liveSources: live.liveSources } : {}),
     },
-    text: [...snapshot.lines, ...liveText].join("\n"),
+    text: [...snapshot.lines, ...liveText, ...(calendarError ? [`Calendar unavailable: ${calendarError}`] : []), ...(!live ? ["Personal and environmental sources not requested; use --live for a daily snapshot."] : [])].join("\n"),
     ...(live ? { meta: { liveSources: live.liveSources } } : {}),
   }, output);
 }
 
-type ContextLiveSourceState = "provided" | "missing" | "partial" | "credentials-missing" | "error";
+type ContextLiveSourceState = "provided" | "empty" | "not-requested" | "missing" | "partial" | "credentials-missing" | "error";
 
 interface ContextLiveSourceStatus {
   state: ContextLiveSourceState;
@@ -2897,17 +2901,7 @@ interface ContextLiveSourceStatus {
   message?: string;
 }
 
-async function loadLiveContext(
-  date: string,
-  now: Date,
-  calendar: AcademicCalendar,
-  values: Values,
-  level: ContextLevel,
-): Promise<{
-  schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
-  nextDeadline?: DeadlineSummary;
-  nextEvaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
-  nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
+interface ContextLiveResult extends ContextInput {
   liveSources: {
     tisSchedule: ContextLiveSourceStatus;
     tisExams: ContextLiveSourceStatus;
@@ -2917,180 +2911,176 @@ async function loadLiveContext(
     airQuality?: ContextLiveSourceStatus;
     libraryStatus?: ContextLiveSourceStatus;
   };
-  weather?: { condition: string; icon?: string; tempC?: number; feelsLikeC?: number; humidity?: number; windKmh?: number; precipitationMm?: number };
-  airQuality?: { aqi: number; level?: string; pm25?: number; pm10?: number; ozone?: number };
-  libraryStatus?: string;
-}> {
-  const liveSources: {
-    tisSchedule: ContextLiveSourceStatus;
-    tisExams: ContextLiveSourceStatus;
-    blackboardDeadlines: ContextLiveSourceStatus;
-    tisEvaluations?: ContextLiveSourceStatus;
-    weather?: ContextLiveSourceStatus;
-    airQuality?: ContextLiveSourceStatus;
-    libraryStatus?: ContextLiveSourceStatus;
-  } = {
+}
+
+async function loadLiveContext(
+  date: string,
+  now: Date,
+  calendar: AcademicCalendar | undefined,
+  values: Values,
+  level: ContextLevel,
+): Promise<ContextLiveResult> {
+  const liveSources: ContextLiveResult["liveSources"] = {
     tisSchedule: { state: "missing" },
-    tisExams: { state: "missing" },
-    blackboardDeadlines: { state: "missing" },
+    tisExams: { state: contextLoadsNormalFields(level) ? "missing" : "not-requested" },
+    blackboardDeadlines: { state: contextLoadsNormalFields(level) ? "missing" : "not-requested" },
     ...(contextLoadsNormalFields(level) ? { tisEvaluations: { state: "missing" as const } } : {}),
-    ...(contextLoadsVerboseFields(level)
+    ...(contextLoadsNormalFields(level)
       ? {
           weather: { state: "missing" as const },
           airQuality: { state: "missing" as const },
-          libraryStatus: { state: "missing" as const },
         }
       : {}),
+    ...(contextLoadsVerboseFields(level) ? { libraryStatus: { state: "missing" as const } } : {}),
   };
 
-  const result: {
-    schedule?: { now?: string; next?: string; nextDetail?: string; tomorrowMorning?: string };
-    nextDeadline?: DeadlineSummary;
-    nextEvaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
-    nextExam?: { name: string; code: string; date: string; time?: string; building?: string; room?: string; campus?: string };
-    liveSources: {
-      tisSchedule: ContextLiveSourceStatus;
-      tisExams: ContextLiveSourceStatus;
-      blackboardDeadlines: ContextLiveSourceStatus;
-      tisEvaluations?: ContextLiveSourceStatus;
-      weather?: ContextLiveSourceStatus;
-      airQuality?: ContextLiveSourceStatus;
-      libraryStatus?: ContextLiveSourceStatus;
-    };
-    weather?: { condition: string; icon?: string; tempC?: number; feelsLikeC?: number; humidity?: number; windKmh?: number; precipitationMm?: number };
-    airQuality?: { aqi: number; level?: string; pm25?: number; pm10?: number; ozone?: number };
-    libraryStatus?: string;
-  } = { liveSources };
+  const result: ContextLiveResult = { liveSources };
 
-  const calendarDay = calendar.day(date);
-  const termSemester = calendarDay.semester;
+  const calendarDay = calendar?.day(date);
+  const termSemester = calendarDay?.semester;
   const semester = termSemester
     ? parseSemester(termSemester.semester.value)
     : parseSemester(undefined);
-  const currentWeek = calendarDay.week;
+  const calendarTerm = calendar?.terms().find((candidate) => candidate.snapshot.semester.value === semester.value);
 
-  let tis: TisClient | undefined;
-  try {
-    tis = await tisClient(values);
-  } catch (error) {
-    const message = errorMessage(error);
-    const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
-    liveSources.tisSchedule = { state, message };
-    liveSources.tisExams = { state, message };
-    if (liveSources.tisEvaluations) liveSources.tisEvaluations = { state, message };
-  }
-
-  if (tis) {
-    const [scheduleResult, examsResult, evaluationsResult] = await Promise.allSettled([
-      currentWeek > 0 ? tis.schedule(semester) : Promise.resolve([] as PersonalScheduleEntry[]),
-      tis.exams(),
-      contextLoadsNormalFields(level)
-        ? tis.evaluations(semester.value, "all")
-        : Promise.resolve(undefined),
-    ]);
-
-    if (scheduleResult.status === "fulfilled") {
-      if (currentWeek > 0) {
-        const calendarTerm = calendar.terms().find((candidate) => (
-          candidate.snapshot.semester.value === semester.value
-        ));
-        const schedule = summariseCurrentOrNextClass(scheduleResult.value, { currentWeek, now, calendarTerm });
-        result.schedule = schedule;
-        liveSources.tisSchedule = {
-          state: schedule.now || schedule.next || schedule.tomorrowMorning ? "provided" : "missing",
-        };
-      } else {
-        liveSources.tisSchedule = {
-          state: "missing",
-          message: `Date ${date} is outside the loaded academic teaching weeks.`,
-        };
-      }
-    } else {
-      liveSources.tisSchedule = {
-        state: "error",
-        message: errorMessage(scheduleResult.reason),
-      };
+  const loadTis = async () => {
+    let tis: TisClient | undefined;
+    try {
+      tis = await tisClient(values);
+    } catch (error) {
+      const message = errorMessage(error);
+      const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
+      liveSources.tisSchedule = { state, message };
+      if (contextLoadsNormalFields(level)) liveSources.tisExams = { state, message };
+      if (liveSources.tisEvaluations) liveSources.tisEvaluations = { state, message };
     }
 
-    if (examsResult.status === "fulfilled") {
-      const semesterOmissions = examsResult.value
-        .filter((exam) => !matchesSemesterLabel(exam.semester, semester))
-        .map((exam) => ({
-          code: exam.code || exam.name || "exam",
-          message: exam.semester
-            ? `Skipped ${exam.code || exam.name || "exam"}: exam semester "${exam.semester}" did not match ${semester.value}.`
-            : `Skipped ${exam.code || exam.name || "exam"}: exam semester was missing.`,
-        }));
-      const selection = nearestUpcomingExam(
-        examsResult.value.filter((exam) => matchesSemesterLabel(exam.semester, semester)),
-        { now },
-      );
-      if (selection.exam) result.nextExam = contextExamSummary(selection.exam);
-      const omissionCount = selection.omissions.length + semesterOmissions.length;
-      liveSources.tisExams = {
-        state: omissionCount > 0 ? "partial" : selection.exam ? "provided" : "missing",
-        omissionCount,
-        ...((selection.omissions[0] ?? semesterOmissions[0]) ? { message: (selection.omissions[0] ?? semesterOmissions[0])?.message } : {}),
-      };
-    } else {
-      liveSources.tisExams = {
-        state: "error",
-        message: errorMessage(examsResult.reason),
-      };
-    }
+    if (tis) {
+      const [scheduleResult, examsResult, evaluationsResult] = await Promise.allSettled([
+        calendarTerm ? tis.schedule(semester).then((entries) => buildContextSchedule(entries, calendarTerm, now)) : Promise.resolve(undefined),
+        contextLoadsNormalFields(level) ? tis.exams() : Promise.resolve([] as ExamRecord[]),
+        contextLoadsNormalFields(level)
+          ? tis.evaluations(semester.value, "all")
+          : Promise.resolve(undefined),
+      ]);
 
-    if (liveSources.tisEvaluations) {
-      if (evaluationsResult.status === "fulfilled") {
-        const selection = nextPendingEvaluationSummary(evaluationsResult.value ?? [], now);
-        if (selection.evaluation) result.nextEvaluation = selection.evaluation;
-        liveSources.tisEvaluations = {
-          state: selection.state,
-          omissionCount: selection.omissionCount,
-          ...(selection.message ? { message: selection.message } : {}),
-        };
+      if (scheduleResult.status === "fulfilled") {
+        if (scheduleResult.value) {
+          const schedule = scheduleResult.value;
+          result.schedule = schedule;
+          liveSources.tisSchedule = {
+            state: schedule.omissionCount ? "partial" : schedule.now || schedule.next || schedule.todayClasses?.length ? "provided" : "empty",
+            omissionCount: schedule.omissionCount,
+            ...(schedule.omissionCount ? { message: `${schedule.omissionCount} timetable row(s) lacked usable weeks or periods.` } : {}),
+          };
+        } else {
+          liveSources.tisSchedule = {
+            state: "missing",
+            message: `Date ${date} is outside the loaded academic teaching weeks.`,
+          };
+        }
       } else {
-        liveSources.tisEvaluations = {
+        liveSources.tisSchedule = {
           state: "error",
-          message: errorMessage(evaluationsResult.reason),
+          message: errorMessage(scheduleResult.reason),
         };
       }
+
+      if (contextLoadsNormalFields(level) && examsResult.status === "fulfilled") {
+        const semesterOmissions = examsResult.value
+          .filter((exam) => !matchesSemesterLabel(exam.semester, semester))
+          .map((exam) => ({
+            code: exam.code || exam.name || "exam",
+            message: exam.semester
+              ? `Skipped ${exam.code || exam.name || "exam"}: exam semester "${exam.semester}" did not match ${semester.value}.`
+              : `Skipped ${exam.code || exam.name || "exam"}: exam semester was missing.`,
+          }));
+        const selection = nearestUpcomingExam(
+          examsResult.value.filter((exam) => matchesSemesterLabel(exam.semester, semester)),
+          { now },
+        );
+        if (selection.exam) result.nextExam = contextExamSummary(selection.exam);
+        const omissionCount = selection.omissions.length + semesterOmissions.length;
+        if (!selection.exam && omissionCount === 0) result.nextExam = null;
+        liveSources.tisExams = {
+          state: omissionCount > 0 ? "partial" : selection.exam ? "provided" : "empty",
+          omissionCount,
+          ...((selection.omissions[0] ?? semesterOmissions[0]) ? { message: (selection.omissions[0] ?? semesterOmissions[0])?.message } : {}),
+        };
+      } else if (examsResult.status === "rejected") {
+        liveSources.tisExams = {
+          state: "error",
+          message: errorMessage(examsResult.reason),
+        };
+      }
+
+      if (liveSources.tisEvaluations) {
+        if (evaluationsResult.status === "fulfilled") {
+          const selection = nextPendingEvaluationSummary(evaluationsResult.value ?? [], now);
+          if (selection.evaluation) result.nextEvaluation = selection.evaluation;
+          else if (selection.state === "empty") result.nextEvaluation = null;
+          liveSources.tisEvaluations = {
+            state: selection.state,
+            omissionCount: selection.omissionCount,
+            ...(selection.message ? { message: selection.message } : {}),
+          };
+        } else {
+          liveSources.tisEvaluations = {
+            state: "error",
+            message: errorMessage(evaluationsResult.reason),
+          };
+        }
+      }
     }
-  }
 
-  try {
-    const adapter = await casServiceAdapter(values, "bb");
-    const report = await listBlackboardDeadlines(adapter, { now });
-    const deadline = nextBlackboardDeadline(report);
-    if (deadline) result.nextDeadline = contextDeadlineSummary(deadline);
-    liveSources.blackboardDeadlines = {
-      state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "missing",
-      generatedAt: report.generatedAt,
-      failureCount: report.failures.length,
-      ...(report.failures[0]?.message ? { message: report.failures[0].message } : {}),
-    };
-  } catch (error) {
-    const message = errorMessage(error);
-    liveSources.blackboardDeadlines = {
-      state: error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error",
-      message,
-    };
-  }
+  };
 
-  if (contextLoadsVerboseFields(level)) {
-    const [weatherResult, airQualityResult, libraryStatusResult] = await Promise.allSettled([
-      fetchContextWeather(),
-      fetchContextAirQuality(),
-      fetchContextLibraryStatus(),
-    ]);
+  const loadDeadlines = async () => {
+    if (!contextLoadsNormalFields(level)) return;
+    try {
+      const adapter = await casServiceAdapter(values, "bb");
+      const report = await listBlackboardDeadlines(adapter, { now });
+      const deadline = nextBlackboardDeadline(report);
+      if (deadline) result.nextDeadline = contextDeadlineSummary(deadline);
+      else if (report.failures.length === 0) result.nextDeadline = null;
+      liveSources.blackboardDeadlines = {
+        state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "empty",
+        generatedAt: report.generatedAt,
+        failureCount: report.failures.length,
+        ...(report.failures[0]?.message ? { message: report.failures[0].message } : {}),
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      liveSources.blackboardDeadlines = {
+        state: error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error",
+        message,
+      };
+    }
 
-    liveSources.weather = settledContextPublicSource(weatherResult);
-    if (weatherResult.status === "fulfilled" && weatherResult.value) result.weather = weatherResult.value;
+  };
 
-    liveSources.airQuality = settledContextPublicSource(airQualityResult);
-    if (airQualityResult.status === "fulfilled" && airQualityResult.value) result.airQuality = airQualityResult.value;
+  const loadEnvironment = async () => {
+    if (contextLoadsNormalFields(level)) {
+      const [weatherResult, airQualityResult, libraryStatusResult] = await Promise.allSettled([
+        fetchContextWeather(),
+        fetchContextAirQuality(),
+        contextLoadsVerboseFields(level) ? fetchContextLibraryStatus() : Promise.resolve(null),
+      ]);
 
-    liveSources.libraryStatus = settledContextPublicSource(libraryStatusResult);
-    if (libraryStatusResult.status === "fulfilled" && libraryStatusResult.value) result.libraryStatus = libraryStatusResult.value;
+      liveSources.weather = settledContextPublicSource(weatherResult);
+      if (weatherResult.status === "fulfilled" && weatherResult.value) result.weather = weatherResult.value;
+
+      liveSources.airQuality = settledContextPublicSource(airQualityResult);
+      if (airQualityResult.status === "fulfilled" && airQualityResult.value) result.airQuality = airQualityResult.value;
+
+      if (contextLoadsVerboseFields(level)) liveSources.libraryStatus = settledContextPublicSource(libraryStatusResult);
+      if (libraryStatusResult.status === "fulfilled" && libraryStatusResult.value) result.libraryStatus = libraryStatusResult.value;
+    }
+  };
+
+  await Promise.all([loadTis(), loadDeadlines(), loadEnvironment()]);
+  for (const source of Object.values(liveSources)) {
+    if (source.state !== "not-requested") source.generatedAt ??= new Date().toISOString();
   }
 
   return result;
@@ -3152,7 +3142,7 @@ function nextPendingEvaluationSummary(
   evaluation?: { course: string; name: string; daysLeft?: number; dueAt?: string };
 } {
   const actionable = (rows ?? []).filter((row) => !row.submitted);
-  if (actionable.length === 0) return { state: "missing", omissionCount: 0 };
+  if (actionable.length === 0) return { state: "empty", omissionCount: 0 };
 
   const dated = actionable
     .map((row) => ({ row, due: parseContextDueAt(row.deadline) }))
@@ -3430,8 +3420,8 @@ function formatTisIcalSourceStatus(status: TisIcalSourceStatus): string {
   return `${status.state}${extras ? ` (${extras})` : ""}`;
 }
 
-function contextReferenceTime(date: string, live: boolean | undefined): Date {
-  if (live && date === todayInShenzhen()) return new Date();
+function contextReferenceTime(date: string): Date {
+  if (date === todayInShenzhen()) return new Date();
   return new Date(`${date}T12:00:00+08:00`);
 }
 
