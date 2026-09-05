@@ -6,6 +6,8 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ### Fixed
 
+- Corrected terminal-table alignment for Unicode Roman numerals, ellipses,
+  and combining characters, and kept grapheme clusters intact during truncation.
 - Made `auth status` use a metadata-only macOS Keychain lookup instead of
   reading the stored password, and bounded credential-helper subprocesses to
   five seconds with a structured `CREDENTIAL_STORE_TIMEOUT` status.
