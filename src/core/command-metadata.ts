@@ -131,6 +131,8 @@ export const COMMAND_OPTIONS: Readonly<Record<string, readonly CliOptionName[]>>
   "faculty list": ["full", "limit"],
   "faculty search": ["department", "limit"],
   "online search": ["section", "since", "until", "limit"],
+  "talks list": ["all"],
+  "talks search": ["all"],
   "online talks list": ["since", "until", "limit"],
   "online talks search": ["since", "until", "limit"],
   "online talks get": [],
