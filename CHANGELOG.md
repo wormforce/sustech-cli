@@ -4,6 +4,14 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Refined `context` into a Shanghai-time daily snapshot with structured current,
+  next and today's classes, teaching-week parity and makeup details, explicit
+  empty/unavailable sources, and weather/AQI at normal detail level. Environmental
+  observations retain source timestamps and freshness; public source failures
+  no longer prevent a partial snapshot. Non-today live snapshots are rejected.
+
 ### Fixed
 
 - Made `auth status` use a metadata-only macOS Keychain lookup instead of

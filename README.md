@@ -301,23 +301,45 @@ academic state once, compares it against the existing local state file when
 present, reports the changes, and updates that local file. It does not poll, it
 does not loop in the background, and it does not write any remote campus state.
 
-## Context v2
+## Daily context for AI assistants
 
 ```bash
 sustech context --level terse
 sustech context --live --level normal
+sustech context --live --json
 sustech context --live --level verbose
 ```
 
 `context` now has three explicit detail levels:
 
-- `terse`: compact calendar and near-term summary
-- `normal`: adds the next deadline, next evaluation, and next exam when known
-- `verbose`: adds public weather, AQI, and library-status observations when
-  `--live` is enabled
+- `terse`: date, teaching week and parity, holiday/makeup timetable, and current/next class; only the timetable is requested with `--live`
+- `normal` (default): adds the next assignment deadline, evaluation, exam, weather and AQI with `--live`
+- `verbose`: also retrieves library opening status
 
-`--live` keeps source status explicit. Missing or failed live sources stay
-marked as missing or partial; they are not silently backfilled.
+All dates and display times use **Asia/Shanghai**, including on overseas machines.
+JSON includes `generatedAt` (snapshot creation), `referenceAt` (the instant used
+for class/deadline selection), `timezone`, and the full public `academicDay`.
+`schedule.currentClass`, `nextClass`, and `todayClasses` expose ISO timestamps,
+periods, locations when available, and `makeupFor` dates. Current and next classes
+can appear together; holiday/makeup dates use the same rules as ICS exports.
+
+`sourceStatus` distinguishes a successful empty result (`empty`) from unavailable
+data (`missing`). `liveSources` adds errors, missing credentials, partial coverage,
+and intentionally skipped requests (`not-requested`). An empty result describes
+only the successfully retrieved sources; it is not a claim about all university
+systems. A failed public calendar fetch does not prevent other available sources
+from being returned.
+
+Weather and air quality include source URLs and upstream `observedAt` timestamps
+when supplied. Observations older than three hours are labeled `stale`; absent
+timestamps are `unknown`. AQI uses **US EPA** categories, not China's AQI scale.
+Public environmental requests time out after eight seconds, and TIS, Blackboard,
+and environmental reads run concurrently.
+
+Without `--live`, only the date/calendar snapshot is requested. Use
+`context --date YYYY-MM-DD` for a calendar preview (reference time: noon in
+Shanghai); combining a non-today date with `--live` is rejected so today's
+observations cannot be mistaken for historical data or forecasts.
 
 ## Library catalog
 

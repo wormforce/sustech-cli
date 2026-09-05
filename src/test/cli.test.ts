@@ -916,6 +916,12 @@ test("context live supports calendar level and degrades gracefully when credenti
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
 });
 
+test("context rejects mixing live observations with a historical date before accessing sources", () => {
+  const result = runWithoutCredentials(["context", "--date", "2020-01-01", "--live", "--json"]);
+  assert.equal(result.status, 2);
+  assert.match(JSON.parse(result.stdout).error.message, /only available for today's date/);
+});
+
 test("profile commands remain machine-readable when credentials are unavailable", () => {
   const show = runWithoutCredentials(["profile", "show", "--json"]);
   assert.equal(show.status, 0);
