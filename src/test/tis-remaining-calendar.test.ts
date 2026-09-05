@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { CalendarTerm } from "../calendar/client.js";
 import {
   buildIcsContent,
   buildScheduleIcs,
@@ -10,6 +11,7 @@ import {
   nearestUpcomingExam,
   parseIsoDateTimeToUtcStamp,
   parseShenzhenExamTimeRange,
+  PERIOD_START_TIMES,
   scheduleOccurrences,
   summariseCurrentOrNextClass,
   teachingPeriodAtShenzhenTime,
@@ -34,6 +36,29 @@ const ENTRIES: PersonalScheduleEntry[] = [
   },
 ];
 
+const FALL_2026 = new CalendarTerm({
+  season: "fall",
+  level: "undergraduate",
+  humanName: "2026 Fall",
+  semester: { xn: "2026-2027", xq: "1", value: "2026-2027-1" },
+  start: "2026-09-01",
+  end: "2027-01-11",
+  signIn: "2026-09-04",
+  teachingStart: "2026-09-07",
+  teachingEnd: "2026-12-27",
+  totalTeachingWeeks: 16,
+  midterm: { start: "2026-10-26", end: "2026-11-08", equivalentWeeks: [8, 9] },
+  final: { start: "2026-12-28", end: "2027-01-08", equivalentWeeks: [17] },
+  compensatories: [
+    { date: "2026-09-20", weekType: "odd", workday: "Friday" },
+    { date: "2026-10-10", weekType: "odd", workday: "Wednesday" },
+  ],
+  extraBreaks: ["2026-11-20"],
+}, [
+  { name: "Mid-Autumn Festival", start: "2026-09-25", end: "2026-09-27" },
+  { name: "National Day", start: "2026-10-01", end: "2026-10-07" },
+]);
+
 test("week-one inference backtracks from today's week index to the semester anchor", () => {
   assert.equal(inferWeekOneMonday("2026-03-04", 2), "2026-02-23");
 });
@@ -56,7 +81,7 @@ test("ICS export expands schedule entries into dated UTC events", () => {
   assert.match(ics, /LOCATION:智华楼102/);
 });
 
-test("ICS export supports the thirteenth TIS period", () => {
+test("legacy ICS export keeps the historical thirteenth TIS period", () => {
   const lateEntry: PersonalScheduleEntry = {
     ...ENTRIES[0],
     key: "xq1_jc13",
@@ -67,6 +92,76 @@ test("ICS export supports the thirteenth TIS period", () => {
   const [occurrence] = scheduleOccurrences([lateEntry], { weekOneMonday: "2026-02-23" });
   assert.equal(occurrence?.startUtc, "20260223T140000Z");
   assert.equal(occurrence?.endUtc, "20260223T145000Z");
+});
+
+test("2026 fall uses the current SUSTech period schedule", () => {
+  assert.deepEqual(PERIOD_START_TIMES, {
+    1: [8, 0],
+    2: [9, 0],
+    3: [10, 20],
+    4: [11, 20],
+    5: [14, 0],
+    6: [15, 0],
+    7: [16, 20],
+    8: [17, 20],
+    9: [19, 0],
+    10: [20, 0],
+    11: [21, 0],
+  });
+  assert.match(
+    teachingPeriodAtShenzhenTime(new Date("2026-09-08T06:05:00Z"))?.periodLabel ?? "",
+    /P5 14:00-14:50/,
+  );
+  assert.match(
+    teachingPeriodAtShenzhenTime(new Date("2026-09-08T08:25:00Z"))?.periodLabel ?? "",
+    /P7 16:20-17:10/,
+  );
+  assert.match(
+    teachingPeriodAtShenzhenTime(new Date("2026-09-08T13:05:00Z"))?.periodLabel ?? "",
+    /P11 21:00-21:50/,
+  );
+  assert.equal(teachingPeriodAtShenzhenTime(new Date("2026-09-08T14:05:00Z")), undefined);
+});
+
+test("calendar-adjusted occurrences move odd-week classes onto compensatory days", () => {
+  const friday: PersonalScheduleEntry = {
+    ...ENTRIES[0],
+    rwh: "FRIDAY",
+    key: "xq5_jc5",
+    day: 5,
+    periodStart: 5,
+    periodEnd: 6,
+    weeks: [3],
+  };
+  const wednesday: PersonalScheduleEntry = {
+    ...ENTRIES[0],
+    rwh: "WEDNESDAY",
+    key: "xq3_jc7",
+    day: 3,
+    periodStart: 7,
+    periodEnd: 8,
+    weeks: [5],
+  };
+  const holidayOnly: PersonalScheduleEntry = {
+    ...ENTRIES[0],
+    rwh: "MONDAY",
+    key: "xq1_jc1",
+    day: 1,
+    periodStart: 1,
+    periodEnd: 2,
+    weeks: [5],
+  };
+
+  const occurrences = scheduleOccurrences(
+    [friday, wednesday, holidayOnly],
+    { teachingStartDate: FALL_2026.snapshot.teachingStart },
+    FALL_2026,
+  );
+  assert.deepEqual(occurrences.map((entry) => entry.date), ["2026-09-20", "2026-10-10"]);
+  assert.deepEqual(occurrences.map((entry) => entry.sourceDate), ["2026-09-25", "2026-10-07"]);
+  assert.ok(occurrences.every((entry) => entry.isCompensatory));
+  assert.equal(occurrences[0]?.startUtc, "20260920T060000Z");
+  assert.equal(occurrences[1]?.endUtc, "20261010T101000Z");
 });
 
 test("teaching-period lookup uses Asia/Shanghai wall clock boundaries", () => {
@@ -132,6 +227,30 @@ test("current-or-next class summary distinguishes active and upcoming classes", 
   assert.equal(upcoming.now, undefined);
   assert.match(upcoming.next ?? "", /CS101 程序设计/);
   assert.match(upcoming.nextDetail ?? "", /week 4 Wednesday|today|tomorrow/i);
+});
+
+test("current class summary follows compensatory dates instead of the holiday weekday", () => {
+  const wednesday: PersonalScheduleEntry = {
+    ...ENTRIES[0],
+    day: 3,
+    periodStart: 7,
+    periodEnd: 8,
+    weeks: [5],
+  };
+  const holiday = summariseCurrentOrNextClass([wednesday], {
+    currentWeek: 5,
+    now: new Date("2026-10-07T08:30:00Z"),
+    calendarTerm: FALL_2026,
+  });
+  assert.equal(holiday.now, undefined);
+  assert.match(holiday.nextDetail ?? "", /Saturday \(makeup for Wednesday\)/);
+
+  const makeup = summariseCurrentOrNextClass([wednesday], {
+    currentWeek: 5,
+    now: new Date("2026-10-10T08:30:00Z"),
+    calendarTerm: FALL_2026,
+  });
+  assert.match(makeup.now ?? "", /today \(makeup for Wednesday\).*16:20-18:10/);
 });
 
 test("nearest upcoming exam keeps exact-order semantics and reports omitted malformed rows", () => {
