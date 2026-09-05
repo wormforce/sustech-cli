@@ -1,3 +1,4 @@
+import stringWidth from "string-width";
 import type { Semester } from "./semester.js";
 import type { StudentProfileReport } from "../profile/report.js";
 import type { TimetableResult } from "../tis/planner.js";
@@ -581,10 +582,12 @@ function padCell(value: string, width: number): string {
   return `${truncated}${" ".repeat(Math.max(0, width - displayWidth(truncated)))}`;
 }
 
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+
 function truncateDisplay(value: string, width: number): string {
   if (displayWidth(value) <= width) return value;
   let output = "";
-  for (const character of value) {
+  for (const { segment: character } of graphemes.segment(value)) {
     if (displayWidth(`${output}${character}…`) > width) break;
     output += character;
   }
@@ -592,5 +595,6 @@ function truncateDisplay(value: string, width: number): string {
 }
 
 function displayWidth(value: string): number {
-  return [...value].reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  // Terminals normally render ambiguous-width characters such as Ⅴ and … in one cell.
+  return stringWidth(value, { ambiguousIsNarrow: true });
 }
