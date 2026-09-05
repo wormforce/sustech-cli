@@ -260,7 +260,6 @@ test("Linux Secret Service wiring performs store, lookup, and clear through secr
     configDir: join(root, "config"),
     platform: "linux" as const,
     env: fakeEnv,
-    credentialCommandTimeoutMs: 50,
   };
   try {
     await mkdir(binDir);
@@ -307,7 +306,7 @@ esac
 
     fakeEnv.FAKE_SECRET_LOOKUP_HANG = "1";
     const startedAt = Date.now();
-    const timedOut = await getCredentialStatus(undefined, storeOptions);
+    const timedOut = await getCredentialStatus(undefined, { ...storeOptions, credentialCommandTimeoutMs: 50 });
     assert.ok(Date.now() - startedAt < 2_000);
     assert.equal(timedOut.credentialAvailable, false);
     assert.equal(timedOut.backendAvailable, false);
