@@ -20,8 +20,16 @@ class MemoryStore implements SecretStore {
   public readonly backend = "macos-keychain" as const;
   public readonly persistent = true as const;
   public readonly values = new Map<string, string>();
+  public getCalls = 0;
+  public hasCalls = 0;
+
+  public async has(account: string): Promise<boolean> {
+    this.hasCalls += 1;
+    return this.values.has(account);
+  }
 
   public async get(account: string): Promise<string | undefined> {
+    this.getCalls += 1;
     return this.values.get(account);
   }
 
@@ -60,11 +68,14 @@ test("system credential profiles keep only non-secret metadata on disk", async (
       backend: "macos-keychain",
     });
 
+    const getCallsBeforeStatus = store.getCalls;
     const status = await getCredentialStatus("personal", { configDir, store });
     assert.equal(status.configured, true);
     assert.equal(status.credentialAvailable, true);
     assert.equal(status.maskedSid, "12****00");
     assert.deepEqual(status.profiles, ["personal"]);
+    assert.equal(store.getCalls, getCallsBeforeStatus);
+    assert.equal(store.hasCalls, 1);
 
     const deleted = await deleteStoredCredentials("personal", { configDir, store });
     assert.equal(deleted.removed, true);
@@ -260,6 +271,9 @@ case "$1" in
     printf '%s' "$password" > "$FAKE_SECRET_STATE"
     ;;
   lookup)
+    if [ "$FAKE_SECRET_LOOKUP_HANG" = "1" ]; then
+      exec /bin/sleep 60
+    fi
     if [ -s "$FAKE_SECRET_STATE" ]; then
       /bin/cat "$FAKE_SECRET_STATE"
       printf '\\n'
@@ -289,6 +303,16 @@ esac
     const loaded = await loadStoredCredentials(undefined, storeOptions);
     assert.equal(loaded.password, "secret with spaces");
     assert.equal(loaded.backend, "linux-secret-service");
+
+    fakeEnv.FAKE_SECRET_LOOKUP_HANG = "1";
+    const startedAt = Date.now();
+    const timedOut = await getCredentialStatus(undefined, { ...storeOptions, credentialCommandTimeoutMs: 50 });
+    assert.ok(Date.now() - startedAt < 2_000);
+    assert.equal(timedOut.credentialAvailable, false);
+    assert.equal(timedOut.backendAvailable, false);
+    assert.equal(timedOut.reasonCode, "CREDENTIAL_STORE_TIMEOUT");
+    assert.match(timedOut.reason ?? "", /CREDENTIAL_STORE_TIMEOUT/);
+    delete fakeEnv.FAKE_SECRET_LOOKUP_HANG;
 
     fakeEnv.FAKE_SECRET_CLEAR_ERROR = "1";
     await assert.rejects(
