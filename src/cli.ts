@@ -1253,8 +1253,7 @@ async function main(argv: string[]): Promise<void> {
     let calendar: AcademicCalendar | undefined;
     let term = undefined;
     let calendarFailure: string | undefined;
-    const needsCalendar = includes.includes("holidays")
-      || (includes.includes("schedule") && values["week-one-monday"] === undefined && values["teaching-start"] === undefined);
+    const needsCalendar = includes.includes("holidays") || includes.includes("schedule");
     if (needsCalendar) {
       try {
         calendar = await new CalendarClient().loadYear(calendarYearForSemester(semester), level);
@@ -1286,14 +1285,28 @@ async function main(argv: string[]): Promise<void> {
       try {
         const entries = await tis.schedule(semester);
         const anchor = await resolveTisIcalAnchor(values, semester, tis, term);
-        const scheduleEvents = scheduleIcsEvents(entries, anchor);
+        const scheduleEvents = scheduleIcsEvents(entries, anchor, term);
         events.push(...scheduleEvents);
+        const calendarAdjustmentUnavailable = term === undefined;
+        if (calendarAdjustmentUnavailable) {
+          omissions.push({
+            source: "schedule",
+            code: "CALENDAR_ADJUSTMENTS_UNAVAILABLE",
+            message: calendarFailure
+              ? `Schedule dates were exported without holiday or compensatory-day adjustments: ${calendarFailure}`
+              : `Schedule dates were exported without holiday or compensatory-day adjustments because ${semester.value} was absent from the academic calendar.`,
+          });
+        }
         sourceStatuses.schedule = {
           requested: true,
-          state: scheduleEvents.length > 0 ? "included" : "omitted",
+          state: scheduleEvents.length > 0
+            ? (calendarAdjustmentUnavailable ? "partial" : "included")
+            : "omitted",
           eventCount: scheduleEvents.length,
-          omissionCount: scheduleEvents.length > 0 ? 0 : 1,
-          ...(scheduleEvents.length > 0 ? {} : { message: "No scheduled classes were available for the selected semester." }),
+          omissionCount: scheduleEvents.length > 0 ? (calendarAdjustmentUnavailable ? 1 : 0) : 1,
+          ...(scheduleEvents.length > 0
+            ? (calendarAdjustmentUnavailable ? { message: "Academic-calendar adjustments were unavailable." } : {})
+            : { message: "No scheduled classes were available for the selected semester." }),
         };
         if (scheduleEvents.length === 0) {
           omissions.push({
@@ -2738,7 +2751,10 @@ async function loadLiveContext(
 
     if (scheduleResult.status === "fulfilled") {
       if (currentWeek > 0) {
-        const schedule = summariseCurrentOrNextClass(scheduleResult.value, { currentWeek, now });
+        const calendarTerm = calendar.terms().find((candidate) => (
+          candidate.snapshot.semester.value === semester.value
+        ));
+        const schedule = summariseCurrentOrNextClass(scheduleResult.value, { currentWeek, now, calendarTerm });
         result.schedule = schedule;
         liveSources.tisSchedule = {
           state: schedule.now || schedule.next || schedule.tomorrowMorning ? "provided" : "missing",

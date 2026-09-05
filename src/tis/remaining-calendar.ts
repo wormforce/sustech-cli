@@ -4,7 +4,8 @@ import { copyFile, link, lstat, open, rename, rm, stat } from "node:fs/promises"
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { CliError } from "../core/errors.js";
 import { assertPathAndParentsAreNotSymlinks } from "../core/local-store.js";
-import type { Holiday } from "../calendar/types.js";
+import type { CalendarTerm } from "../calendar/client.js";
+import type { CompensatoryDay, Holiday, WeekdayName } from "../calendar/types.js";
 import type { ExamRecord, PersonalScheduleEntry } from "./types.js";
 import { addUtcDays, parseIsoDate, toIsoDate } from "./remaining-shared.js";
 
@@ -25,6 +26,9 @@ export interface IcsOccurrence {
   day: number;
   periodStart: number;
   periodEnd: number;
+  isCompensatory?: true;
+  sourceDate?: string;
+  sourceWeekday?: WeekdayName;
 }
 
 export interface IcsEvent {
@@ -67,7 +71,21 @@ export interface TeachingPeriodWindow {
 }
 
 const CHINA_OFFSET_MINUTES = 8 * 60;
+const CURRENT_PERIOD_SCHEDULE_START = "2026-09-07";
 export const PERIOD_START_TIMES: Readonly<Record<number, [number, number]>> = {
+  1: [8, 0],
+  2: [9, 0],
+  3: [10, 20],
+  4: [11, 20],
+  5: [14, 0],
+  6: [15, 0],
+  7: [16, 20],
+  8: [17, 20],
+  9: [19, 0],
+  10: [20, 0],
+  11: [21, 0],
+};
+const LEGACY_PERIOD_START_TIMES: Readonly<Record<number, [number, number]>> = {
   1: [8, 0],
   2: [9, 0],
   3: [10, 20],
@@ -107,47 +125,134 @@ export function weekOneMondayFromAnchor(anchor: IcsAnchor): string {
 export function scheduleOccurrences(
   entries: readonly PersonalScheduleEntry[],
   anchor: IcsAnchor,
+  calendarTerm?: CalendarTerm,
 ): IcsOccurrence[] {
+  return resolveScheduleOccurrences(entries, anchor, calendarTerm).map(({ entry: _entry, ...occurrence }) => occurrence);
+}
+
+interface ResolvedScheduleOccurrence extends IcsOccurrence {
+  entry: PersonalScheduleEntry;
+}
+
+function resolveScheduleOccurrences(
+  entries: readonly PersonalScheduleEntry[],
+  anchor: IcsAnchor,
+  calendarTerm?: CalendarTerm,
+): ResolvedScheduleOccurrence[] {
   const weekOneMonday = parseIsoDate(weekOneMondayFromAnchor(anchor));
-  const occurrences: IcsOccurrence[] = [];
+  const occurrences: ResolvedScheduleOccurrence[] = [];
 
   for (const entry of entries) {
     if (entry.day === undefined || entry.periodStart === undefined || entry.periodEnd === undefined) continue;
     for (const week of [...entry.weeks].sort((left, right) => left - right)) {
       const date = addUtcDays(weekOneMonday, (week - 1) * 7 + (entry.day - 1));
-      const start = periodStartUtc(date, entry.periodStart);
-      const end = periodEndUtc(date, entry.periodEnd);
-      const summary = [entry.courseCode, entry.courseName].filter(Boolean).join(" ").trim() || entry.courseName || entry.courseCode || "SUSTech Class";
-      const description = [entry.teacher, entry.description, `Week ${week}`].filter(Boolean).join(" | ");
-      occurrences.push({
-        uid: `${entry.rwh || entry.key || summary}-${toIsoDate(date)}-p${entry.periodStart}@sustech-cli`,
-        summary,
-        location: entry.room || undefined,
-        description,
-        startUtc: start,
-        endUtc: end,
-        date: toIsoDate(date),
-        week,
-        day: entry.day,
-        periodStart: entry.periodStart,
-        periodEnd: entry.periodEnd,
-      });
+      const dateText = toIsoDate(date);
+      if (calendarTerm && !regularClassRunsOn(calendarTerm, dateText)) continue;
+      occurrences.push(resolveOccurrence(entry, dateText, week));
+    }
+  }
+
+  if (calendarTerm) {
+    for (const compensatory of calendarTerm.snapshot.compensatories) {
+      const target = compensatoryTarget(calendarTerm, compensatory);
+      if (!target) continue;
+      const sourceDay = weekdayNumber(compensatory.workday);
+      for (const entry of entries) {
+        if (
+          entry.day !== sourceDay
+          || entry.periodStart === undefined
+          || entry.periodEnd === undefined
+          || !entry.weeks.includes(target.week)
+        ) continue;
+        occurrences.push(resolveOccurrence(entry, compensatory.date, target.week, {
+          sourceDate: target.date,
+          sourceWeekday: compensatory.workday,
+        }));
+      }
     }
   }
 
   return occurrences.sort((left, right) => left.startUtc.localeCompare(right.startUtc) || left.uid.localeCompare(right.uid));
 }
 
+function resolveOccurrence(
+  entry: PersonalScheduleEntry,
+  date: string,
+  week: number,
+  makeup?: { sourceDate: string; sourceWeekday: WeekdayName },
+): ResolvedScheduleOccurrence {
+  const parsedDate = parseIsoDate(date);
+  const summary = [entry.courseCode, entry.courseName].filter(Boolean).join(" ").trim()
+    || entry.courseName
+    || entry.courseCode
+    || "SUSTech Class";
+  const makeupDescription = makeup
+    ? `Makeup for ${makeup.sourceWeekday} ${makeup.sourceDate}`
+    : "";
+  return {
+    entry,
+    uid: `${entry.rwh || entry.key || summary}-${date}-p${entry.periodStart}@sustech-cli`,
+    summary,
+    location: entry.room || undefined,
+    description: [entry.teacher, entry.description, `Week ${week}`, makeupDescription].filter(Boolean).join(" | "),
+    startUtc: periodStartUtc(parsedDate, entry.periodStart!),
+    endUtc: periodEndUtc(parsedDate, entry.periodEnd!),
+    date,
+    week,
+    day: entry.day!,
+    periodStart: entry.periodStart!,
+    periodEnd: entry.periodEnd!,
+    ...(makeup ? {
+      isCompensatory: true as const,
+      sourceDate: makeup.sourceDate,
+      sourceWeekday: makeup.sourceWeekday,
+    } : {}),
+  };
+}
+
+function regularClassRunsOn(term: CalendarTerm, date: string): boolean {
+  const day = term.day(date);
+  return date >= term.snapshot.teachingStart
+    && date <= term.snapshot.teachingEnd
+    && !day.flags.isHoliday
+    && !day.flags.isExtraBreak
+    && !day.flags.isFinal;
+}
+
+function compensatoryTarget(
+  term: CalendarTerm,
+  compensatory: CompensatoryDay,
+): { week: number; date: string } | undefined {
+  const parity = compensatory.weekType === "odd" ? 1 : 0;
+  const compensatoryDate = parseIsoDate(compensatory.date);
+  return Array.from({ length: term.snapshot.totalTeachingWeeks }, (_, index) => index + 1)
+    .filter((week) => week % 2 === parity)
+    .map((week) => ({ week, date: term.dateOf(week, compensatory.workday) }))
+    .filter((candidate) => !regularClassRunsOn(term, candidate.date))
+    .sort((left, right) => (
+      Math.abs(parseIsoDate(left.date).getTime() - compensatoryDate.getTime())
+      - Math.abs(parseIsoDate(right.date).getTime() - compensatoryDate.getTime())
+    ))[0];
+}
+
+function weekdayNumber(weekday: WeekdayName): number {
+  return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].indexOf(weekday) + 1;
+}
+
 export function buildScheduleIcs(
   entries: readonly PersonalScheduleEntry[],
   anchor: IcsAnchor,
-  options: { calendarName?: string; nowUtc?: Date } = {},
+  options: { calendarName?: string; nowUtc?: Date; calendarTerm?: CalendarTerm } = {},
 ): string {
-  return buildIcsContent(scheduleIcsEvents(entries, anchor), options);
+  return buildIcsContent(scheduleIcsEvents(entries, anchor, options.calendarTerm), options);
 }
 
-export function scheduleIcsEvents(entries: readonly PersonalScheduleEntry[], anchor: IcsAnchor): IcsEvent[] {
-  return scheduleOccurrences(entries, anchor).map((event) => ({
+export function scheduleIcsEvents(
+  entries: readonly PersonalScheduleEntry[],
+  anchor: IcsAnchor,
+  calendarTerm?: CalendarTerm,
+): IcsEvent[] {
+  return scheduleOccurrences(entries, anchor, calendarTerm).map((event) => ({
     uid: event.uid,
     summary: event.summary,
     description: event.description,
@@ -277,39 +382,47 @@ export function parseShenzhenExamTimeRange(date: string, time: string): { startU
 
 export function summariseCurrentOrNextClass(
   entries: readonly PersonalScheduleEntry[],
-  options: { currentWeek: number; now: Date },
+  options: { currentWeek: number; now: Date; calendarTerm?: CalendarTerm },
 ): ScheduleReminderSummary {
+  if (options.calendarTerm) {
+    return summariseCalendarAdjustedClasses(entries, options.now, options.calendarTerm);
+  }
+
   const clock = shenzhenWallClock(options.now);
   const currentMinute = clock.hour * 60 + clock.minute;
-  let active: PersonalScheduleEntry | undefined;
-  let next: { entry: PersonalScheduleEntry; week: number; dayOffset: number; startMinutes: number } | undefined;
+  let active: { entry: PersonalScheduleEntry; week: number; date: string } | undefined;
+  let next: { entry: PersonalScheduleEntry; week: number; dayOffset: number; startMinutes: number; date: string } | undefined;
 
   for (const entry of entries) {
     if (entry.day === undefined || entry.periodStart === undefined || entry.periodEnd === undefined) continue;
-    const startSlot = PERIOD_START_TIMES[entry.periodStart];
-    const endSlot = PERIOD_START_TIMES[entry.periodEnd];
-    if (!startSlot || !endSlot) continue;
-    const startMinutes = startSlot[0] * 60 + startSlot[1];
-    const endMinutes = endSlot[0] * 60 + endSlot[1] + PERIOD_DURATION_MINUTES;
     for (const week of [...entry.weeks].sort((left, right) => left - right)) {
       if (week < options.currentWeek) continue;
       const dayOffset = (week - options.currentWeek) * 7 + (entry.day - clock.weekday);
       if (dayOffset < 0) continue;
+      const date = toIsoDate(addUtcDays(parseIsoDate(clock.date), dayOffset));
+      const periods = periodStartTimesForDate(date);
+      const startSlot = periods[entry.periodStart];
+      const endSlot = periods[entry.periodEnd];
+      if (!startSlot || !endSlot) continue;
+      const startMinutes = startSlot[0] * 60 + startSlot[1];
+      const endMinutes = endSlot[0] * 60 + endSlot[1] + PERIOD_DURATION_MINUTES;
       if (dayOffset === 0 && startMinutes <= currentMinute && currentMinute < endMinutes) {
-        if (!active || startMinutes < periodStartMinutes(active.periodStart ?? 99)) active = entry;
+        if (!active || startMinutes < periodStartMinutes(active.entry.periodStart ?? 99, active.date)) {
+          active = { entry, week, date };
+        }
         continue;
       }
       if (dayOffset === 0 && startMinutes <= currentMinute) continue;
       if (!next || dayOffset < next.dayOffset || (dayOffset === next.dayOffset && startMinutes < next.startMinutes)) {
-        next = { entry, week, dayOffset, startMinutes };
+        next = { entry, week, dayOffset, startMinutes, date };
       }
       break;
     }
   }
 
-  if (active) return { now: formatScheduleEntryLabel(active, options.currentWeek) };
+  if (active) return { now: formatScheduleEntryLabel(active.entry, active.week, active.date) };
   if (next) {
-    const detail = formatUpcomingScheduleEntryDetail(next.entry, next.week, next.dayOffset);
+    const detail = formatUpcomingScheduleEntryDetail(next.entry, next.week, next.dayOffset, next.date);
     return {
       next: formatScheduleEntryTitle(next.entry),
       nextDetail: detail,
@@ -317,6 +430,44 @@ export function summariseCurrentOrNextClass(
     };
   }
   return {};
+}
+
+function summariseCalendarAdjustedClasses(
+  entries: readonly PersonalScheduleEntry[],
+  now: Date,
+  calendarTerm: CalendarTerm,
+): ScheduleReminderSummary {
+  const clock = shenzhenWallClock(now);
+  const nowStamp = formatUtc(now);
+  const occurrences = resolveScheduleOccurrences(
+    entries,
+    { teachingStartDate: calendarTerm.snapshot.teachingStart },
+    calendarTerm,
+  );
+  const active = occurrences.find((occurrence) => occurrence.startUtc <= nowStamp && nowStamp < occurrence.endUtc);
+  if (active) {
+    return {
+      now: formatScheduleEntryLabel(active.entry, active.week, active.date, active.sourceWeekday),
+    };
+  }
+
+  const next = occurrences.find((occurrence) => occurrence.startUtc > nowStamp);
+  if (!next) return {};
+  const dayOffset = Math.round(
+    (parseIsoDate(next.date).getTime() - parseIsoDate(clock.date).getTime()) / (24 * 60 * 60 * 1000),
+  );
+  const detail = formatUpcomingScheduleEntryDetail(
+    next.entry,
+    next.week,
+    dayOffset,
+    next.date,
+    next.sourceWeekday,
+  );
+  return {
+    next: formatScheduleEntryTitle(next.entry),
+    nextDetail: detail,
+    ...(dayOffset === 1 ? { tomorrowMorning: `${formatScheduleEntryTitle(next.entry)} — ${detail}` } : {}),
+  };
 }
 
 export function nearestUpcomingExam(
@@ -407,13 +558,14 @@ export function teachingPeriodAtShenzhenTime(value: Date): TeachingPeriodWindow 
   const wallClockDate = new Date(Date.UTC(year, month - 1, day));
   const weekday = wallClockDate.getUTCDay() === 0 ? 7 : wallClockDate.getUTCDay();
   const minutesSinceMidnight = hour * 60 + minute;
-  for (const [periodText, [startHour, startMinute]] of Object.entries(PERIOD_START_TIMES)) {
+  const date = `${partValue(parts, "year")}-${partValue(parts, "month")}-${partValue(parts, "day")}`;
+  for (const [periodText, [startHour, startMinute]] of Object.entries(periodStartTimesForDate(date))) {
     const periodStart = Number(periodText);
     const startTotal = startHour * 60 + startMinute;
     const endTotal = startTotal + PERIOD_DURATION_MINUTES;
     if (minutesSinceMidnight < startTotal || minutesSinceMidnight >= endTotal) continue;
     return {
-      date: `${partValue(parts, "year")}-${partValue(parts, "month")}-${partValue(parts, "day")}`,
+      date,
       time: `${partValue(parts, "hour")}:${partValue(parts, "minute")}`,
       weekday,
       periodStart,
@@ -425,13 +577,13 @@ export function teachingPeriodAtShenzhenTime(value: Date): TeachingPeriodWindow 
 }
 
 function periodStartUtc(date: Date, period: number): string {
-  const slot = PERIOD_START_TIMES[period];
+  const slot = periodStartTimesForDate(toIsoDate(date))[period];
   if (!slot) throw new CliError("ICS export encountered an unsupported class period.", "UNSUPPORTED_PERIOD", 2, { period });
   return formatUtc(new Date(chinaLocalUtcMillis(date, slot[0], slot[1])));
 }
 
 function periodEndUtc(date: Date, period: number): string {
-  const slot = PERIOD_START_TIMES[period];
+  const slot = periodStartTimesForDate(toIsoDate(date))[period];
   if (!slot) throw new CliError("ICS export encountered an unsupported class period.", "UNSUPPORTED_PERIOD", 2, { period });
   return formatUtc(new Date(chinaLocalUtcMillis(date, slot[0], slot[1]) + PERIOD_DURATION_MINUTES * 60 * 1000));
 }
@@ -503,20 +655,34 @@ function formatScheduleEntryTitle(entry: PersonalScheduleEntry): string {
   return [entry.courseCode, entry.courseName || entry.description || entry.descriptionEn || "Unnamed course"].filter(Boolean).join(" ").trim();
 }
 
-function formatScheduleEntryLabel(entry: PersonalScheduleEntry, currentWeek: number): string {
-  return `${formatScheduleEntryTitle(entry)} — ${formatUpcomingScheduleEntryDetail(entry, currentWeek, 0)}`;
+function formatScheduleEntryLabel(
+  entry: PersonalScheduleEntry,
+  currentWeek: number,
+  date: string,
+  sourceWeekday?: WeekdayName,
+): string {
+  return `${formatScheduleEntryTitle(entry)} — ${formatUpcomingScheduleEntryDetail(entry, currentWeek, 0, date, sourceWeekday)}`;
 }
 
-function formatUpcomingScheduleEntryDetail(entry: PersonalScheduleEntry, week: number, dayOffset: number): string {
-  const start = PERIOD_START_TIMES[entry.periodStart ?? 0];
-  const end = PERIOD_START_TIMES[entry.periodEnd ?? 0];
+function formatUpcomingScheduleEntryDetail(
+  entry: PersonalScheduleEntry,
+  week: number,
+  dayOffset: number,
+  date: string,
+  sourceWeekday?: WeekdayName,
+): string {
+  const periods = periodStartTimesForDate(date);
+  const start = periods[entry.periodStart ?? 0];
+  const end = periods[entry.periodEnd ?? 0];
   const startText = start ? `${String(start[0]).padStart(2, "0")}:${String(start[1]).padStart(2, "0")}` : `P${entry.periodStart ?? "?"}`;
   const endTotal = end ? end[0] * 60 + end[1] + PERIOD_DURATION_MINUTES : undefined;
   const endText = endTotal === undefined ? `P${entry.periodEnd ?? "?"}` : formatPeriodEnd(endTotal);
-  const weekdayLabel = weekdayName(entry.day ?? 0);
+  const parsedDate = parseIsoDate(date);
+  const actualWeekday = parsedDate.getUTCDay() === 0 ? 7 : parsedDate.getUTCDay();
+  const weekdayLabel = weekdayName(actualWeekday);
   const dayLabel = dayOffset === 0 ? "today" : dayOffset === 1 ? "tomorrow" : `week ${week} ${weekdayLabel}`;
   return [
-    dayLabel,
+    `${dayLabel}${sourceWeekday ? ` (makeup for ${sourceWeekday})` : ""}`,
     `${startText}-${endText}`,
     entry.room,
     entry.teacher,
@@ -527,9 +693,13 @@ function weekdayName(day: number): string {
   return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][day - 1] ?? `day ${day}`;
 }
 
-function periodStartMinutes(period: number): number {
-  const slot = PERIOD_START_TIMES[period];
+function periodStartMinutes(period: number, date: string): number {
+  const slot = periodStartTimesForDate(date)[period];
   return slot ? slot[0] * 60 + slot[1] : Number.POSITIVE_INFINITY;
+}
+
+function periodStartTimesForDate(date: string): Readonly<Record<number, [number, number]>> {
+  return date >= CURRENT_PERIOD_SCHEDULE_START ? PERIOD_START_TIMES : LEGACY_PERIOD_START_TIMES;
 }
 
 async function inspectIcsDestination(destination: string, overwrite: boolean): Promise<{ destination: string; existed: boolean }> {

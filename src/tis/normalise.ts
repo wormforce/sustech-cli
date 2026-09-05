@@ -198,7 +198,7 @@ function firstString(record: Record<string, unknown>, keys: string[]): string {
 
 function bitmapWeeks(bitmap: string): number[] {
   return [...bitmap]
-    .map((enabled, index) => enabled === "1" ? index + 1 : undefined)
+    .map((enabled, index) => enabled === "1" && index > 0 ? index : undefined)
     .filter((week): week is number => week !== undefined);
 }
 
