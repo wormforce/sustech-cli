@@ -89,3 +89,40 @@ class FakeBlackboardRuntime implements BlackboardBrowserRuntime {
     };
   }
 }
+
+test("browser redirects are validated before sending another authenticated request", async () => {
+  for (const target of ["https://evil.example/steal", "https://cas.sustech.edu.cn/cas/login", "https://user:secret@bb.sustech.edu.cn/read"]) {
+    let requests = 0;
+    const adapter = await createBlackboardBrowserAdapter({}, new FakeBlackboardRuntime({
+      cookies: [{ name: "session", value: "synthetic", domain: "bb.sustech.edu.cn", path: "/", secure: true }],
+    }), async (_input, init) => {
+      requests++;
+      assert.equal(init?.redirect, "manual");
+      return new Response(null, { status: 302, headers: { location: target } });
+    });
+    await assert.rejects(adapter.fetch("https://bb.sustech.edu.cn/read"), {
+      code: target.includes("cas.sustech") ? "SERVICE_SESSION_EXPIRED" : "UNSAFE_SERVICE_URL",
+    });
+    assert.equal(requests, 1);
+  }
+});
+
+test("browser follows same-origin redirects while enforcing cookie path and expiration", async () => {
+  const requests: string[] = [];
+  const adapter = await createBlackboardBrowserAdapter({}, new FakeBlackboardRuntime({
+    cookies: [
+      { name: "session", value: "synthetic", domain: "bb.sustech.edu.cn", path: "/", secure: true },
+      { name: "expired", value: "old", domain: "bb.sustech.edu.cn", path: "/", secure: true, expires: 1 },
+      { name: "narrow", value: "private", domain: "bb.sustech.edu.cn", path: "/read", secure: true },
+    ],
+  }), async (input, init) => {
+    requests.push(String(input));
+    const cookie = new Headers(init?.headers).get("cookie") ?? "";
+    assert.doesNotMatch(cookie, /expired/);
+    if (requests.length === 1) return new Response(null, { status: 302, headers: { location: "/reader" } });
+    assert.doesNotMatch(cookie, /narrow/);
+    return new Response("ok");
+  });
+  assert.equal(await (await adapter.fetch("https://bb.sustech.edu.cn/read")).text(), "ok");
+  assert.deepEqual(requests, ["https://bb.sustech.edu.cn/read", "https://bb.sustech.edu.cn/reader"]);
+});

@@ -39,7 +39,7 @@ export async function loadWeatherSummary(
 export async function fetchContextWeather(
   adapter: ServiceAdapter = createFetchAdapter(),
 ): Promise<WeatherSummary | null> {
-  const raw = await fetchJson<unknown>(adapter, "https://api.sustech.online/weather");
+  const raw = await fetchJson<unknown>(adapter, "https://api.sustech.online/weather", { signal: AbortSignal.timeout(8000) });
   return normaliseContextWeather(raw);
 }
 
@@ -82,14 +82,14 @@ export async function fetchContextAirQuality(
       "ozone",
     ],
     timezone: "Asia/Shanghai",
-  }));
+  }), { signal: AbortSignal.timeout(8000) });
   return normaliseContextAirQuality(raw);
 }
 
 export async function fetchContextLibraryStatus(
   adapter: ServiceAdapter = createFetchAdapter(),
 ): Promise<string | null> {
-  const html = await fetchText(adapter, "https://lib.sustech.edu.cn/");
+  const html = await fetchText(adapter, "https://lib.sustech.edu.cn/", { signal: AbortSignal.timeout(8000) });
   return parseContextLibraryStatus(html);
 }
 
@@ -184,6 +184,8 @@ export function normaliseContextWeather(raw: unknown): WeatherSummary | null {
   const temp = /气温\s*(-?\d+(?:\.\d+)?)\s*℃/.exec(text);
   const feelsLike = /体感\s*(-?\d+(?:\.\d+)?)\s*℃/.exec(text);
   return {
+    source: "https://api.sustech.online/weather",
+    ...observationTime(recordValue(raw).update_time),
     condition,
     ...(temp ? { tempC: Math.round(Number(temp[1])) } : {}),
     ...(feelsLike ? { feelsLikeC: Math.round(Number(feelsLike[1])) } : {}),
@@ -195,12 +197,22 @@ export function normaliseContextAirQuality(raw: unknown): AirQualitySummary | nu
   const aqi = optionalNumber(current.us_aqi);
   if (aqi === undefined) return null;
   return {
+    standard: "US EPA",
+    source: "https://air-quality-api.open-meteo.com",
+    ...observationTime(current.time),
     aqi,
     level: aqiLevel(aqi),
     pm25: optionalNumber(current.pm2_5),
     pm10: optionalNumber(current.pm10),
     ozone: optionalNumber(current.ozone),
   };
+}
+
+function observationTime(value: unknown): { observedAt?: string } {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) return {};
+  const normalized = value.replace(" ", "T");
+  const timestamp = new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : `${normalized}+08:00`);
+  return Number.isNaN(timestamp.getTime()) ? {} : { observedAt: timestamp.toISOString() };
 }
 
 export function parseContextLibraryStatus(html: string): string | null {

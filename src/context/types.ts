@@ -2,13 +2,29 @@ import type { AcademicCalendar } from "../calendar/client.js";
 import type { CalendarDayInfo } from "../calendar/types.js";
 
 export type ContextLevel = "terse" | "normal" | "verbose";
-export type SourceState = "provided" | "derived" | "missing";
+export type SourceState = "provided" | "derived" | "empty" | "missing";
+
+export interface ContextClass {
+  name: string;
+  startAt: string;
+  endAt: string;
+  location?: string;
+  week: number;
+  periodStart: number;
+  periodEnd: number;
+  status: "completed" | "in-progress" | "upcoming";
+  makeupFor?: string;
+}
 
 export interface ScheduleReminder {
   now?: string;
   next?: string;
   nextDetail?: string;
   tomorrowMorning?: string;
+  currentClass?: ContextClass;
+  nextClass?: ContextClass;
+  todayClasses?: ContextClass[];
+  omissionCount?: number;
 }
 
 export interface DeadlineSummary {
@@ -43,6 +59,9 @@ export interface ExamSummary {
 }
 
 export interface WeatherSummary {
+  source?: string;
+  observedAt?: string;
+  freshness?: "fresh" | "stale" | "unknown";
   condition: string;
   icon?: string;
   tempC?: number;
@@ -53,6 +72,10 @@ export interface WeatherSummary {
 }
 
 export interface AirQualitySummary {
+  standard?: "US EPA";
+  source?: string;
+  observedAt?: string;
+  freshness?: "fresh" | "stale" | "unknown";
   aqi: number;
   level?: string;
   pm25?: number;
@@ -62,6 +85,7 @@ export interface AirQualitySummary {
 
 export interface ContextInput {
   now?: Date | string;
+  generatedAt?: Date;
   calendar?: AcademicCalendar;
   academicDay?: CalendarDayInfo;
   schedule?: ScheduleReminder;
@@ -89,6 +113,8 @@ export interface ContextSourceStatus {
 export interface ContextSnapshot {
   level: ContextLevel;
   generatedAt: string;
+  referenceAt: string;
+  timezone: "Asia/Shanghai";
   date: string;
   time: string;
   weekday: string;
@@ -96,6 +122,8 @@ export interface ContextSnapshot {
   label?: string;
   phase?: string;
   holiday?: string;
+  academicDay?: CalendarDayInfo;
+  weekParity?: "odd" | "even";
   schedule: ScheduleReminder;
   nextDeadline?: DeadlineSummary | null;
   recentAnnouncement?: AnnouncementSummary | null;

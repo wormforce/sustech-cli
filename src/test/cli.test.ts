@@ -18,7 +18,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
   const text = run(["version"]);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /:\*##: :#######:/);
-  assert.match(text.stdout, /sustech-cli 0\.10\.0/);
+  assert.match(text.stdout, /sustech-cli 0\.11\.0/);
   assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
@@ -27,7 +27,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.10.0", runtime: `node ${process.version}` },
+    data: { version: "0.11.0", runtime: `node ${process.version}` },
   });
 });
 
@@ -1413,10 +1413,31 @@ test("selection and bid apply require --confirm before any credential lookup or 
   assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
-test("context live supports calendar level and degrades gracefully when credentials are unavailable", () => {
-  const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"]);
+test("selection reconciliation is bounded, read-only, and validates locally before credentials", () => {
+  const invalid = runWithoutCredentials([
+    "tis", "selection", "reconcile", "cart.add",
+    "--course-id", "selection-id",
+    "--rwh", "task-id",
+    "--round", "bxxk",
+    "--attempts", "1",
+    "--json",
+  ]);
+  assert.equal(invalid.status, 2);
+  assert.equal(JSON.parse(invalid.stdout).error.code, "USAGE");
+
+  const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities;
+  const reconcile = capabilities.find((entry: { command:string }) => entry.command === "tis selection reconcile");
+  assert.equal(reconcile.kind, "read");
+  assert.equal(reconcile.confirmation, "none");
+});
+
+test("context live degrades gracefully when public sources and credentials are unavailable", () => {
+  const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"], { offline: true });
   assert.equal(result.status, 0);
   const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.data.calendarSource.state, "error");
+  assert.equal(envelope.data.liveSources.weather.state, "error");
+  assert.equal(envelope.data.liveSources.airQuality.state, "error");
   assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
   assert.equal(envelope.data.sourceStatus.recentAnnouncement, "missing");
   assert.equal(envelope.data.sourceStatus.schedule, "missing");
@@ -1425,6 +1446,12 @@ test("context live supports calendar level and degrades gracefully when credenti
   assert.equal(envelope.data.liveSources.tisExams.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardAnnouncements.state, "credentials-missing");
+});
+
+test("context rejects mixing live observations with a historical date before accessing sources", () => {
+  const result = runWithoutCredentials(["context", "--date", "2020-01-01", "--live", "--json"]);
+  assert.equal(result.status, 2);
+  assert.match(JSON.parse(result.stdout).error.message, /only available for today's date/);
 });
 
 test("profile commands remain machine-readable when credentials are unavailable", () => {
@@ -1526,10 +1553,16 @@ function run(args: string[]): { status: number | null; stdout: string; stderr: s
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-function runWithoutCredentials(args: string[]): { status: number | null; stdout: string; stderr: string } {
+function runWithoutCredentials(args: string[], options: { offline?: boolean } = {}): { status: number | null; stdout: string; stderr: string } {
   const configRoot = mkdtempSync(join(tmpdir(), "sustech-cli-empty-config-"));
   try {
-    const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+    const imports: string[] = [];
+    if (options.offline) {
+      const fixturePath = join(configRoot, "offline.mjs");
+      writeFileSync(fixturePath, 'globalThis.fetch = async () => { throw new Error("Synthetic public source outage"); };');
+      imports.push("--import", fixturePath);
+    }
+    const result = spawnSync(process.execPath, [...imports, CLI_PATH, ...args], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -1539,6 +1572,7 @@ function runWithoutCredentials(args: string[]): { status: number | null; stdout:
         SUSTECH_DISABLE_SYSTEM_KEYRING: "1",
         SUSTECH_PROFILE: "",
         XDG_CONFIG_HOME: configRoot,
+        ...(options.offline ? { XDG_CACHE_HOME: join(configRoot, "cache") } : {}),
       },
     });
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };

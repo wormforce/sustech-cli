@@ -17,8 +17,12 @@ import {
 } from "../services/library.js";
 import { getNcesCourseDetail, pickBestNcesSection, searchNces, tisToNcesTerm } from "../services/nces.js";
 import { resolveOpenAccess, searchCrossref } from "../services/papers.js";
-import { ServiceError } from "../services/base.js";
+import { ServiceError, decodeHtml } from "../services/base.js";
 import type { ServiceAdapter } from "../services/base.js";
+
+test("HTML decoding preserves invalid Unicode entities instead of crashing public reads", () => {
+  assert.equal(decodeHtml("&#65; &#x1F600; &#99999999; &#x110000;"), "A 😀 &#99999999; &#x110000;");
+});
 
 test("service errors redact authentication tokens from diagnostic URLs", () => {
   const error = new ServiceError("failed", {

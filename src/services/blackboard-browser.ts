@@ -54,7 +54,7 @@ export async function createBlackboardBrowserAdapter(
   return {
     name: "bb-browser",
     async fetch(input: string, init: RequestInit = {}): Promise<Response> {
-      const url = safeBlackboardRequestUrl(String(input));
+      let url = safeBlackboardRequestUrl(String(input));
       const method = (init.method ?? "GET").toUpperCase();
       if (method !== "GET" || init.body !== undefined) {
         throw new CliError(
@@ -84,13 +84,29 @@ export async function createBlackboardBrowserAdapter(
       headers.set("cookie", cookie);
       let response: Response;
       try {
-        response = await fetchImpl(url.toString(), {
-          ...init,
-          method: "GET",
-          body: undefined,
-          headers,
-        });
+        const signal = init.signal ?? AbortSignal.timeout(DEFAULT_RENDER_TIMEOUT_MS);
+        for (let redirects = 0; ; redirects += 1) {
+          const scopedCookie = cookieHeader(url, session.cookies);
+          if (!scopedCookie) throw new CliError("The browser session has no valid cookie for the redirect target.", "SERVICE_SESSION_EXPIRED", 1);
+          headers.set("cookie", scopedCookie);
+          response = await fetchImpl(url.toString(), {
+            ...init,
+            method: "GET",
+            body: undefined,
+            headers,
+            signal,
+            redirect: "manual",
+          });
+          if (![301, 302, 303, 307, 308].includes(response.status)) break;
+          const location = response.headers.get("location");
+          await response.body?.cancel();
+          if (!location || redirects >= 5) throw new CliError("Blackboard returned an invalid or excessive redirect chain.", "UNSAFE_SERVICE_URL", 1);
+          const target = new URL(location, url);
+          if (isCasPage(target.toString())) throw new CliError("The Blackboard browser session expired. Re-run with --browser --interactive.", "SERVICE_SESSION_EXPIRED", 1);
+          url = safeBlackboardRequestUrl(target.toString());
+        }
       } catch (error) {
+        if (error instanceof CliError) throw error;
         throw new CliError(
           "The browser-backed Blackboard request could not be completed.",
           "BROWSER_NETWORK_ERROR",
@@ -285,7 +301,7 @@ function safeBlackboardRequestUrl(input: string): URL {
   } catch {
     throw new CliError("Blackboard browser-backed request URL was invalid.", "UNSAFE_SERVICE_URL", 1);
   }
-  if (url.protocol !== "https:" || url.origin !== BLACKBOARD_BASE) {
+  if (url.protocol !== "https:" || url.origin !== BLACKBOARD_BASE || url.username || url.password) {
     throw new CliError("A browser-backed Blackboard request attempted to leave its configured origin.", "UNSAFE_SERVICE_URL", 1, {
       host: url.hostname,
       path: url.pathname,
@@ -297,7 +313,11 @@ function safeBlackboardRequestUrl(input: string): URL {
 function cookieHeader(url: URL, cookies: readonly BlackboardBrowserCookie[]): string | undefined {
   const values = cookies
     .filter((cookie) => domainMatches(url.hostname, cookie.domain))
-    .filter((cookie) => url.pathname.startsWith(cookie.path || "/"))
+    .filter((cookie) => cookie.expires === undefined || cookie.expires <= 0 || cookie.expires > Date.now() / 1000)
+    .filter((cookie) => {
+      const path = cookie.path || "/";
+      return url.pathname === path || url.pathname.startsWith(path.endsWith("/") ? path : `${path}/`);
+    })
     .map((cookie) => `${cookie.name}=${cookie.value}`);
   return values.length > 0 ? values.join("; ") : undefined;
 }

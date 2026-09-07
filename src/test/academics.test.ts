@@ -52,7 +52,7 @@ test("academic records are normalized into stable Agent-facing fields", () => {
     ZC: "011010",
   });
   assert.equal(schedule.day, 2);
-  assert.deepEqual(schedule.weeks, [2, 3, 5]);
+  assert.deepEqual(schedule.weeks, [1, 2, 4]);
 
   const fallback = normalisePersonalScheduleEntry({
     KEY: "xq5_jc9",
@@ -63,6 +63,7 @@ test("academic records are normalized into stable Agent-facing fields", () => {
   assert.equal(fallback.courseName, "写作课");
   assert.equal(fallback.periodStart, 9);
   assert.equal(fallback.periodEnd, 9);
+  assert.deepEqual(fallback.weeks, []);
 });
 
 test("GPA summaries use credit-weighted SUSTech grade points", () => {

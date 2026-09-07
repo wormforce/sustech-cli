@@ -139,11 +139,11 @@ export function decodeHtml(value: string): string {
     .replace(/&#39;/gi, "'")
     .replace(/&#x([0-9a-f]+);/giu, (_, rawHex: string) => {
       const codePoint = Number.parseInt(rawHex, 16);
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _;
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : _;
     })
     .replace(/&#([0-9]+);/gu, (_, rawDecimal: string) => {
       const codePoint = Number.parseInt(rawDecimal, 10);
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _;
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : _;
     });
 }
 

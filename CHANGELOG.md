@@ -4,7 +4,17 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-07
+
 ### Added
+
+- Added Blackboard content trees, rosters, message and discussion reads,
+  submitted-file downloads, cross-course assignment/grade summaries, and
+  guarded preview/apply commands for messages, discussion posts/replies and
+  file or text assignment submissions. Remote writes remain fixture-tested
+  and require an exact reviewed payload plus explicit confirmation.
+- Added per-service authentication checks and ephemeral, manual Blackboard
+  browser authentication for read-only fallback workflows.
 
 - Expanded the public NCES integration with exact course-code resolution,
   teacher profiles, course rating statistics, filtered review pagination, and
@@ -17,11 +27,57 @@ All notable changes to `sustech-cli` are documented in this file.
   selected SUSTech Online service, study, transport, life, facility, and
   calendar guidance with source, freshness, and CC BY-SA metadata.
 
+- Added public `talks list` and `talks search` commands for official SUSTech
+  homepage lectures, showing upcoming events by default and all currently
+  displayed events with `--all`, with source metadata and text/JSON/JSONL output.
+
+- Added normalized lecture/lab selection bundles with explicit component,
+  credit-bearing, mutation-ID, task-RWH, and read-back contracts.
+- Added bounded `tis selection reconcile` reads for uncertain enrollment,
+  cart, drop, and bid outcomes.
+
 ### Changed
+
+- Daily context includes the latest visible Blackboard announcement while
+  retaining Shanghai timezone, empty/partial source states and public-source
+  failure handling.
 
 - NCES browse sorting now uses the upstream server-side sort, and NCES search
   supports typed course, teacher, and review result pages.
 - The local MCP surface now exposes `42` typed public/local read-only tools.
+
+- Made planning-oriented availability, enrollment, degree-progress, and
+  degree-missing JSON use documented minimum-data projections; grade-free
+  output is the default.
+
+- Refined `context` into a Shanghai-time daily snapshot with structured current,
+  next and today's classes, teaching-week parity and makeup details, explicit
+  empty/unavailable sources, and weather/AQI at normal detail level. Environmental
+  observations retain source timestamps and freshness; public source failures
+  no longer prevent a partial snapshot. Non-today live snapshots are rejected.
+
+### Fixed
+
+- Made the context outage regression deterministic with isolated offline
+  fixtures so ordinary CI no longer depends on the public calendar network.
+- Invalid numeric HTML entities no longer crash text normalization.
+
+- Corrected terminal-table alignment for Unicode Roman numerals, ellipses,
+  and combining characters, and kept grapheme clusters intact during truncation.
+- Made `auth status` use a metadata-only macOS Keychain lookup instead of
+  reading the stored password, and bounded credential-helper subprocesses to
+  five seconds with a structured `CREDENTIAL_STORE_TIMEOUT` status.
+- Linux Secret Service writes now require an immediate verified read-back and
+  report actionable locked-collection, D-Bus-session, and access-denied states.
+
+### Security
+
+- Browser-backed Blackboard reads validate every redirect before sending
+  cookies and enforce cookie expiration and path boundaries.
+
+- Selection transport ambiguity now returns an explicit non-retriable outcome
+  with a local correlation ID, while raw upstream mutation and personal
+  selection envelopes are excluded from default CLI output.
 
 ## [0.10.0] - 2026-08-29
 
