@@ -8,9 +8,14 @@ not require a campus account:
 sustech online talks list --since 2026-09-01 --limit 20
 sustech online talks search "artificial intelligence" --limit 10
 sustech online talks get 2026-07-30T10-00-00_François_Forget
+sustech online manual list --source service --limit 10
+sustech online manual get ID_OR_TITLE
 sustech online contact search "教学" --limit 10
 sustech online contact get teaching:教学工作部
 sustech online search "library" --section contact
+sustech online search "校园卡" --section manual --source service
+sustech online search "校园卡" --section manual
+sustech online search "宿舍" --section manual
 ```
 
 ## Authority and freshness
@@ -36,6 +41,35 @@ Use these records for discovery and convenience. Recheck time-sensitive talk
 details and important institutional contacts against the linked official page
 before acting.
 
+## Selected handbook scope
+
+The `manual` search section indexes selected stable guidance from six exact
+public pages: service, study, transport, life, facilities, and calendar. For
+service, study, transport, life, and facilities, the parser keeps an explicit
+heading-title allowlist instead of mirroring the complete site. The calendar
+source is narrower than a full mirror but broader than a title allowlist: it
+keeps level-2 sections from the dedicated calendar page. Manual search is
+opt-in with `--section manual`, so existing unscoped talk/contact search
+results keep their established record kinds. Useful
+examples include campus-card/student-ID basics, campus network and
+teaching systems, accommodation, transport, maps/buildings, study references,
+and calendar entries.
+
+When you want predictable handbook enumeration instead of free-text ranking,
+use `sustech online manual list` and `sustech online manual get`. They expose
+the same allowlisted corpus and derive deterministic handbook ids from each
+section path for follow-up reads and MCP callers. `online manual list` returns
+the limited record set plus `matchedTotal`, and `online search --section manual`
+returns `manualMatchedTotal`, so callers can distinguish returned hits from the
+full pre-limit match count. `online search --section manual` can also use the
+same `--source service|study|transport|life|facility|calendar` filter when you
+want free-text search within one handbook area.
+
+The manual corpus excludes medical/emergency guidance, tax and financial
+instructions, dining/chat and QQ-group lists, professor lists, and unofficial
+software activation. A manual hit is still community-maintained guidance; use
+its links to verify consequential details with the responsible official unit.
+
 ## Selected contact scope
 
 The contact parser is an allowlist, not a full mirror of the source page. It
@@ -57,7 +91,9 @@ The client fetches only the exact allowlisted Markdown files from the public
 `SUSTech-CRA/sustech-online-ng` repository and the matching rendered
 `sustech.online` page used for update metadata. Redirects are rejected, final
 origins and exact paths are checked, document size and timeout are bounded, and
-talk identifiers can resolve to only one file in the talks directory.
+talk identifiers can resolve to only one file in the talks directory. Manual
+reads are restricted to six exact repository files and their six matching site
+pages; final fetched URLs must match the allowlist target exactly.
 
 Returned institutional links are limited to `sustech.edu.cn` subdomains and
 the community site. Poster links are limited to those hosts plus the exact

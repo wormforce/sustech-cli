@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getBlackboardUser,
   listBlackboardAssignments,
   listBlackboardCourses,
   normaliseBlackboardContentItem,
@@ -20,7 +21,14 @@ import type { ServiceAdapter } from "../services/base.js";
 test("Blackboard adapter resolves enrolled courses and assignment metadata through REST endpoints", async () => {
   const adapter = routeAdapter((url) => {
     if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/users/me") {
-      return jsonResponse({ id: "_1_1", userName: "12200000", name: "Student Name" });
+      return jsonResponse({
+        id: "_1_1",
+        userName: "12200000",
+        name: {
+          given: "Student Name",
+          family: "Engineering",
+        },
+      });
     }
     if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/users/_1_1/courses") {
       return jsonResponse({
@@ -46,8 +54,7 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
       return jsonResponse({
         id: "_9000_1",
         name: "Algorithms",
-        courseCode: "CS208",
-        externalId: "CS208-2026",
+        courseId: "CS208-30003435-2025SP",
         availability: { available: "Yes" },
       });
     }
@@ -81,6 +88,13 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
     throw new Error(`Unexpected URL ${url}`);
   });
 
+  const user = await getBlackboardUser(adapter);
+  assert.deepEqual(user, {
+    id: "_1_1",
+    userName: "12200000",
+    displayName: "Student Name",
+  });
+
   const courses = await listBlackboardCourses(adapter);
   assert.deepEqual(courses, [
     {
@@ -97,7 +111,7 @@ test("Blackboard adapter resolves enrolled courses and assignment metadata throu
       numericId: "9000",
       name: "Algorithms",
       courseCode: "CS208",
-      externalId: "CS208-2026",
+      externalId: "CS208-30003435-2025SP",
       roleId: "Student",
       availability: "Yes",
     },

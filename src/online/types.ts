@@ -60,7 +60,7 @@ export interface OnlineContactRecord {
 }
 
 export interface OnlineSearchHit {
-  kind: "talk" | "contact";
+  kind: "talk" | "contact" | "manual";
   id: string;
   title: string;
   subtitle?: string;

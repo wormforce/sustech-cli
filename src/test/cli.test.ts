@@ -96,6 +96,274 @@ test("online commands are registered and reject unsafe IDs before network access
   const described = run(["describe", "online", "talks", "search", "--json"]);
   assert.equal(described.status, 0);
   assert.equal(JSON.parse(described.stdout).data.command, "online talks search");
+  const describedOnlineSearch = run(["describe", "online", "search", "--json"]);
+  assert.equal(describedOnlineSearch.status, 0);
+  assert.ok(JSON.parse(describedOnlineSearch.stdout).data.options.some((entry: { name: string }) => entry.name === "--source"));
+
+  const describedManualList = run(["describe", "online", "manual", "list", "--json"]);
+  assert.equal(describedManualList.status, 0);
+  assert.equal(JSON.parse(describedManualList.stdout).data.command, "online manual list");
+
+  const describedManualGet = run(["describe", "online", "manual", "get", "--json"]);
+  assert.equal(describedManualGet.status, 0);
+  assert.equal(JSON.parse(describedManualGet.stdout).data.command, "online manual get");
+
+  const invalidManualWindow = run(["online", "search", "校园卡", "--section", "manual", "--since", "2026-09-01", "--json"]);
+  assert.equal(invalidManualWindow.status, 2);
+  assert.equal(JSON.parse(invalidManualWindow.stdout).error.code, "USAGE");
+
+  const misplacedManualSource = run(["online", "search", "校园卡", "--source", "service", "--json"]);
+  assert.equal(misplacedManualSource.status, 2);
+  assert.equal(JSON.parse(misplacedManualSource.stdout).error.code, "USAGE");
+
+  const invalidManualSource = run(["online", "manual", "list", "--source", "unknown", "--json"]);
+  assert.equal(invalidManualSource.status, 2);
+  assert.equal(JSON.parse(invalidManualSource.stdout).error.code, "USAGE");
+});
+
+test("extended NCES and Blackboard announcement commands expose strict metadata and validate locally", () => {
+  const filterOptions = run(["describe", "nces", "filter-options", "--json"]);
+  assert.equal(filterOptions.status, 0);
+  assert.equal(JSON.parse(filterOptions.stdout).data.command, "nces filter-options");
+
+  const globalStats = run(["describe", "nces", "global-stats", "--json"]);
+  assert.equal(globalStats.status, 0);
+  assert.equal(JSON.parse(globalStats.stdout).data.command, "nces global-stats");
+
+  const described = run(["describe", "nces", "reviews", "--json"]);
+  assert.equal(described.status, 0);
+  const envelope = JSON.parse(described.stdout);
+  assert.equal(envelope.data.command, "nces reviews");
+  assert.equal(envelope.data.capability.kind, "read");
+  for (const option of ["--page", "--page-size", "--sort", "--term", "--rating"]) {
+    assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const browse = run(["describe", "nces", "browse", "--json"]);
+  assert.equal(browse.status, 0);
+  assert.ok(JSON.parse(browse.stdout).data.options.some((entry: { name: string }) => entry.name === "--offering-unit"));
+
+  const rankings = run(["describe", "nces", "rankings", "--json"]);
+  assert.equal(rankings.status, 0);
+  assert.ok(JSON.parse(rankings.stdout).data.options.some((entry: { name: string }) => entry.name === "--limit"));
+
+  const byCode = run(["describe", "nces", "by-code", "--json"]);
+  assert.equal(byCode.status, 0);
+  assert.ok(JSON.parse(byCode.stdout).data.options.some((entry: { name: string }) => entry.name === "--all-reviews"));
+  assert.ok(JSON.parse(byCode.stdout).data.options.some((entry: { name: string }) => entry.name === "--teacher"));
+
+  const course = run(["describe", "nces", "course", "--json"]);
+  assert.equal(course.status, 0);
+  assert.ok(JSON.parse(course.stdout).data.options.some((entry: { name: string }) => entry.name === "--all-reviews"));
+
+  const invalidRating = run(["nces", "reviews", "244", "--rating", "11", "--json"]);
+  assert.equal(invalidRating.status, 2);
+  assert.equal(JSON.parse(invalidRating.stdout).error.code, "USAGE");
+
+  const invalidTerm = run(["nces", "by-code", "CS302", "--term", "2025-spring", "--json"]);
+  assert.equal(invalidTerm.status, 2);
+  assert.equal(JSON.parse(invalidTerm.stdout).error.code, "USAGE");
+
+  const invalidRankingCategory = run(["nces", "rankings", "wrong", "--json"]);
+  assert.equal(invalidRankingCategory.status, 2);
+  assert.equal(JSON.parse(invalidRankingCategory.stdout).error.code, "USAGE");
+
+  const invalidRankingLimit = run(["nces", "rankings", "top-users", "--limit", "51", "--json"]);
+  assert.equal(invalidRankingLimit.status, 2);
+  assert.equal(JSON.parse(invalidRankingLimit.stdout).error.code, "USAGE");
+
+  const invalidDays = runWithoutCredentials(["bb", "announcements", "--days", "0", "--json"]);
+  assert.equal(invalidDays.status, 2);
+  assert.equal(JSON.parse(invalidDays.stdout).error.code, "USAGE");
+
+  const describedDeadlines = run(["describe", "bb", "deadlines", "--json"]);
+  assert.equal(describedDeadlines.status, 0);
+  assert.ok(JSON.parse(describedDeadlines.stdout).data.options.some((entry: { name: string }) => entry.name === "--submission-state"));
+
+  const describedAssignments = run(["describe", "bb", "assignments", "--json"]);
+  assert.equal(describedAssignments.status, 0);
+  assert.ok(JSON.parse(describedAssignments.stdout).data.options.some((entry: { name: string }) => entry.name === "--course"));
+  assert.ok(JSON.parse(describedAssignments.stdout).data.options.some((entry: { name: string }) => entry.name === "--with-attempts"));
+  assert.ok(JSON.parse(describedAssignments.stdout).data.options.some((entry: { name: string }) => entry.name === "--submission-state"));
+
+  const describedRoster = run(["describe", "bb", "roster", "--json"]);
+  assert.equal(describedRoster.status, 0);
+  assert.equal(JSON.parse(describedRoster.stdout).data.command, "bb roster");
+  assert.match(JSON.parse(describedRoster.stdout).data.usage[0], /^sustech bb roster COURSE_ID /);
+  for (const option of ["--role", "--availability", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedRoster.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedMessageFolders = run(["describe", "bb", "message-folders", "--json"]);
+  assert.equal(describedMessageFolders.status, 0);
+  assert.equal(JSON.parse(describedMessageFolders.stdout).data.command, "bb message-folders");
+  assert.match(JSON.parse(describedMessageFolders.stdout).data.usage[0], /^sustech bb message-folders COURSE_ID /);
+  for (const option of ["--page", "--page-size"]) {
+    assert.ok(JSON.parse(describedMessageFolders.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedMessages = run(["describe", "bb", "messages", "--json"]);
+  assert.equal(describedMessages.status, 0);
+  assert.equal(JSON.parse(describedMessages.stdout).data.command, "bb messages");
+  assert.match(JSON.parse(describedMessages.stdout).data.usage[0], /^sustech bb messages COURSE_ID /);
+  for (const option of ["--folder-type", "--folder-name", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedMessages.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedMessageParticipants = run(["describe", "bb", "message-participants", "--json"]);
+  assert.equal(describedMessageParticipants.status, 0);
+  assert.equal(JSON.parse(describedMessageParticipants.stdout).data.command, "bb message-participants");
+  assert.match(JSON.parse(describedMessageParticipants.stdout).data.usage[0], /^sustech bb message-participants COURSE_ID MESSAGE_ID /);
+  for (const option of ["--participation-type", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedMessageParticipants.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedMessageSend = run(["describe", "bb", "message-send", "preview", "--json"]);
+  assert.equal(describedMessageSend.status, 0);
+  assert.equal(JSON.parse(describedMessageSend.stdout).data.command, "bb message-send preview");
+  assert.match(JSON.parse(describedMessageSend.stdout).data.usage[0], /^sustech bb message-send preview COURSE_ID /);
+  for (const option of ["--subject", "--to-user", "--cc-user", "--bcc-user", "--text-file", "--browser", "--interactive"]) {
+    assert.ok(JSON.parse(describedMessageSend.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussions = run(["describe", "bb", "discussions", "--json"]);
+  assert.equal(describedDiscussions.status, 0);
+  assert.equal(JSON.parse(describedDiscussions.stdout).data.command, "bb discussions");
+  assert.match(JSON.parse(describedDiscussions.stdout).data.usage[0], /^sustech bb discussions COURSE_ID /);
+  for (const option of ["--title", "--gradable", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedDiscussions.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussionGroups = run(["describe", "bb", "discussion-groups", "--json"]);
+  assert.equal(describedDiscussionGroups.status, 0);
+  assert.equal(JSON.parse(describedDiscussionGroups.stdout).data.command, "bb discussion-groups");
+  assert.match(JSON.parse(describedDiscussionGroups.stdout).data.usage[0], /^sustech bb discussion-groups COURSE_ID DISCUSSION_ID /);
+  for (const option of ["--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedDiscussionGroups.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussion = run(["describe", "bb", "discussion", "--json"]);
+  assert.equal(describedDiscussion.status, 0);
+  assert.equal(JSON.parse(describedDiscussion.stdout).data.command, "bb discussion");
+  assert.match(JSON.parse(describedDiscussion.stdout).data.usage[0], /^sustech bb discussion COURSE_ID DISCUSSION_ID /);
+  for (const option of ["--group-id", "--user-id", "--status", "--is-read", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedDiscussion.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussionReplies = run(["describe", "bb", "discussion-replies", "--json"]);
+  assert.equal(describedDiscussionReplies.status, 0);
+  assert.equal(JSON.parse(describedDiscussionReplies.stdout).data.command, "bb discussion-replies");
+  assert.match(JSON.parse(describedDiscussionReplies.stdout).data.usage[0], /^sustech bb discussion-replies COURSE_ID DISCUSSION_ID MESSAGE_ID /);
+  for (const option of ["--group-id", "--user-id", "--status", "--is-read", "--page", "--page-size", "--sort"]) {
+    assert.ok(JSON.parse(describedDiscussionReplies.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussionPost = run(["describe", "bb", "discussion-post", "preview", "--json"]);
+  assert.equal(describedDiscussionPost.status, 0);
+  assert.equal(JSON.parse(describedDiscussionPost.stdout).data.command, "bb discussion-post preview");
+  assert.match(JSON.parse(describedDiscussionPost.stdout).data.usage[0], /^sustech bb discussion-post preview COURSE_ID DISCUSSION_ID /);
+  for (const option of ["--text-file", "--group-id", "--status", "--browser", "--interactive"]) {
+    assert.ok(JSON.parse(describedDiscussionPost.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedDiscussionReply = run(["describe", "bb", "discussion-reply", "apply", "--json"]);
+  assert.equal(describedDiscussionReply.status, 0);
+  assert.equal(JSON.parse(describedDiscussionReply.stdout).data.command, "bb discussion-reply apply");
+  assert.match(JSON.parse(describedDiscussionReply.stdout).data.usage[0], /^sustech bb discussion-reply apply COURSE_ID DISCUSSION_ID MESSAGE_ID /);
+  for (const option of ["--text-file", "--group-id", "--status", "--expected-sha256", "--confirm"]) {
+    assert.ok(JSON.parse(describedDiscussionReply.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const describedGrades = run(["describe", "bb", "grades", "--json"]);
+  assert.equal(describedGrades.status, 0);
+  assert.equal(JSON.parse(describedGrades.stdout).data.command, "bb grades");
+  for (const option of ["--course", "--submission-state", "--limit"]) {
+    assert.ok(JSON.parse(describedGrades.stdout).data.options.some((entry: { name: string }) => entry.name === option));
+  }
+
+  const invalidAssignmentCourse = runWithoutCredentials(["bb", "assignments", "deadbeef;echo", "--with-attempts", "--json"]);
+  assert.equal(invalidAssignmentCourse.status, 2);
+  assert.equal(JSON.parse(invalidAssignmentCourse.stdout).error.code, "USAGE");
+
+  const conflictingAssignmentSelectors = runWithoutCredentials(["bb", "assignments", "_8343_1", "--course", "CS208", "--json"]);
+  assert.equal(conflictingAssignmentSelectors.status, 2);
+  assert.equal(JSON.parse(conflictingAssignmentSelectors.stdout).error.code, "USAGE");
+
+  const invalidSubmissionState = runWithoutCredentials(["bb", "assignments", "_8343_1", "--submission-state", "done", "--json"]);
+  assert.equal(invalidSubmissionState.status, 2);
+  assert.equal(JSON.parse(invalidSubmissionState.stdout).error.code, "USAGE");
+
+  const invalidGradesSubmissionState = runWithoutCredentials(["bb", "grades", "--submission-state", "not_attempted", "--json"]);
+  assert.equal(invalidGradesSubmissionState.status, 2);
+  assert.equal(JSON.parse(invalidGradesSubmissionState.stdout).error.code, "USAGE");
+
+  const invalidGradesLimit = runWithoutCredentials(["bb", "grades", "--limit", "201", "--json"]);
+  assert.equal(invalidGradesLimit.status, 2);
+  assert.equal(JSON.parse(invalidGradesLimit.stdout).error.code, "USAGE");
+
+  const invalidDeadlineSubmissionState = runWithoutCredentials(["bb", "deadlines", "--submission-state", "done", "--json"]);
+  assert.equal(invalidDeadlineSubmissionState.status, 2);
+  assert.equal(JSON.parse(invalidDeadlineSubmissionState.stdout).error.code, "USAGE");
+
+  const invalidRosterAvailability = runWithoutCredentials(["bb", "roster", "_8343_1", "--availability", "maybe", "--json"]);
+  assert.equal(invalidRosterAvailability.status, 2);
+  assert.equal(JSON.parse(invalidRosterAvailability.stdout).error.code, "USAGE");
+
+  const invalidRosterPageSize = runWithoutCredentials(["bb", "roster", "_8343_1", "--page-size", "101", "--json"]);
+  assert.equal(invalidRosterPageSize.status, 2);
+  assert.equal(JSON.parse(invalidRosterPageSize.stdout).error.code, "USAGE");
+
+  const invalidDiscussionWriteStatus = runWithoutCredentials(["bb", "discussion-post", "preview", "_8343_1", "_65_1", "--status", "wrong", "--json"]);
+  assert.equal(invalidDiscussionWriteStatus.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionWriteStatus.stdout).error.code, "USAGE");
+
+  const invalidMessageFolderType = runWithoutCredentials(["bb", "messages", "_8343_1", "--folder-type", "Archive", "--json"]);
+  assert.equal(invalidMessageFolderType.status, 2);
+  assert.equal(JSON.parse(invalidMessageFolderType.stdout).error.code, "USAGE");
+
+  const invalidMessageFolderName = runWithoutCredentials(["bb", "messages", "_8343_1", "--folder-name", "Project Team", "--json"]);
+  assert.equal(invalidMessageFolderName.status, 2);
+  assert.equal(JSON.parse(invalidMessageFolderName.stdout).error.code, "USAGE");
+
+  const invalidCustomMessageFolder = runWithoutCredentials(["bb", "messages", "_8343_1", "--folder-type", "Custom", "--json"]);
+  assert.equal(invalidCustomMessageFolder.status, 2);
+  assert.equal(JSON.parse(invalidCustomMessageFolder.stdout).error.code, "USAGE");
+
+  const invalidMessagePageSize = runWithoutCredentials(["bb", "message-folders", "_8343_1", "--page-size", "101", "--json"]);
+  assert.equal(invalidMessagePageSize.status, 2);
+  assert.equal(JSON.parse(invalidMessagePageSize.stdout).error.code, "USAGE");
+
+  const invalidMessageParticipantType = runWithoutCredentials(["bb", "message-participants", "_8343_1", "_71_1", "--participation-type", "all", "--json"]);
+  assert.equal(invalidMessageParticipantType.status, 2);
+  assert.equal(JSON.parse(invalidMessageParticipantType.stdout).error.code, "USAGE");
+
+  const invalidMessageSendRecipients = runWithoutCredentials(["bb", "message-send", "preview", "_8343_1", "--text-file", "/tmp/msg.txt", "--json"]);
+  assert.equal(invalidMessageSendRecipients.status, 2);
+  assert.equal(JSON.parse(invalidMessageSendRecipients.stdout).error.code, "USAGE");
+
+  const duplicateMessageSendRecipients = runWithoutCredentials(["bb", "message-send", "preview", "_8343_1", "--to-user", "_1_1", "--cc-user", "1", "--text-file", "/tmp/msg.txt", "--json"]);
+  assert.equal(duplicateMessageSendRecipients.status, 2);
+  assert.equal(JSON.parse(duplicateMessageSendRecipients.stdout).error.code, "USAGE");
+
+  const invalidDiscussionGradable = runWithoutCredentials(["bb", "discussions", "_8343_1", "--gradable", "maybe", "--json"]);
+  assert.equal(invalidDiscussionGradable.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionGradable.stdout).error.code, "USAGE");
+
+  const invalidDiscussionStatus = runWithoutCredentials(["bb", "discussion", "_8343_1", "_65_1", "--status", "posted", "--json"]);
+  assert.equal(invalidDiscussionStatus.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionStatus.stdout).error.code, "USAGE");
+
+  const invalidDiscussionRead = runWithoutCredentials(["bb", "discussion", "_8343_1", "_65_1", "--is-read", "yes", "--json"]);
+  assert.equal(invalidDiscussionRead.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionRead.stdout).error.code, "USAGE");
+
+  const invalidDiscussionGroupPageSize = runWithoutCredentials(["bb", "discussion-groups", "_8343_1", "_65_1", "--page-size", "101", "--json"]);
+  assert.equal(invalidDiscussionGroupPageSize.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionGroupPageSize.stdout).error.code, "USAGE");
+
+  const invalidDiscussionPageSize = runWithoutCredentials(["bb", "discussion-replies", "_8343_1", "_65_1", "_71_1", "--page-size", "101", "--json"]);
+  assert.equal(invalidDiscussionPageSize.status, 2);
+  assert.equal(JSON.parse(invalidDiscussionPageSize.stdout).error.code, "USAGE");
 });
 
 test("enrollment preview is a no-network command with an exact apply handoff", () => {
@@ -241,6 +509,59 @@ test("blackboard apply requires both the preview hash and explicit confirmation 
   }
 });
 
+test("blackboard text submission preview validates the local text file before requiring Blackboard authentication", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-bb-text-"));
+  const textPath = join(tempDir, "answer.txt");
+  writeFileSync(textPath, "第一题答案\nSecond line", "utf8");
+
+  try {
+    const result = runWithoutCredentials([
+      "bb", "submit", "preview",
+      "--course-id", "_8537_1",
+      "--content-id", "_629896_1",
+      "--text-file", textPath,
+      "--comment", "inline essay",
+      "--json",
+    ]);
+    assert.equal(result.status, 2);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.error.code, "CREDENTIALS_REQUIRED");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("blackboard text apply requires both the preview hash and explicit confirmation before authentication", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sustech-cli-bb-text-apply-"));
+  const textPath = join(tempDir, "answer.txt");
+  const contents = "reviewed inline answer";
+  writeFileSync(textPath, contents, "utf8");
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const baseArgs = [
+    "bb", "submit", "apply",
+    "--course-id", "_8537_1",
+    "--content-id", "_629896_1",
+    "--text-file", textPath,
+  ];
+
+  try {
+    const unconfirmed = runWithoutCredentials([...baseArgs, "--expected-sha256", sha256, "--json"]);
+    assert.equal(unconfirmed.status, 3);
+    assert.equal(JSON.parse(unconfirmed.stdout).error.code, "CONFIRMATION_REQUIRED");
+
+    const mismatched = runWithoutCredentials([
+      ...baseArgs,
+      "--expected-sha256", "0".repeat(64),
+      "--confirm",
+      "--json",
+    ]);
+    assert.equal(mismatched.status, 4);
+    assert.equal(JSON.parse(mismatched.stdout).error.code, "BLACKBOARD_FILE_HASH_MISMATCH");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("context accepts calendar-level and help documents it", () => {
   const invalid = run(["context", "--calendar-level", "doctoral", "--json"]);
   assert.equal(invalid.status, 2);
@@ -252,11 +573,27 @@ test("context accepts calendar-level and help documents it", () => {
   const help = run(["--help"]);
   assert.equal(help.status, 0);
   assert.match(help.stdout, /sustech describe COMMAND\.\.\. \[--json\|--jsonl\]/);
+  assert.match(help.stdout, /sustech doctor \[--profile NAME\] \[--credentials-file PATH\] \[--service all\|tis,bb,ws,booking,lib-booking,pms\] \[--live\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech auth check \[--profile NAME\] \[--service tis\|bb\|ws\|booking\|lib-booking\|library-booking\|pms\] \[--credentials-file PATH\] \[--browser \[--interactive\]\] \[--json\|\--jsonl\]/);
   assert.match(help.stdout, /sustech context \[--date YYYY-MM-DD\] \[--calendar-level undergraduate\|graduate\] \[--level terse\|normal\|verbose\] \[--live\] \[--credentials-file PATH\]/);
   assert.match(help.stdout, /sustech academic changes BEFORE AFTER/);
   assert.match(help.stdout, /sustech academic watch --state PATH \[--semester YYYY-YYYY-N\] \[--include-blackboard\] \[--overwrite\]/);
   assert.match(help.stdout, /sustech library search QUERY \[--limit N\] \[--browser \[--interactive\]\]/);
   assert.match(help.stdout, /sustech library detail CONTEXT:DOC_ID \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech online search QUERY \[--section talks\|contact\|manual\] \[--source SOURCE\]\.\.\. \[--since YYYY-MM-DD\] \[--until YYYY-MM-DD\] \[--limit N\]/);
+  assert.match(help.stdout, /sustech bb user \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb tree COURSE_ID \[--content-id CONTENT_ID\] \[--max N\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb types \[--course QUERY\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb roster COURSE_ID \[--role ROLE_ID\] \[--availability Yes\|No\|Disabled\] \[--page N\] \[--page-size N\] \[--sort FIELD\[\(desc\)\]\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb message-folders COURSE_ID \[--page N\] \[--page-size N\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb messages COURSE_ID \[--folder-type Inbox\|Sent\|Delete\|Custom\] \[--folder-name NAME\] \[--page N\] \[--page-size N\] \[--sort FIELD\[\(desc\)\]\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb message-participants COURSE_ID MESSAGE_ID \[--participation-type From\|To\|Cc\|Bcc\] \[--page N\] \[--page-size N\] \[--sort FIELD\[\(desc\)\]\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb message-send preview COURSE_ID \[--subject TEXT\] \[--to-user USER_ID\]\.\.\. \[--cc-user USER_ID\]\.\.\. \[--bcc-user USER_ID\]\.\.\. --text-file PATH \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb message-send apply COURSE_ID \[--subject TEXT\] \[--to-user USER_ID\]\.\.\. \[--cc-user USER_ID\]\.\.\. \[--bcc-user USER_ID\]\.\.\. --text-file PATH --expected-sha256 HEX --confirm/);
+  assert.match(help.stdout, /sustech bb discussion-groups COURSE_ID DISCUSSION_ID \[--page N\] \[--page-size N\] \[--sort FIELD\[\(desc\)\]\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb discussion-post preview COURSE_ID DISCUSSION_ID --text-file PATH \[--group-id GROUP_ID\] \[--status Published\|Deleted\|Draft\] \[--browser \[--interactive\]\]/);
+  assert.match(help.stdout, /sustech bb discussion-reply apply COURSE_ID DISCUSSION_ID MESSAGE_ID --text-file PATH --expected-sha256 HEX \[--group-id GROUP_ID\] \[--status Published\|Deleted\|Draft\] --confirm/);
+  assert.match(help.stdout, /sustech bb submit preview .* \[--browser \[--interactive\]\]/);
   assert.match(help.stdout, /sustech online talks search QUERY \[--since YYYY-MM-DD\] \[--until YYYY-MM-DD\] \[--limit N\]/);
   assert.match(help.stdout, /sustech tis plan explain COURSE_OR_RWH --round ROUND/);
   assert.match(help.stdout, /sustech tis plan recommend \[CODE\.\.\.\] --round ROUND/);
@@ -274,8 +611,77 @@ test("describe exposes structured command metadata without parsing the full help
   assert.ok(Array.isArray(envelope.data.usage));
   assert.ok(envelope.data.usage[0].startsWith("sustech bb submit apply"));
   assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--expected-sha256"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--text-file"));
   assert.ok(envelope.data.options.some((entry: { name: string; shared: boolean }) => entry.name === "--json" && entry.shared === true));
   assert.ok(envelope.data.consequences.some((entry: { operation: string }) => entry.operation === "blackboard.submit"));
+
+  const discussionPost = run(["describe", "bb", "discussion-post", "apply", "--json"]);
+  assert.equal(discussionPost.status, 0);
+  const discussionPostEnvelope = JSON.parse(discussionPost.stdout);
+  assert.equal(discussionPostEnvelope.data.command, "bb discussion-post apply");
+  assert.equal(discussionPostEnvelope.data.capability.kind, "mutation");
+  assert.ok(discussionPostEnvelope.data.options.some((entry: { name: string }) => entry.name === "--text-file"));
+  assert.ok(discussionPostEnvelope.data.options.some((entry: { name: string }) => entry.name === "--expected-sha256"));
+  assert.ok(discussionPostEnvelope.data.consequences.some((entry: { operation: string }) => entry.operation === "blackboard.discussion-post"));
+
+  const discussionReply = run(["describe", "bb", "discussion-reply", "preview", "--json"]);
+  assert.equal(discussionReply.status, 0);
+  const discussionReplyEnvelope = JSON.parse(discussionReply.stdout);
+  assert.equal(discussionReplyEnvelope.data.command, "bb discussion-reply preview");
+  assert.equal(discussionReplyEnvelope.data.capability.kind, "plan");
+  assert.ok(discussionReplyEnvelope.data.options.some((entry: { name: string }) => entry.name === "--text-file"));
+  assert.ok(discussionReplyEnvelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
+
+  const messageSend = run(["describe", "bb", "message-send", "apply", "--json"]);
+  assert.equal(messageSend.status, 0);
+  const messageSendEnvelope = JSON.parse(messageSend.stdout);
+  assert.equal(messageSendEnvelope.data.command, "bb message-send apply");
+  assert.equal(messageSendEnvelope.data.capability.kind, "mutation");
+  assert.ok(messageSendEnvelope.data.options.some((entry: { name: string }) => entry.name === "--to-user"));
+  assert.ok(messageSendEnvelope.data.options.some((entry: { name: string }) => entry.name === "--expected-sha256"));
+  assert.ok(messageSendEnvelope.data.consequences.some((entry: { operation: string }) => entry.operation === "blackboard.message-send"));
+
+  const authCheck = run(["describe", "auth", "check", "--json"]);
+  assert.equal(authCheck.status, 0);
+  const authCheckEnvelope = JSON.parse(authCheck.stdout);
+  assert.equal(authCheckEnvelope.data.command, "auth check");
+  assert.ok(authCheckEnvelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
+  assert.ok(authCheckEnvelope.data.options.some((entry: { name: string }) => entry.name === "--interactive"));
+
+  const doctor = run(["describe", "doctor", "--json"]);
+  assert.equal(doctor.status, 0);
+  const doctorEnvelope = JSON.parse(doctor.stdout);
+  assert.equal(doctorEnvelope.data.command, "doctor");
+  assert.ok(doctorEnvelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
+  assert.ok(doctorEnvelope.data.options.some((entry: { name: string }) => entry.name === "--interactive"));
+});
+
+test("describe exposes blackboard type summaries as a read-only authenticated command", () => {
+  const result = run(["describe", "bb", "types", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "describe");
+  assert.equal(envelope.data.command, "bb types");
+  assert.equal(envelope.data.capability.kind, "read");
+  assert.equal(envelope.data.capability.authentication, "bb");
+  assert.ok(envelope.data.usage.some((entry: string) => entry.startsWith("sustech bb types")));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--course"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--interactive"));
+});
+
+test("describe exposes blackboard tree traversal as a read-only authenticated command", () => {
+  const result = run(["describe", "bb", "tree", "--json"]);
+  assert.equal(result.status, 0);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.command, "describe");
+  assert.equal(envelope.data.command, "bb tree");
+  assert.equal(envelope.data.capability.kind, "read");
+  assert.equal(envelope.data.capability.authentication, "bb");
+  assert.ok(envelope.data.usage.some((entry: string) => entry.startsWith("sustech bb tree COURSE_ID")));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--content-id"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--max"));
+  assert.ok(envelope.data.options.some((entry: { name: string }) => entry.name === "--browser"));
 });
 
 test("describe exposes typed public library catalog reads", () => {
@@ -318,10 +724,31 @@ test("describe exposes advisory TIS plan decision commands and their live-read o
 });
 
 test("blackboard content attachment commands keep selection and local writes explicit", () => {
+  const interactiveNeedsBrowser = runWithoutCredentials(["bb", "courses", "--interactive", "--json"]);
+  assert.equal(interactiveNeedsBrowser.status, 2);
+  assert.equal(JSON.parse(interactiveNeedsBrowser.stdout).command, "bb courses");
+  assert.equal(JSON.parse(interactiveNeedsBrowser.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(interactiveNeedsBrowser.stdout).error.message, /--interactive requires --browser/u);
+
   const list = runWithoutCredentials(["bb", "attachments", "_8537_1", "_629896_1", "--json"]);
   assert.equal(list.status, 2);
   assert.equal(JSON.parse(list.stdout).command, "bb attachments");
   assert.equal(JSON.parse(list.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const attemptFiles = runWithoutCredentials(["bb", "attempt-files", "_8537_1", "_2201_1", "--json"]);
+  assert.equal(attemptFiles.status, 2);
+  assert.equal(JSON.parse(attemptFiles.stdout).command, "bb attempt-files");
+  assert.equal(JSON.parse(attemptFiles.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const types = runWithoutCredentials(["bb", "types", "--json"]);
+  assert.equal(types.status, 2);
+  assert.equal(JSON.parse(types.stdout).command, "bb types");
+  assert.equal(JSON.parse(types.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const tree = runWithoutCredentials(["bb", "tree", "_8537_1", "--json"]);
+  assert.equal(tree.status, 2);
+  assert.equal(JSON.parse(tree.stdout).command, "bb tree");
+  assert.equal(JSON.parse(tree.stdout).error.code, "CREDENTIALS_REQUIRED");
 
   const deadlines = runWithoutCredentials(["bb", "deadlines", "--json"]);
   assert.equal(deadlines.status, 2);
@@ -335,6 +762,14 @@ test("blackboard content attachment commands keep selection and local writes exp
   assert.equal(JSON.parse(missingDestination.stdout).command, "bb download");
   assert.equal(JSON.parse(missingDestination.stdout).error.code, "USAGE");
   assert.match(JSON.parse(missingDestination.stdout).error.message, /--destination/);
+
+  const attemptDownloadMissingDestination = runWithoutCredentials([
+    "bb", "attempt-download", "_8537_1", "_2201_1", "_3301_1", "--json",
+  ]);
+  assert.equal(attemptDownloadMissingDestination.status, 2);
+  assert.equal(JSON.parse(attemptDownloadMissingDestination.stdout).command, "bb attempt-download");
+  assert.equal(JSON.parse(attemptDownloadMissingDestination.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(attemptDownloadMissingDestination.stdout).error.message, /--destination/);
 
   const irrelevantOverwrite = runWithoutCredentials([
     "bb", "attachments", "_8537_1", "_629896_1", "--overwrite", "--json",
@@ -354,6 +789,17 @@ test("blackboard content attachment commands keep selection and local writes exp
   ]);
   assert.equal(syncNeedsCredentials.status, 2);
   assert.equal(JSON.parse(syncNeedsCredentials.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const describedAttemptFiles = run(["describe", "bb", "attempt-files", "--json"]);
+  assert.equal(describedAttemptFiles.status, 0);
+  assert.equal(JSON.parse(describedAttemptFiles.stdout).data.command, "bb attempt-files");
+  assert.ok(JSON.parse(describedAttemptFiles.stdout).data.options.some((entry: { name: string }) => entry.name === "--browser"));
+  assert.ok(JSON.parse(describedAttemptFiles.stdout).data.options.some((entry: { name: string }) => entry.name === "--interactive"));
+
+  const describedAttemptDownload = run(["describe", "bb", "attempt-download", "--json"]);
+  assert.equal(describedAttemptDownload.status, 0);
+  assert.ok(JSON.parse(describedAttemptDownload.stdout).data.options.some((entry: { name: string }) => entry.name === "--destination"));
+  assert.ok(JSON.parse(describedAttemptDownload.stdout).data.options.some((entry: { name: string }) => entry.name === "--browser"));
 });
 
 test("Blackboard calendar commands expose strict options without requiring credentials to validate input", () => {
@@ -381,6 +827,12 @@ test("Blackboard calendar commands expose strict options without requiring crede
   assert.equal(wrongMissingOption.status, 2);
   assert.equal(JSON.parse(wrongMissingOption.stdout).command, "tis degree missing");
   assert.equal(JSON.parse(wrongMissingOption.stdout).error.code, "USAGE");
+
+  const invalidTreeMax = runWithoutCredentials(["bb", "tree", "_8537_1", "--max", "6000", "--json"]);
+  assert.equal(invalidTreeMax.status, 2);
+  assert.equal(JSON.parse(invalidTreeMax.stdout).command, "bb tree");
+  assert.equal(JSON.parse(invalidTreeMax.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(invalidTreeMax.stdout).error.message, /--max cannot exceed 5000/);
 });
 
 test("capabilities exposes safety metadata without requiring help-text parsing", () => {
@@ -398,8 +850,18 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   const authLogout = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "auth logout");
   const bbApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb submit apply");
   const bbPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb submit preview");
+  const bbMessageSendPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb message-send preview");
+  const bbMessageSendApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb message-send apply");
+  const bbDiscussionPostPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb discussion-post preview");
+  const bbDiscussionPostApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb discussion-post apply");
+  const bbDiscussionReplyPreview = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb discussion-reply preview");
+  const bbDiscussionReplyApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb discussion-reply apply");
   const bbAttachments = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb attachments");
   const bbDownload = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb download");
+  const bbAttemptFiles = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb attempt-files");
+  const bbAttemptDownload = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb attempt-download");
+  const bbTree = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb tree");
+  const bbTypes = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "bb types");
   const selectionApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis selection apply");
   const bidApply = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis bid apply");
   const classroomLive = envelope.data.capabilities.find((entry: { command: string }) => entry.command === "tis classroom live");
@@ -436,10 +898,30 @@ test("capabilities exposes safety metadata without requiring help-text parsing",
   assert.equal(bbApply.authentication, "bb");
   assert.equal(bbApply.confirmation, "required");
   assert.equal(bbPreview.network, true);
+  assert.equal(bbMessageSendPreview.kind, "plan");
+  assert.equal(bbMessageSendPreview.authentication, "bb");
+  assert.equal(bbMessageSendApply.kind, "mutation");
+  assert.equal(bbMessageSendApply.confirmation, "required");
+  assert.equal(bbDiscussionPostPreview.kind, "plan");
+  assert.equal(bbDiscussionPostPreview.authentication, "bb");
+  assert.equal(bbDiscussionPostApply.kind, "mutation");
+  assert.equal(bbDiscussionPostApply.confirmation, "required");
+  assert.equal(bbDiscussionReplyPreview.kind, "plan");
+  assert.equal(bbDiscussionReplyPreview.authentication, "bb");
+  assert.equal(bbDiscussionReplyApply.kind, "mutation");
+  assert.equal(bbDiscussionReplyApply.confirmation, "required");
   assert.equal(bbAttachments.kind, "read");
   assert.equal(bbAttachments.authentication, "bb");
   assert.equal(bbDownload.kind, "mutation");
   assert.equal(bbDownload.confirmation, "none");
+  assert.equal(bbAttemptFiles.kind, "read");
+  assert.equal(bbAttemptFiles.authentication, "bb");
+  assert.equal(bbAttemptDownload.kind, "mutation");
+  assert.equal(bbAttemptDownload.authentication, "bb");
+  assert.equal(bbTree.kind, "read");
+  assert.equal(bbTree.authentication, "bb");
+  assert.equal(bbTypes.kind, "read");
+  assert.equal(bbTypes.authentication, "bb");
   assert.equal(selectionApply.kind, "mutation");
   assert.equal(selectionApply.confirmation, "required");
   assert.equal(bidApply.kind, "mutation");
@@ -507,6 +989,31 @@ test("auth profile commands are machine-readable without exposing or inventing c
   const check = runWithoutCredentials(["auth", "check", "--profile", profile, "--service", "bb", "--json"]);
   assert.equal(check.status, 2);
   assert.equal(JSON.parse(check.stdout).error.code, "CREDENTIALS_REQUIRED");
+
+  const browserNeedsInteractiveBrowser = runWithoutCredentials(["auth", "check", "--service", "bb", "--interactive", "--json"]);
+  assert.equal(browserNeedsInteractiveBrowser.status, 2);
+  assert.equal(JSON.parse(browserNeedsInteractiveBrowser.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(browserNeedsInteractiveBrowser.stdout).error.message, /--interactive requires --browser/u);
+
+  const browserWrongService = runWithoutCredentials(["auth", "check", "--service", "tis", "--browser", "--json"]);
+  assert.equal(browserWrongService.status, 2);
+  assert.equal(JSON.parse(browserWrongService.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(browserWrongService.stdout).error.message, /only for Blackboard auth checks/u);
+
+  const doctorNeedsLive = runWithoutCredentials(["doctor", "--service", "bb", "--browser", "--json"]);
+  assert.equal(doctorNeedsLive.status, 2);
+  assert.equal(JSON.parse(doctorNeedsLive.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(doctorNeedsLive.stdout).error.message, /--browser requires --live/u);
+
+  const doctorNeedsBrowser = runWithoutCredentials(["doctor", "--service", "bb", "--live", "--interactive", "--json"]);
+  assert.equal(doctorNeedsBrowser.status, 2);
+  assert.equal(JSON.parse(doctorNeedsBrowser.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(doctorNeedsBrowser.stdout).error.message, /--interactive requires --browser/u);
+
+  const doctorWrongService = runWithoutCredentials(["doctor", "--service", "tis", "--live", "--browser", "--json"]);
+  assert.equal(doctorWrongService.status, 2);
+  assert.equal(JSON.parse(doctorWrongService.stdout).error.code, "USAGE");
+  assert.match(JSON.parse(doctorWrongService.stdout).error.message, /only when doctor includes Blackboard/u);
 
   const missingSid = runWithoutCredentials(["auth", "login", "--password-stdin", "--json"]);
   assert.equal(missingSid.status, 2);
@@ -873,6 +1380,8 @@ test("new authenticated commands reject invalid inputs before network or credent
     [["doctor", "--service", "tis,not-a-service", "--json"], "USAGE"],
     [["papers", "fetch-oa", "not-a-doi", "--destination", "/tmp/paper.pdf", "--json"], "USAGE"],
     [["bb", "submit", "apply", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--expected-sha256", "not-a-sha", "--confirm", "--json"], "USAGE"],
+    [["bb", "submit", "preview", "--course-id", "_8537_1", "--content-id", "_629896_1", "--json"], "USAGE"],
+    [["bb", "submit", "preview", "--course-id", "_8537_1", "--content-id", "_629896_1", "--file", "/tmp/report.pdf", "--text-file", "/tmp/answer.txt", "--json"], "USAGE"],
     [["bb", "search", "hw", "--attachments", "bad", "--json"], "USAGE"],
     [["bb", "search", "hw", "--kind", "bad", "--json"], "USAGE"],
     [["bb", "search", "hw", "--page-size", "0", "--json"], "USAGE"],
@@ -909,11 +1418,13 @@ test("context live supports calendar level and degrades gracefully when credenti
   assert.equal(result.status, 0);
   const envelope = JSON.parse(result.stdout);
   assert.equal(envelope.data.sourceStatus.nextDeadline, "missing");
+  assert.equal(envelope.data.sourceStatus.recentAnnouncement, "missing");
   assert.equal(envelope.data.sourceStatus.schedule, "missing");
   assert.equal(envelope.data.sourceStatus.nextExam, "missing");
   assert.equal(envelope.data.liveSources.tisSchedule.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.tisExams.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
+  assert.equal(envelope.data.liveSources.blackboardAnnouncements.state, "credentials-missing");
 });
 
 test("profile commands remain machine-readable when credentials are unavailable", () => {

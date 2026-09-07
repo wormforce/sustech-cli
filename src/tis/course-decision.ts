@@ -776,6 +776,14 @@ function analyseNcesFit(nces: NcesResolvedCourse | null | undefined): NcesAnalys
   const detail = nces.detail ?? undefined;
   const target = detail ?? nces.picked;
   const reviewCount = Math.max(target.reviewCount, 0);
+  if (target.rating === null || target.takeaways === null) {
+    reasons.push({
+      kind: "data",
+      impact: "caution",
+      message: "NCES matched this course, but the selected entry does not have enough community rating data yet.",
+    });
+    return { fit, score: 0, reasons, warnings };
+  }
   const evidenceWeight = ncesEvidenceWeight(nces.confidence, reviewCount);
   const ratingScore = round((target.rating - 7) * 4 * evidenceWeight);
   const takeawaysScore = round(((target.takeaways.pct - 50) / 25) * evidenceWeight);

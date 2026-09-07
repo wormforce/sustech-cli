@@ -1,5 +1,7 @@
 export * from "./contact.js";
 export * from "./contact-text.js";
+export * from "./manual.js";
+export * from "./manual-text.js";
 export * from "./search.js";
 export * from "./shared.js";
 export * from "./talks.js";

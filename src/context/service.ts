@@ -1,6 +1,7 @@
 import type { AcademicCalendar } from "../calendar/client.js";
 import type { CalendarDayInfo } from "../calendar/types.js";
 import type {
+  AnnouncementSummary,
   AirQualitySummary,
   ContextInput,
   ContextLevel,
@@ -24,6 +25,7 @@ export class ContextService {
       academicDay: academic.state,
       schedule: input.schedule ? "provided" : "missing",
       nextDeadline: input.nextDeadline === undefined ? "missing" : "provided",
+      recentAnnouncement: input.recentAnnouncement === undefined ? "missing" : "provided",
       nextEvaluation: input.nextEvaluation === undefined ? "missing" : "provided",
       nextExam: input.nextExam === undefined ? "missing" : "provided",
       weather: input.weather === undefined ? "missing" : "provided",
@@ -44,6 +46,7 @@ export class ContextService {
       schedule: input.schedule ?? {},
       ...(LEVEL_ORDER[level] >= LEVEL_ORDER.normal ? {
         nextDeadline: input.nextDeadline ?? null,
+        recentAnnouncement: input.recentAnnouncement ?? null,
         nextEvaluation: input.nextEvaluation ?? null,
         nextExam: input.nextExam ?? null,
       } : {}),
@@ -73,6 +76,7 @@ export class ContextService {
     if (snapshot.holiday) record.holiday = snapshot.holiday;
     if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) {
       record.nextDeadline = snapshot.nextDeadline ?? null;
+      record.recentAnnouncement = snapshot.recentAnnouncement ?? null;
       record.nextEvaluation = snapshot.nextEvaluation ?? null;
       record.nextExam = snapshot.nextExam ?? null;
     }
@@ -97,7 +101,15 @@ function renderLines(snapshot: ContextSnapshot): string[] {
     ...(snapshot.holiday ? [`Today is [${snapshot.holiday}]`] : []),
   ];
   appendSchedule(lines, snapshot.schedule);
-  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) appendNormal(lines, snapshot.nextDeadline ?? null, snapshot.nextEvaluation ?? null, snapshot.nextExam ?? null);
+  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) {
+    appendNormal(
+      lines,
+      snapshot.nextDeadline ?? null,
+      snapshot.recentAnnouncement ?? null,
+      snapshot.nextEvaluation ?? null,
+      snapshot.nextExam ?? null,
+    );
+  }
   if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.verbose) appendVerbose(lines, snapshot.weather ?? null, snapshot.airQuality ?? null, snapshot.libraryStatus ?? null);
   return lines;
 }
@@ -120,15 +132,24 @@ function appendSchedule(lines: string[], schedule: ScheduleReminder): void {
 function appendNormal(
   lines: string[],
   nextDeadline: DeadlineSummary | null,
+  recentAnnouncement: AnnouncementSummary | null,
   nextEvaluation: EvaluationSummary | null,
   nextExam: ExamSummary | null,
 ): void {
   if (nextDeadline) lines.push(`Next deadline: [${nextDeadline.name}] — ${deadlineStatus(nextDeadline.daysLeft, nextDeadline.dueAt)}`);
+  if (recentAnnouncement) lines.push(`Recent Blackboard announcement: [${recentAnnouncement.title}] — ${announcementStatus(recentAnnouncement)}`);
   if (nextEvaluation) lines.push(`Next evaluation: [${nextEvaluation.course} — ${nextEvaluation.name}] — ${deadlineStatus(nextEvaluation.daysLeft, nextEvaluation.dueAt, "Evaluation")}`);
   if (nextExam) {
     const location = [nextExam.building, nextExam.room].filter(Boolean).join(" ").trim() || nextExam.campus || "";
     lines.push(`Next exam: [${nextExam.name} (${nextExam.code})] — ${nextExam.date}${nextExam.time ? ` ${nextExam.time}` : ""}${location ? ` @ ${location}` : ""}`);
   }
+}
+
+function announcementStatus(announcement: AnnouncementSummary): string {
+  const owner = announcement.source === "system"
+    ? "System"
+    : announcement.course || "Course";
+  return announcement.activityAt ? `${owner} · ${announcement.activityAt}` : owner;
 }
 
 function appendVerbose(

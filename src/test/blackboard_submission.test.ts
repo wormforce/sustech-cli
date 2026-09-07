@@ -6,13 +6,17 @@ import test from "node:test";
 import {
   attachBlackboardAttemptFile,
   createBlackboardAttempt,
+  downloadBlackboardAttemptFile,
   evaluateBlackboardSubmissionPreflight,
   getBlackboardAttempt,
   getBlackboardUploadSettings,
   inspectBlackboardSubmissionFile,
+  inspectBlackboardSubmissionTextFile,
   listBlackboardAttemptFiles,
   listBlackboardAttempts,
+  publicBlackboardAttemptFile,
   readBlackboardSubmissionPayload,
+  readBlackboardSubmissionTextPayload,
   updateBlackboardAttempt,
   uploadBlackboardTemporaryFile,
 } from "../services/blackboard.js";
@@ -185,6 +189,182 @@ test("Blackboard submission helpers follow the official attempt/upload/file flow
   }
 });
 
+test("Blackboard attempt-file reads and downloads use the official attempt-files endpoint", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-attempt-file-"));
+  const destination = join(tempDir, "submitted-report.pdf");
+  try {
+    const calls: string[] = [];
+    const adapter = routeAdapter((url) => {
+      calls.push(url);
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files") {
+        return jsonResponse({
+          results: [{
+            id: "_3301_1",
+            name: "report.pdf",
+            viewUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1",
+            downloadUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+          }],
+        });
+      }
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download") {
+        return new Response("%PDF-1.7\nsubmitted", {
+          status: 200,
+          headers: {
+            "content-type": "application/pdf",
+            "content-length": "18",
+          },
+        });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const files = await listBlackboardAttemptFiles(adapter, "8343", "2201");
+    assert.deepEqual(files, [{
+      id: "3301",
+      name: "report.pdf",
+      viewUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1",
+      downloadUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+    }]);
+
+    const downloaded = await downloadBlackboardAttemptFile(adapter, "8343", "2201", "3301", destination);
+    assert.equal(downloaded.file.id, "3301");
+    assert.equal(downloaded.file.name, "report.pdf");
+    assert.equal(downloaded.destination, destination);
+    assert.equal(downloaded.size, 18);
+    assert.equal(downloaded.contentType, "application/pdf");
+    assert.equal(downloaded.overwritten, false);
+    assert.match(downloaded.sha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(calls, [
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files",
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files",
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+    ]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard attempt-file downloads synthesize the official download endpoint when metadata omits downloadUrl", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-attempt-file-fallback-"));
+  const destination = join(tempDir, "submitted-report.pdf");
+  try {
+    const calls: string[] = [];
+    const adapter = routeAdapter((url) => {
+      calls.push(url);
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files") {
+        return jsonResponse({
+          results: [{
+            id: "_3301_1",
+            name: "report.pdf",
+          }],
+        });
+      }
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download") {
+        return new Response("%PDF-1.7\nsubmitted", {
+          status: 200,
+          headers: {
+            "content-type": "application/pdf",
+            "content-length": "18",
+          },
+        });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const files = await listBlackboardAttemptFiles(adapter, "8343", "2201");
+    assert.deepEqual(files, [{
+      id: "3301",
+      name: "report.pdf",
+      viewUrl: "",
+      downloadUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+    }]);
+
+    const downloaded = await downloadBlackboardAttemptFile(adapter, "8343", "2201", "3301", destination);
+    assert.equal(downloaded.file.id, "3301");
+    assert.equal(downloaded.file.name, "report.pdf");
+    assert.equal(downloaded.destination, destination);
+    assert.equal(downloaded.size, 18);
+    assert.equal(downloaded.contentType, "application/pdf");
+    assert.equal(downloaded.overwritten, false);
+    assert.match(downloaded.sha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(calls, [
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files",
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files",
+      "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+    ]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard attempt-file downloads report unavailable when the official download endpoint is missing", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-attempt-file-unavailable-"));
+  const destination = join(tempDir, "submitted-report.pdf");
+  try {
+    const adapter = routeAdapter((url) => {
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files") {
+        return jsonResponse({
+          results: [{
+            id: "_3301_1",
+            name: "report.pdf",
+          }],
+        });
+      }
+      if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    await assert.rejects(
+      () => downloadBlackboardAttemptFile(adapter, "8343", "2201", "3301", destination),
+      (error: unknown) => Boolean(
+        error
+        && typeof error === "object"
+        && "code" in error
+        && error.code === "BLACKBOARD_ATTEMPT_FILE_UNAVAILABLE"
+      ),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard attempt-file reads reject unsafe URLs", async () => {
+  const adapter = routeAdapter((url) => {
+    if (url === "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files") {
+      return jsonResponse({
+        results: [{
+          id: "_3301_1",
+          name: "report.pdf",
+          downloadUrl: "https://evil.example/download",
+        }],
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  });
+
+  await assert.rejects(
+    listBlackboardAttemptFiles(adapter, "8343", "2201"),
+    (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "UNSAFE_SERVICE_URL"),
+  );
+});
+
+test("Blackboard public attempt-file output omits view and download URLs", () => {
+  assert.deepEqual(
+    publicBlackboardAttemptFile({
+      id: "3301",
+      name: "report.pdf",
+      viewUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1",
+      downloadUrl: "https://bb.sustech.edu.cn/learn/api/public/v1/courses/_8343_1/gradebook/attempts/_2201_1/files/_3301_1/download",
+    }),
+    {
+      id: "3301",
+      name: "report.pdf",
+    },
+  );
+});
+
 test("Blackboard submission preflight surfaces blockers and late-submission warnings", () => {
   const preflight = evaluateBlackboardSubmissionPreflight({
     assignment: {
@@ -219,12 +399,15 @@ test("Blackboard submission preflight surfaces blockers and late-submission warn
       modified: "2026-08-25T10:00:00.000Z",
       attemptDate: "2026-08-25T10:00:00.000Z",
     }],
-    file: {
-      path: "report.pdf",
-      absolutePath: "/tmp/report.pdf",
-      name: "report.pdf",
-      size: 2048,
-      sha256: "0".repeat(64),
+    submission: {
+      kind: "file",
+      file: {
+        path: "report.pdf",
+        absolutePath: "/tmp/report.pdf",
+        name: "report.pdf",
+        size: 2048,
+        sha256: "0".repeat(64),
+      },
     },
     uploadSettings: {
       supportsInlineRender: true,
@@ -258,22 +441,59 @@ test("Blackboard submission preflight surfaces blockers and late-submission warn
       id: "629897",
       parentId: "0",
       title: "Ultra assessment",
-      handler: "resource/x-bb-assessment",
-      kind: "unknown",
+      handler: "resource/x-bb-asmt-test-link",
+      kind: "assignment",
       hasChildren: false,
     },
     attempts: [],
-    file: {
-      path: "answer.txt",
-      absolutePath: "/tmp/answer.txt",
-      name: "answer.txt",
-      size: 10,
-      sha256: "1".repeat(64),
+    submission: {
+      kind: "text",
+      text: {
+        path: "answer.txt",
+        absolutePath: "/tmp/answer.txt",
+        size: 10,
+        sha256: "1".repeat(64),
+        charCount: 10,
+      },
     },
     uploadSettings: { supportsInlineRender: true, maxUploadSizeInBytes: 1024 },
     now: new Date("2026-08-26T00:00:00.000Z"),
   });
-  assert.deepEqual(unsupported.blockers.map((entry) => entry.code), [
+  assert.equal(unsupported.ready, true);
+  assert.deepEqual(unsupported.blockers, []);
+
+  const ultraFile = evaluateBlackboardSubmissionPreflight({
+    assignment: {
+      id: "993",
+      contentId: "629898",
+      title: "Ultra file upload",
+      availability: "Yes",
+      grading: { type: "Attempts", attemptsAllowed: 1, scoringModel: "Last" },
+      scoreProviderHandle: "resource/x-bb-assessment",
+    },
+    content: {
+      id: "629898",
+      parentId: "0",
+      title: "Ultra file upload",
+      handler: "resource/x-bb-asmt-test-link",
+      kind: "assignment",
+      hasChildren: false,
+    },
+    attempts: [],
+    submission: {
+      kind: "file",
+      file: {
+        path: "answer.txt",
+        absolutePath: "/tmp/answer.txt",
+        name: "answer.txt",
+        size: 10,
+        sha256: "1".repeat(64),
+      },
+    },
+    uploadSettings: { supportsInlineRender: true, maxUploadSizeInBytes: 1024 },
+    now: new Date("2026-08-26T00:00:00.000Z"),
+  });
+  assert.deepEqual(ultraFile.blockers.map((entry) => entry.code), [
     "UNSUPPORTED_CONTENT_TYPE",
     "UNSUPPORTED_SCORE_PROVIDER",
   ]);
@@ -303,6 +523,36 @@ test("Blackboard upload binds the exact bytes to the inspected SHA-256 before an
       (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_FILE_CHANGED"),
     );
     assert.equal(networkCalls, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Blackboard text submission files must be UTF-8, non-empty regular files", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "sustech-bb-text-"));
+  const textPath = join(tempDir, "answer.txt");
+  const emptyPath = join(tempDir, "empty.txt");
+  const invalidPath = join(tempDir, "binary.txt");
+  await writeFile(textPath, "第一题答案\nSecond line", "utf8");
+  await writeFile(emptyPath, "");
+  await writeFile(invalidPath, Buffer.from([0xc3, 0x28]));
+
+  try {
+    const payload = await readBlackboardSubmissionTextPayload(textPath);
+    const inspected = await inspectBlackboardSubmissionTextFile(textPath);
+    assert.equal(payload.text, "第一题答案\nSecond line");
+    assert.equal(payload.textFile.absolutePath, textPath);
+    assert.equal(payload.textFile.charCount, [...payload.text].length);
+    assert.deepEqual(inspected, payload.textFile);
+
+    await assert.rejects(
+      readBlackboardSubmissionTextPayload(emptyPath),
+      (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_TEXT_FILE_EMPTY"),
+    );
+    await assert.rejects(
+      readBlackboardSubmissionTextPayload(invalidPath),
+      (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "BLACKBOARD_TEXT_FILE_NOT_UTF8"),
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

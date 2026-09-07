@@ -4,6 +4,25 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Expanded the public NCES integration with exact course-code resolution,
+  teacher profiles, course rating statistics, filtered review pagination, and
+  typed MCP tools. NCES-generated summaries are explicitly labelled as
+  community AI summaries rather than official course information.
+- Added `bb announcements` to aggregate visible system and course
+  announcements while preserving successful results and reporting inaccessible
+  courses as partial failures.
+- Extended `online search` with a fixed-allowlist `manual` section covering
+  selected SUSTech Online service, study, transport, life, facility, and
+  calendar guidance with source, freshness, and CC BY-SA metadata.
+
+### Changed
+
+- NCES browse sorting now uses the upstream server-side sort, and NCES search
+  supports typed course, teacher, and review result pages.
+- The local MCP surface now exposes `42` typed public/local read-only tools.
+
 ## [0.10.0] - 2026-08-29
 
 ### Added

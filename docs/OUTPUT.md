@@ -75,3 +75,9 @@ part of text, JSON, JSONL, error details, or capability output.
 Blackboard attachment listings likewise omit signed `bbcswebdav` URLs. A
 successful `bb download` result contains only stable attachment metadata, the
 absolute destination path, byte count, content type, and SHA-256.
+
+Blackboard attempt-file listings likewise return stable file identifiers and
+names rather than raw download URLs. A successful `bb attempt-download` result
+contains the selected file identity, the absolute destination path, byte count,
+content type, and SHA-256. The `files` read-back inside a successful
+`bb submit apply` result uses the same URL-free file identity shape.

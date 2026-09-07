@@ -18,6 +18,13 @@ export interface DeadlineSummary {
   course?: string;
 }
 
+export interface AnnouncementSummary {
+  title: string;
+  source: "system" | "course";
+  course?: string;
+  activityAt?: string;
+}
+
 export interface EvaluationSummary {
   course: string;
   name: string;
@@ -59,6 +66,7 @@ export interface ContextInput {
   academicDay?: CalendarDayInfo;
   schedule?: ScheduleReminder;
   nextDeadline?: DeadlineSummary | null;
+  recentAnnouncement?: AnnouncementSummary | null;
   nextEvaluation?: EvaluationSummary | null;
   nextExam?: ExamSummary | null;
   weather?: WeatherSummary | null;
@@ -70,6 +78,7 @@ export interface ContextSourceStatus {
   academicDay: SourceState;
   schedule: SourceState;
   nextDeadline: SourceState;
+  recentAnnouncement: SourceState;
   nextEvaluation: SourceState;
   nextExam: SourceState;
   weather: SourceState;
@@ -89,6 +98,7 @@ export interface ContextSnapshot {
   holiday?: string;
   schedule: ScheduleReminder;
   nextDeadline?: DeadlineSummary | null;
+  recentAnnouncement?: AnnouncementSummary | null;
   nextEvaluation?: EvaluationSummary | null;
   nextExam?: ExamSummary | null;
   weather?: WeatherSummary | null;

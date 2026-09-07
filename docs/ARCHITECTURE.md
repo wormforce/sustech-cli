@@ -108,14 +108,22 @@ commands for them.
   and one-shot `academic watch` do not mutate remote campus state.
 - `bb submit preview` authenticates for live read-only preflight checks but
   never calls a mutation endpoint.
+- `bb discussions`, `bb discussion`, and `bb discussion-replies` prefer the
+  official Learn REST discussion endpoints with explicit `offset`/`limit`
+  paging and server-side title, gradable, author, status, and read-state
+  filters; for Blackboard Original courses that reject REST, forum, thread,
+  and thread-detail reply reads fall back to the HTML discussion board, while
+  group reads and discussion writes remain REST-only and fail closed.
 - `bb calendar` is an authenticated read with optional date, type, and course
   filters. `bb calendar-link set` validates a native Learn ICS feed and stores
   it as a separate operating-system secret; `show` masks it by default, and
   `fetch` can refresh the feed without a fresh CAS login.
 - `bb attachments` keeps teacher-provided content files separate from student
-  attempt files. `bb download` is a local mutation with an explicit destination,
-  same-origin URL checks, exclusive no-overwrite placement, and a portable
-  filesystem fallback when hard links are unavailable.
+  attempt files. `bb download` and `bb attempt-download` are local mutations
+  with explicit destinations, same-origin URL checks, exclusive no-overwrite
+  placement, and a portable filesystem fallback when hard links are
+  unavailable. `bb attempt-files` exposes the student's submitted filenames
+  without mixing them into the teacher-attachment surface.
 - Booking, library-booking, and PMS sessions keep credentials and session
   material in memory only, reject requests outside their allowlists, and never
   expose a generic authenticated write primitive.

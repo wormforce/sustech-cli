@@ -36,14 +36,23 @@ includes these high-value areas:
   `faculty departments`, `faculty list`, `faculty get`, `faculty search`,
   `faculty render`, `transit facilities`, `transit find`, `transit lines`,
   `transit schedule`, `transit stops`, `transit live`, `online search`,
-  `online talks list/search/get`, `online contact search/get`.
+  `online talks list/search/get`, `online manual list/get`,
+  `online contact search/get`. Use `online search QUERY --section manual` for
+  the selected public handbook corpus, and `online manual list/get` when you
+  need deterministic handbook ids or an exact handbook record.
 - Academic profile and audits: `profile show`, `profile export`,
   `academic snapshot save`, `academic changes`, `academic watch`, `doctor`.
 - Research helpers: `papers search`, `papers fetch-oa`, `nces browse`,
-  `nces search`, `nces course`.
-- Blackboard: `bb user`, `bb courses`, `bb content`, `bb attachments`,
-  `bb assignments`, `bb deadlines`, `bb calendar`, `bb search`,
-  `bb attempts`, `bb download`, `bb sync`, `bb submit preview`,
+  `nces filter-options`, `nces global-stats`, `nces rankings`,
+  `nces search`, `nces by-code`, `nces course`, `nces reviews`,
+  `nces teacher`, `nces stats`.
+- Blackboard: `bb user`, `bb courses`, `bb content`, `bb tree`, `bb types`,
+  `bb attachments`, `bb download`, `bb roster`, `bb message-folders`,
+  `bb messages`, `bb message-participants`, `bb message-send preview/apply`,
+  `bb discussions`, `bb discussion-groups`, `bb discussion`,
+  `bb discussion-replies`, `bb assignments`, `bb grades`, `bb attempt-files`,
+  `bb attempt-download`, `bb announcements`, `bb deadlines`, `bb calendar`,
+  `bb search`, `bb sync`, `bb attempts`, `bb submit preview`,
   `bb submit apply`, `bb calendar-link set/show/fetch/delete`.
 - TIS reads and planning: `tis courses search`, `tis courses available`,
   `tis enrolled`, `tis schedule`, `tis grades`, `tis exams`,
@@ -69,6 +78,8 @@ Some useful routing hints:
 
 - For “what is due soon”, prefer `bb deadlines` and optionally
   `context --live --level normal` or `context --live --level verbose`.
+- For recent Blackboard notices, prefer `bb announcements --days N`; preserve
+  `partial` and per-course failures instead of claiming the result is complete.
 - For Blackboard timeline questions, prefer `bb calendar` when you need typed
   `--since`/`--until`/`--type`/`--course-id` filtering.
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
@@ -103,7 +114,8 @@ Some useful routing hints:
   cannot complete on the current host. Browser auth stays manual.
 - Treat every `online` result as community-maintained. Preserve its source URL,
   repository path, fetch/update times, CC BY-SA license, and advisories. Talk
-  records may be model-processed. The selected contact surface deliberately
+  records may be model-processed. Manual search is also restricted to a fixed
+  heading/page allowlist and is not official policy. The selected surface deliberately
   excludes emergency, medical/crisis, financial/bank, personal, dining/chat,
   QQ-group, and professor-email-list sections; do not use it as an emergency
   directory or invent excluded records. Recheck consequential contact or event

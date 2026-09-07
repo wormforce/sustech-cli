@@ -38,6 +38,7 @@ export function formatServiceStatuses(statuses: readonly ServiceStatus[]): strin
 
 export * from "./base.js";
 export * from "./blackboard.js";
+export * from "./blackboard-browser.js";
 export * from "./blackboard-calendar.js";
 export * from "./booking-auth.js";
 export * from "./booking.js";

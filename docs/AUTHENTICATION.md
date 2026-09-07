@@ -12,6 +12,8 @@ submission state remain in memory.
 sustech auth login
 sustech auth status
 sustech auth check --service bb
+sustech auth check --service bb --browser --interactive
+sustech doctor --service bb --live --browser --interactive
 sustech auth logout
 ```
 
@@ -33,6 +35,12 @@ Fresh CAS login is not always password-only. If CAS serves an interactive slide
 CAPTCHA, the CLI stops before password submission and returns
 `CAS_INTERACTIVE_CHALLENGE_REQUIRED`. It does not attempt to bypass that
 challenge.
+
+For Blackboard only, `auth check` and `doctor --live` also support a separate
+read-only browser-backed verification path. Use `--browser` to request that
+path, and add `--interactive` when you need to complete the CAS page manually
+in the opened browser window. This path does not accept browser credentials in
+the CLI and does not persist browser cookies.
 
 ## Primo browser mode
 
