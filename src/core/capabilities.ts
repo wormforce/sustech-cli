@@ -23,6 +23,8 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("faculty get", "Read one public faculty profile.", "read", { status: "preview" }),
   capability("faculty search", "Search public faculty profile fields.", "read", { status: "preview" }),
   capability("faculty render", "Render a public faculty profile as Agent-readable Markdown.", "read", { status: "preview" }),
+  capability("talks list", "List upcoming official SUSTech homepage lectures, or all currently displayed lectures with --all.", "read", { status: "preview" }),
+  capability("talks search", "Search upcoming official SUSTech homepage lectures by title, speaker, venue, and time; include started lectures with --all.", "read", { status: "preview" }),
   capability("online search", "Search selected public community-maintained SUSTech Online content with source and freshness metadata.", "read", { status: "preview" }),
   capability("online talks list", "List public SUSTech talks indexed by the community-maintained SUSTech Online repository.", "read", { status: "preview" }),
   capability("online talks search", "Search public SUSTech talks indexed by the community-maintained SUSTech Online repository.", "read", { status: "preview" }),

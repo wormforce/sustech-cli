@@ -6,6 +6,10 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ### Added
 
+- Added public `talks list` and `talks search` commands for official SUSTech
+  homepage lectures, showing upcoming events by default and all currently
+  displayed events with `--all`, with source metadata and text/JSON/JSONL output.
+
 - Added normalized lecture/lab selection bundles with explicit component,
   credit-bearing, mutation-ID, task-RWH, and read-back contracts.
 - Added bounded `tis selection reconcile` reads for uncertain enrollment,

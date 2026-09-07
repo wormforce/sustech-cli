@@ -1,6 +1,6 @@
 ---
 name: sustech-cli
-description: Use the installed sustech CLI for SUSTech campus reads, planning, guarded exports, and confirm-gated workflows across TIS, Blackboard, profile/context, booking, library booking, PMS, transit, faculty, papers, NCES, and selected SUSTech Online public information. Do not use for unrelated universities or invent commands the installed CLI does not report.
+description: Use the installed sustech CLI for SUSTech campus reads, planning, guarded exports, and confirm-gated workflows across TIS, Blackboard, profile/context, booking, library booking, PMS, transit, faculty, official talks, papers, NCES, and selected SUSTech Online public information. Do not use for unrelated universities or invent commands the installed CLI does not report.
 ---
 
 # SUSTech CLI
@@ -35,8 +35,9 @@ includes these high-value areas:
   `resources list`, `resources search`, `wifi status`, `wifi events`,
   `faculty departments`, `faculty list`, `faculty get`, `faculty search`,
   `faculty render`, `transit facilities`, `transit find`, `transit lines`,
-  `transit schedule`, `transit stops`, `transit live`, `online search`,
-  `online talks list/search/get`, `online contact search/get`.
+  `transit schedule`, `transit stops`, `transit live`, `talks list`,
+  `talks search`, `online search`, `online talks list/search/get`,
+  `online contact search/get`.
 - Academic profile and audits: `profile show`, `profile export`,
   `academic snapshot save`, `academic changes`, `academic watch`, `doctor`.
 - Research helpers: `papers search`, `papers fetch-oa`, `nces browse`,
@@ -72,6 +73,12 @@ Some useful routing hints:
 - For Blackboard timeline questions, prefer `bb calendar` when you need typed
   `--since`/`--until`/`--type`/`--course-id` filtering.
 - For “find a Blackboard file/course item”, prefer `bb search` before scraping.
+- For current official university lectures, use the direct CLI commands `talks
+  list` and `talks search`. They show future lectures by default using Beijing
+  start times; add `--all` for every lecture currently displayed on the
+  official homepage. Keep unknown-time records visible and preserve the
+  returned official source metadata. These commands are not exposed through
+  the local MCP surface.
 - For timetable exploration, prefer `tis timetable` for one-off solving and
   `tis plan *` for persistent local planning.
 - `tis plan explain` and `tis plan recommend` are read-only planning helpers.
