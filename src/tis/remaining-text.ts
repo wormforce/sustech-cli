@@ -97,6 +97,8 @@ export function formatSelectionPreview(
   return [
     `TIS selection preview · ${preview.operation}`,
     "No network request or mutation was performed.",
+    `Client request ID: ${preview.clientRequestId}`,
+    "Upstream idempotency key: unsupported; automatic retry forbidden.",
     ...(options.exactTarget
       ? [
           "Exact target",

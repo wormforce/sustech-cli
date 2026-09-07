@@ -41,6 +41,7 @@ Public data does not require an account:
 sustech calendar day 2026-09-01
 sustech faculty search "computer vision"
 sustech online talks list --limit 10
+sustech talks list
 sustech online contact search "教学"
 sustech transit lines
 sustech library search "graph neural networks" --limit 5
@@ -166,6 +167,32 @@ Local state can also change through credential login/logout, persistent
 and do not overwrite an existing target unless the command explicitly permits
 and requests it.
 
+## Official campus lectures
+
+Official university lectures are available without login:
+
+```bash
+sustech talks list
+sustech talks list --all
+sustech talks list --json --pretty
+sustech talks search "物理" --jsonl
+sustech talks search "物理" --all
+```
+
+These commands read the lecture section of the official
+[homepage events page](https://www.sustech.edu.cn/zh/home-events.html), excluding
+notices. The default view shows lectures whose Beijing start time is still in
+the future, ordered from nearest to furthest. Records with an unparseable time
+remain visible under “time to confirm” rather than being silently omitted.
+`--all` adds lectures whose advertised start time has passed; it means all
+lectures currently displayed on the homepage, not the complete historical
+archive. Search matches titles, speakers, venues, and time text, and follows the
+same upcoming-by-default behavior. Results include title, speaker, venue,
+original time text, a normalized Beijing start time when parseable, timing
+classification, detail URL, reference time, and official source/fetch metadata.
+The existing `online talks` commands continue to use the community-maintained
+SUSTech Online source. The new official commands are CLI-only at present.
+
 ## Output contract
 
 ```bash
@@ -210,7 +237,10 @@ in the operating system's native credential store:
 The password is entered through a hidden prompt, is never accepted as a normal
 command-line argument, and is never written to the CLI config. If no safe
 backend is available, the CLI returns `CREDENTIAL_STORE_UNAVAILABLE` instead of
-falling back to plaintext.
+falling back to plaintext. Linux writes are verified by immediate read-back;
+locked collections and broken desktop D-Bus sessions produce distinct safe
+remediation in `auth status --json` instead of being reported as an expired
+password.
 
 On macOS, `auth status` checks Keychain item metadata without reading the
 password. Credential-helper commands are bounded to five seconds and report
@@ -261,6 +291,19 @@ sustech tis enroll apply \
   --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2 --confirm
 ```
 
+Availability JSON groups lecture/lab rows into credit-deduplicated bundles and
+labels the exact `courseId` (`p_id`) and component `rwh` roles. If apply returns
+`TIS_SELECTION_OUTCOME_UNKNOWN`, preserve that exact pair and reconcile without
+repeating the write:
+
+```bash
+sustech tis selection reconcile enroll \
+  --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --attempts 3 --json
+```
+
+See [docs/SELECTION_CONTRACTS.md](docs/SELECTION_CONTRACTS.md) for bundle,
+identifier, bounded reconciliation, and grade-free planning-output contracts.
+
 Blackboard attachment and submission example:
 
 ```bash
@@ -301,23 +344,45 @@ academic state once, compares it against the existing local state file when
 present, reports the changes, and updates that local file. It does not poll, it
 does not loop in the background, and it does not write any remote campus state.
 
-## Context v2
+## Daily context for AI assistants
 
 ```bash
 sustech context --level terse
 sustech context --live --level normal
+sustech context --live --json
 sustech context --live --level verbose
 ```
 
 `context` now has three explicit detail levels:
 
-- `terse`: compact calendar and near-term summary
-- `normal`: adds the next deadline, next evaluation, and next exam when known
-- `verbose`: adds public weather, AQI, and library-status observations when
-  `--live` is enabled
+- `terse`: date, teaching week and parity, holiday/makeup timetable, and current/next class; only the timetable is requested with `--live`
+- `normal` (default): adds the next assignment deadline, evaluation, exam, weather and AQI with `--live`
+- `verbose`: also retrieves library opening status
 
-`--live` keeps source status explicit. Missing or failed live sources stay
-marked as missing or partial; they are not silently backfilled.
+All dates and display times use **Asia/Shanghai**, including on overseas machines.
+JSON includes `generatedAt` (snapshot creation), `referenceAt` (the instant used
+for class/deadline selection), `timezone`, and the full public `academicDay`.
+`schedule.currentClass`, `nextClass`, and `todayClasses` expose ISO timestamps,
+periods, locations when available, and `makeupFor` dates. Current and next classes
+can appear together; holiday/makeup dates use the same rules as ICS exports.
+
+`sourceStatus` distinguishes a successful empty result (`empty`) from unavailable
+data (`missing`). `liveSources` adds errors, missing credentials, partial coverage,
+and intentionally skipped requests (`not-requested`). An empty result describes
+only the successfully retrieved sources; it is not a claim about all university
+systems. A failed public calendar fetch does not prevent other available sources
+from being returned.
+
+Weather and air quality include source URLs and upstream `observedAt` timestamps
+when supplied. Observations older than three hours are labeled `stale`; absent
+timestamps are `unknown`. AQI uses **US EPA** categories, not China's AQI scale.
+Public environmental requests time out after eight seconds, and TIS, Blackboard,
+and environmental reads run concurrently.
+
+Without `--live`, only the date/calendar snapshot is requested. Use
+`context --date YYYY-MM-DD` for a calendar preview (reference time: noon in
+Shanghai); combining a non-today date with `--live` is rejected so today's
+observations cannot be mistaken for historical data or forecasts.
 
 ## Library catalog
 

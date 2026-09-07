@@ -1,3 +1,4 @@
+import stringWidth from "string-width";
 import type { Semester } from "./semester.js";
 import type { StudentProfileReport } from "../profile/report.js";
 import type { TimetableResult } from "../tis/planner.js";
@@ -66,10 +67,12 @@ export function formatEnrolledCourses(semester: Semester, courses: PersonalSched
   const header = `Enrolled courses · ${semester.value}`;
   if (courses.length === 0) return `${header}\n\nNo enrolled courses returned by TIS.`;
   const blocks = courses.map((course, index) => {
-    const name = course.courseName || course.description || course.descriptionEn || "Unnamed course";
+    const name = course.courseName || course.rwh || "Unnamed course";
     const details = [
       course.teacher && `Teacher: ${course.teacher}`,
-      course.description && `Time: ${course.description}`,
+      course.day !== undefined && course.periodStart !== undefined
+        ? `Day ${course.day}, period ${course.periodStart}-${course.periodEnd ?? course.periodStart}`
+        : "",
       course.room && `Room: ${course.room}`,
     ].filter(Boolean).join(" · ");
     return `${index + 1}. ${course.courseCode ? `${course.courseCode} — ` : ""}${name}${details ? `\n   ${details}` : ""}`;
@@ -581,10 +584,12 @@ function padCell(value: string, width: number): string {
   return `${truncated}${" ".repeat(Math.max(0, width - displayWidth(truncated)))}`;
 }
 
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+
 function truncateDisplay(value: string, width: number): string {
   if (displayWidth(value) <= width) return value;
   let output = "";
-  for (const character of value) {
+  for (const { segment: character } of graphemes.segment(value)) {
     if (displayWidth(`${output}${character}…`) > width) break;
     output += character;
   }
@@ -592,5 +597,6 @@ function truncateDisplay(value: string, width: number): string {
 }
 
 function displayWidth(value: string): number {
-  return [...value].reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  // Terminals normally render ambiguous-width characters such as Ⅴ and … in one cell.
+  return stringWidth(value, { ambiguousIsNarrow: true });
 }

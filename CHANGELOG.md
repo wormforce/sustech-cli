@@ -4,11 +4,44 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added public `talks list` and `talks search` commands for official SUSTech
+  homepage lectures, showing upcoming events by default and all currently
+  displayed events with `--all`, with source metadata and text/JSON/JSONL output.
+
+- Added normalized lecture/lab selection bundles with explicit component,
+  credit-bearing, mutation-ID, task-RWH, and read-back contracts.
+- Added bounded `tis selection reconcile` reads for uncertain enrollment,
+  cart, drop, and bid outcomes.
+
+### Changed
+
+- Made planning-oriented availability, enrollment, degree-progress, and
+  degree-missing JSON use documented minimum-data projections; grade-free
+  output is the default.
+
+- Refined `context` into a Shanghai-time daily snapshot with structured current,
+  next and today's classes, teaching-week parity and makeup details, explicit
+  empty/unavailable sources, and weather/AQI at normal detail level. Environmental
+  observations retain source timestamps and freshness; public source failures
+  no longer prevent a partial snapshot. Non-today live snapshots are rejected.
+
 ### Fixed
 
+- Corrected terminal-table alignment for Unicode Roman numerals, ellipses,
+  and combining characters, and kept grapheme clusters intact during truncation.
 - Made `auth status` use a metadata-only macOS Keychain lookup instead of
   reading the stored password, and bounded credential-helper subprocesses to
   five seconds with a structured `CREDENTIAL_STORE_TIMEOUT` status.
+- Linux Secret Service writes now require an immediate verified read-back and
+  report actionable locked-collection, D-Bus-session, and access-denied states.
+
+### Security
+
+- Selection transport ambiguity now returns an explicit non-retriable outcome
+  with a local correlation ID, while raw upstream mutation and personal
+  selection envelopes are excluded from default CLI output.
 
 ## [0.10.0] - 2026-08-29
 

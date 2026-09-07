@@ -14,6 +14,8 @@ test("context weather parser extracts concise condition and rounded temperatures
       update_time: "2026-08-28T12:00:00+08:00",
     }),
     {
+      source: "https://api.sustech.online/weather",
+      observedAt: "2026-08-28T04:00:00.000Z",
       condition: "气温26.8℃，体感29.1℃，近两个小时内无降雨。",
       tempC: 27,
       feelsLikeC: 29,
@@ -26,6 +28,7 @@ test("context AQI parser preserves particles and maps standard levels", () => {
   assert.deepEqual(
     normaliseContextAirQuality({
       current: {
+        time: "2026-08-28T12:00",
         us_aqi: 88,
         pm2_5: 18.4,
         pm10: 26.1,
@@ -33,6 +36,9 @@ test("context AQI parser preserves particles and maps standard levels", () => {
       },
     }),
     {
+      standard: "US EPA",
+      source: "https://air-quality-api.open-meteo.com",
+      observedAt: "2026-08-28T04:00:00.000Z",
       aqi: 88,
       level: "Moderate",
       pm25: 18.4,

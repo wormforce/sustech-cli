@@ -904,6 +904,24 @@ test("selection and bid apply require --confirm before any credential lookup or 
   assert.equal(JSON.parse(bid.stdout).error.code, "CONFIRMATION_REQUIRED");
 });
 
+test("selection reconciliation is bounded, read-only, and validates locally before credentials", () => {
+  const invalid = runWithoutCredentials([
+    "tis", "selection", "reconcile", "cart.add",
+    "--course-id", "selection-id",
+    "--rwh", "task-id",
+    "--round", "bxxk",
+    "--attempts", "1",
+    "--json",
+  ]);
+  assert.equal(invalid.status, 2);
+  assert.equal(JSON.parse(invalid.stdout).error.code, "USAGE");
+
+  const capabilities = JSON.parse(run(["capabilities", "--json"]).stdout).data.capabilities;
+  const reconcile = capabilities.find((entry: { command:string }) => entry.command === "tis selection reconcile");
+  assert.equal(reconcile.kind, "read");
+  assert.equal(reconcile.confirmation, "none");
+});
+
 test("context live supports calendar level and degrades gracefully when credentials are unavailable", () => {
   const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"]);
   assert.equal(result.status, 0);
@@ -914,6 +932,12 @@ test("context live supports calendar level and degrades gracefully when credenti
   assert.equal(envelope.data.liveSources.tisSchedule.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.tisExams.state, "credentials-missing");
   assert.equal(envelope.data.liveSources.blackboardDeadlines.state, "credentials-missing");
+});
+
+test("context rejects mixing live observations with a historical date before accessing sources", () => {
+  const result = runWithoutCredentials(["context", "--date", "2020-01-01", "--live", "--json"]);
+  assert.equal(result.status, 2);
+  assert.match(JSON.parse(result.stdout).error.message, /only available for today's date/);
 });
 
 test("profile commands remain machine-readable when credentials are unavailable", () => {

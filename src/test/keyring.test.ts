@@ -101,6 +101,40 @@ test("saving a named profile never changes the implicit default profile", async 
   }
 });
 
+test("an unverified credential write is rolled back before metadata is committed", async () => {
+  const configDir = await mkdtemp(join(tmpdir(), "sustech-cli-keyring-verify-"));
+  const store = new MemoryStore();
+  const normalGet = store.get.bind(store);
+  const normalSet = store.set.bind(store);
+  let hideNextRead = false;
+  store.set = async (account: string, password: string) => {
+    await normalSet(account, password);
+    hideNextRead = true;
+  };
+  store.get = async (account: string) => {
+    if (hideNextRead) {
+      hideNextRead = false;
+      return undefined;
+    }
+    return normalGet(account);
+  };
+  try {
+    await assert.rejects(
+      saveStoredCredentials({ sid:"12410000", password:"secret" }, { configDir, store }),
+      (error: unknown) => error instanceof CliError
+        && error.code === "CREDENTIAL_STORE_ERROR"
+        && error.details?.reason === "Credential store write could not be verified by an immediate read-back.",
+    );
+    assert.equal(store.values.size, 0);
+    await assert.rejects(readFile(join(configDir, "credentials.json"), "utf8"), (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
+      return true;
+    });
+  } finally {
+    await rm(configDir, { recursive:true, force:true });
+  }
+});
+
 test("Blackboard calendar links are stored by profile without on-disk metadata", async () => {
   const configDir = await mkdtemp(join(tmpdir(), "sustech-cli-bb-calendar-keyring-"));
   const store = new MemoryStore();
@@ -274,6 +308,10 @@ case "$1" in
     if [ "$FAKE_SECRET_LOOKUP_HANG" = "1" ]; then
       exec /bin/sleep 60
     fi
+    if [ "$FAKE_SECRET_LOOKUP_LOCKED" = "1" ]; then
+      printf 'The collection is locked\\n' >&2
+      exit 1
+    fi
     if [ -s "$FAKE_SECRET_STATE" ]; then
       /bin/cat "$FAKE_SECRET_STATE"
       printf '\\n'
@@ -313,6 +351,17 @@ esac
     assert.equal(timedOut.reasonCode, "CREDENTIAL_STORE_TIMEOUT");
     assert.match(timedOut.reason ?? "", /CREDENTIAL_STORE_TIMEOUT/);
     delete fakeEnv.FAKE_SECRET_LOOKUP_HANG;
+
+    fakeEnv.FAKE_SECRET_LOOKUP_LOCKED = "1";
+    await assert.rejects(
+      loadStoredCredentials(undefined, storeOptions),
+      (error: unknown) => error instanceof CliError
+        && error.code === "CREDENTIAL_STORE_ERROR"
+        && error.details?.reason === "The Secret Service collection is locked."
+        && typeof error.details.remediation === "string"
+        && /Unlock/.test(error.details.remediation),
+    );
+    delete fakeEnv.FAKE_SECRET_LOOKUP_LOCKED;
 
     fakeEnv.FAKE_SECRET_CLEAR_ERROR = "1";
     await assert.rejects(

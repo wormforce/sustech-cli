@@ -72,6 +72,12 @@ Credential commands return backend, profile, availability, and masked account
 metadata only. Passwords, cookies, bearer tokens, and keyring values are never
 part of text, JSON, JSONL, error details, or capability output.
 
+Planning-oriented TIS commands additionally use field allowlists. Available
+courses are emitted as normalized bundles, enrolled rows omit broad description
+fields, and `tis degree missing` omits letter grades and numeric scores. Course
+grades in `tis degree progress` require the explicit `--details` option. See
+`SELECTION_CONTRACTS.md` for exact bundle, identifier, and projection semantics.
+
 Blackboard attachment listings likewise omit signed `bbcswebdav` URLs. A
 successful `bb download` result contains only stable attachment metadata, the
 absolute destination path, byte count, content type, and SHA-256.
