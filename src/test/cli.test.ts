@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { academicSnapshotSource, buildAcademicSnapshot } from "../academic/snapshot.js";
 import {
   buildBookingCreateApplyConfirmation,
@@ -1433,7 +1433,7 @@ test("selection reconciliation is bounded, read-only, and validates locally befo
 
 test("context live degrades gracefully when public sources and credentials are unavailable", () => {
   const result = runWithoutCredentials(["context", "--calendar-level", "graduate", "--live", "--json"], { offline: true });
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   const envelope = JSON.parse(result.stdout);
   assert.equal(envelope.data.calendarSource.state, "error");
   assert.equal(envelope.data.liveSources.weather.state, "error");
@@ -1560,7 +1560,7 @@ function runWithoutCredentials(args: string[], options: { offline?: boolean } = 
     if (options.offline) {
       const fixturePath = join(configRoot, "offline.mjs");
       writeFileSync(fixturePath, 'globalThis.fetch = async () => { throw new Error("Synthetic public source outage"); };');
-      imports.push("--import", fixturePath);
+      imports.push("--import", pathToFileURL(fixturePath).href);
     }
     const result = spawnSync(process.execPath, [...imports, CLI_PATH, ...args], {
       encoding: "utf8",
