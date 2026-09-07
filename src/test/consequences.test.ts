@@ -13,7 +13,11 @@ const MUTATION_CONSEQUENCES: Readonly<Record<string, readonly string[]>> = {
   "bb calendar-link set": ["blackboard.calendar-link.store"],
   "bb calendar-link fetch": ["blackboard.calendar-link.fetch"],
   "bb calendar-link delete": ["blackboard.calendar-link.delete"],
+  "bb attempt-download": ["blackboard.attempt-download"],
   "bb submit apply": ["blackboard.submit"],
+  "bb message-send apply": ["blackboard.message-send"],
+  "bb discussion-post apply": ["blackboard.discussion-post"],
+  "bb discussion-reply apply": ["blackboard.discussion-reply"],
   "booking create apply": ["booking.create"],
   "booking cancel apply": ["booking.cancel"],
   "lib-booking create apply": ["library-booking.create"],
@@ -37,6 +41,9 @@ test("consequence registry has stable unique operation IDs", () => {
   assert.equal(consequenceByOperation("blackboard.calendar-link.fetch")?.availability, "implemented");
   assert.equal(consequenceByOperation("blackboard.calendar-link.delete")?.availability, "implemented");
   assert.equal(consequenceByOperation("blackboard.submit")?.availability, "implemented");
+  assert.equal(consequenceByOperation("blackboard.message-send")?.availability, "implemented");
+  assert.equal(consequenceByOperation("blackboard.discussion-post")?.availability, "implemented");
+  assert.equal(consequenceByOperation("blackboard.discussion-reply")?.availability, "implemented");
   assert.equal(consequenceByOperation("pms.upload")?.availability, "implemented");
   assert.equal(consequenceByOperation("pms.delete")?.availability, "implemented");
 });

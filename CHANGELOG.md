@@ -4,7 +4,28 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-07
+
 ### Added
+
+- Added Blackboard content trees, rosters, message and discussion reads,
+  submitted-file downloads, cross-course assignment/grade summaries, and
+  guarded preview/apply commands for messages, discussion posts/replies and
+  file or text assignment submissions. Remote writes remain fixture-tested
+  and require an exact reviewed payload plus explicit confirmation.
+- Added per-service authentication checks and ephemeral, manual Blackboard
+  browser authentication for read-only fallback workflows.
+
+- Expanded the public NCES integration with exact course-code resolution,
+  teacher profiles, course rating statistics, filtered review pagination, and
+  typed MCP tools. NCES-generated summaries are explicitly labelled as
+  community AI summaries rather than official course information.
+- Added `bb announcements` to aggregate visible system and course
+  announcements while preserving successful results and reporting inaccessible
+  courses as partial failures.
+- Extended `online search` with a fixed-allowlist `manual` section covering
+  selected SUSTech Online service, study, transport, life, facility, and
+  calendar guidance with source, freshness, and CC BY-SA metadata.
 
 - Added public `talks list` and `talks search` commands for official SUSTech
   homepage lectures, showing upcoming events by default and all currently
@@ -16,6 +37,14 @@ All notable changes to `sustech-cli` are documented in this file.
   cart, drop, and bid outcomes.
 
 ### Changed
+
+- Daily context includes the latest visible Blackboard announcement while
+  retaining Shanghai timezone, empty/partial source states and public-source
+  failure handling.
+
+- NCES browse sorting now uses the upstream server-side sort, and NCES search
+  supports typed course, teacher, and review result pages.
+- The local MCP surface now exposes `42` typed public/local read-only tools.
 
 - Made planning-oriented availability, enrollment, degree-progress, and
   degree-missing JSON use documented minimum-data projections; grade-free
@@ -29,6 +58,10 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ### Fixed
 
+- Made the context outage regression deterministic with isolated offline
+  fixtures so ordinary CI no longer depends on the public calendar network.
+- Invalid numeric HTML entities no longer crash text normalization.
+
 - Corrected terminal-table alignment for Unicode Roman numerals, ellipses,
   and combining characters, and kept grapheme clusters intact during truncation.
 - Made `auth status` use a metadata-only macOS Keychain lookup instead of
@@ -38,6 +71,9 @@ All notable changes to `sustech-cli` are documented in this file.
   report actionable locked-collection, D-Bus-session, and access-denied states.
 
 ### Security
+
+- Browser-backed Blackboard reads validate every redirect before sending
+  cookies and enforce cookie expiration and path boundaries.
 
 - Selection transport ambiguity now returns an explicit non-retriable outcome
   with a local correlation ID, while raw upstream mutation and personal

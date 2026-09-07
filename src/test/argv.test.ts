@@ -20,6 +20,17 @@ test("command inference skips option values in machine-readable errors", () => {
   assert.equal(inferCommandName(["tis", "degree", "missing", "--semester", "2026-2027-1", "--json"]), "tis degree missing");
   assert.equal(inferCommandName(["bb", "calendar", "--since", "2026-08-01T00:00:00Z", "--json"]), "bb calendar");
   assert.equal(inferCommandName(["bb", "calendar-link", "show", "--reveal", "--json"]), "bb calendar-link show");
+  assert.equal(inferCommandName(["bb", "roster", "_8343_1", "--role", "Student", "--json"]), "bb roster");
+  assert.equal(inferCommandName(["bb", "message-folders", "_8343_1", "--json"]), "bb message-folders");
+  assert.equal(inferCommandName(["bb", "messages", "_8343_1", "--folder-type", "Inbox", "--json"]), "bb messages");
+  assert.equal(inferCommandName(["bb", "message-participants", "_8343_1", "_71_1", "--json"]), "bb message-participants");
+  assert.equal(inferCommandName(["bb", "message-send", "preview", "_8343_1", "--to-user", "_1_1", "--text-file", "/tmp/msg.txt", "--json"]), "bb message-send preview");
+  assert.equal(inferCommandName(["bb", "discussions", "_8343_1", "--page", "2", "--json"]), "bb discussions");
+  assert.equal(inferCommandName(["bb", "discussion-groups", "_8343_1", "_65_1", "--json"]), "bb discussion-groups");
+  assert.equal(inferCommandName(["bb", "discussion", "_8343_1", "_65_1", "--status", "Published", "--json"]), "bb discussion");
+  assert.equal(inferCommandName(["bb", "discussion-replies", "_8343_1", "_65_1", "_71_1", "--json"]), "bb discussion-replies");
+  assert.equal(inferCommandName(["bb", "discussion-post", "preview", "_8343_1", "_65_1", "--text-file", "/tmp/post.txt", "--json"]), "bb discussion-post preview");
+  assert.equal(inferCommandName(["bb", "discussion-reply", "apply", "_8343_1", "_65_1", "_71_1", "--text-file", "/tmp/reply.txt", "--expected-sha256", "a".repeat(64), "--confirm", "--json"]), "bb discussion-reply apply");
   assert.equal(inferCommandName(["academic", "snapshot", "save", "--destination", "/tmp/state.json", "--json"]), "academic snapshot save");
   assert.equal(inferCommandName(["academic", "snapshot", "diff", "before.json", "after.json", "--json"]), "academic snapshot diff");
   assert.equal(inferCommandName(["academic", "changes", "before.json", "after.json", "--json"]), "academic changes");

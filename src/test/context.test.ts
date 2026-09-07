@@ -67,6 +67,7 @@ test("context service derives academic labels from the calendar and keeps terse 
   assert.equal(snapshot.sourceStatus.academicDay, "derived");
   assert.equal(snapshot.sourceStatus.schedule, "provided");
   assert.equal(snapshot.sourceStatus.nextDeadline, "missing");
+  assert.equal(snapshot.sourceStatus.recentAnnouncement, "missing");
   assert.match(service.toText(snapshot), /Week 14 of 2026 Spring/);
 
   const record = service.toRecord(snapshot);
@@ -74,7 +75,7 @@ test("context service derives academic labels from the calendar and keeps terse 
   assert.equal((record.schedule as { next?: string }).next, "程序设计基础");
 });
 
-test("context service includes deadlines, evaluations, and exams at normal level", () => {
+test("context service includes deadlines, announcements, evaluations, and exams at normal level", () => {
   const service = new ContextService();
   const snapshot = service.build({
     now: "2026-05-29T14:30:00+08:00",
@@ -97,12 +98,24 @@ test("context service includes deadlines, evaluations, and exams at normal level
       },
     },
     nextDeadline: { name: "BB HW1", daysLeft: 1 },
+    recentAnnouncement: {
+      title: "Lab slides posted",
+      source: "course",
+      course: "CHEM201 Physical Chemistry",
+      activityAt: "2026-05-29T08:00:00+08:00",
+    },
     nextEvaluation: { course: "线性代数", name: "教学评估", daysLeft: 3 },
     nextExam: { name: "高等数学", code: "MA101", date: "2026-06-20", time: "09:00-11:00", building: "主楼", room: "301" },
   }, "normal");
 
   const record = service.toRecord(snapshot);
   assert.deepEqual(record.nextDeadline, { name: "BB HW1", daysLeft: 1 });
+  assert.deepEqual(record.recentAnnouncement, {
+    title: "Lab slides posted",
+    source: "course",
+    course: "CHEM201 Physical Chemistry",
+    activityAt: "2026-05-29T08:00:00+08:00",
+  });
   assert.deepEqual(record.nextEvaluation, { course: "线性代数", name: "教学评估", daysLeft: 3 });
   assert.deepEqual(record.nextExam, {
     name: "高等数学",
@@ -112,6 +125,7 @@ test("context service includes deadlines, evaluations, and exams at normal level
     building: "主楼",
     room: "301",
   });
+  assert.match(service.toText(snapshot), /Recent Blackboard announcement: \[Lab slides posted\] — CHEM201 Physical Chemistry · 2026-05-29T08:00:00\+08:00/);
   assert.match(service.toText(snapshot), /Next exam: \[高等数学 \(MA101\)\]/);
 });
 

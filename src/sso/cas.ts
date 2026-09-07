@@ -218,10 +218,14 @@ export class CasSession {
     }
     const response = await this.requestRaw(url.toString(), init);
     if (!response.ok) {
+      const bodySample = await response.clone().text()
+        .then((text) => collapseText(text).slice(0, 160))
+        .catch(() => undefined);
       throw new CliError(`${this.config.name} request failed.`, "SERVICE_HTTP_ERROR", 1, {
         service: this.config.name,
         path: url.pathname,
         status: response.status,
+        ...(bodySample ? { bodySample } : {}),
       });
     }
     return response;
@@ -308,6 +312,10 @@ function requiresInteractiveCaptcha(page: string): boolean {
 function singleSetCookie(headers: Headers): string[] {
   const value = headers.get("set-cookie");
   return value ? [value] : [];
+}
+
+function collapseText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 function domainMatches(hostname: string, domain: string): boolean {

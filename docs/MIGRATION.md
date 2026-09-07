@@ -25,7 +25,7 @@ no real account mutation was attempted while completing this expansion.
 | Academic snapshots | normalized TIS state with optional Blackboard deadlines; `academic changes`; one-shot `academic watch` | guarded versioned snapshot files | Implemented with digest verification, no-overwrite defaults, and no remote write behavior | P1 |
 | Resources | built-in campus resource registry and search | none | Implemented | P1 |
 | Wi-Fi | current association and recent macOS SUSTC Wi-Fi events | none | Implemented on macOS only | P1 |
-| Blackboard | courses, content, teacher-provided attachment listing/download, assignments, deadlines, calendar REST reads, search, attempts, native calendar-link storage/fetch | guarded local sync, optional ICS write, Classic assignment submission | CLI CAS login and courses read live-smoked; calendar reads, native feed-link storage/fetch, local download/sync, and the hash-bound submission workflow use official Learn REST/BBML paths or keyring fixtures and remain conservatively documented | P2 |
+| Blackboard | courses, content, roster, course messages, course-message send preview/apply, discussions, teacher-provided attachment listing/download, per-course and cross-course assignments, cross-course grades, deadlines, calendar REST reads, search, attempts, native calendar-link storage/fetch | guarded local sync, optional ICS write, Classic/Original file submission plus supported text submission | CLI CAS login and courses read live-smoked; roster, course-message, discussion-group discovery, and course-message send now follow official current Learn REST endpoints. Message send validates exact roster recipients, binds apply to the previewed text SHA-256, and verifies the created Sent-folder record. Calendar reads, native feed-link storage/fetch, local download/sync, and the hash-bound submission workflow use official Learn REST/BBML paths or keyring fixtures and remain conservatively documented | P2 |
 | Library catalog | Primo search/detail reads, browser fallback transport | none | Implemented with direct public HTTP plus manual `--browser [--interactive]` fallback; browser auth stays user-completed and cookies are not persisted by the CLI | P2 |
 | Library booking | account state, idle summary, labs, rooms, reservation counts, reservations | guarded create/cancel | Login, account, summary, labs, and count live-smoked; previews now use conservative exact-availability checks and fail closed when the slot cannot be proved safe | P2 |
 | E-Hall booking | redacted user profile, rooms, meetings | guarded create/cancel | Login and rooms read live-smoked; previews now use conservative exact day/time availability checks and fail closed on unreadable overlap state | P2 |
@@ -46,7 +46,7 @@ no real account mutation was attempted while completing this expansion.
 
 Every mutation stays unavailable until its preview payload, confirmation gate,
 success criteria, and post-action verification have fixture tests. As of
-v0.10.0, guarded remote mutations include TIS enroll/cart/drop/bid,
+v0.11.0, guarded remote mutations include TIS enroll/cart/drop/bid,
 Blackboard submission, eHall and library booking create/cancel, and PMS queue
 upload/delete. They require an exact typed target, fresh preflight, explicit
 `--confirm`, and operation-specific read-back; an ambiguous result exits 5 with

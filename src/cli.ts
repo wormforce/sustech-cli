@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   comparableAcademicSnapshotSourceCount,
@@ -27,6 +29,12 @@ import {
   buildLibraryBookingCreateApplyConfirmation,
   shellQuote,
 } from "./cli-confirmations.js";
+import {
+  authenticateBlackboardBrowserSession,
+  authenticateCredentials as authenticateServiceCredentials,
+  casServiceConfig,
+  type AuthService,
+} from "./core/auth-check.js";
 import { inferCommandName } from "./core/argv.js";
 import { formatBrandArt, shouldUseBrandColor } from "./core/branding.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
@@ -86,16 +94,21 @@ import { formatDepartments, formatFaculty } from "./faculty/text.js";
 import {
   formatOnlineContact,
   formatOnlineContactSearch,
+  formatOnlineManualRecord,
+  formatOnlineManualRecords,
   formatOnlineSearchHits,
   formatOnlineTalk,
   formatOnlineTalkSearch,
   formatOnlineTalks,
   getOnlineContact,
+  getOnlineManualRecordWithStatus,
   getOnlineTalk,
+  listOnlineManualRecordsWithStatus,
   listOnlineTalks,
-  searchOnline,
+  searchOnlineWithStatus,
   searchOnlineContacts,
   searchOnlineTalks,
+  type OnlineManualSourceKey,
 } from "./online/index.js";
 import { OfficialTalksClient } from "./talks/client.js";
 import { formatOfficialTalks } from "./talks/text.js";
@@ -207,15 +220,28 @@ import {
   buildLibraryBookingCancelPreview,
   applyLibraryBookingCreate,
   applyLibraryBookingCancel,
+  cleanText,
   createBlackboardAttempt,
+  createBlackboardBrowserAdapter,
+  createBlackboardCourseMessage,
+  createBlackboardDiscussionMessage,
+  createBlackboardDiscussionReply,
+  downloadBlackboardAttemptFile,
   downloadOpenAccessPdf,
   downloadBlackboardContentAttachment,
   evaluateBlackboardSubmissionPreflight,
+  filterBlackboardAssignmentsBySubmissionState,
   formatBrowserPrimoCatalogDetail,
   formatBrowserPrimoCatalogSearch,
   formatServiceStatuses,
   getBlackboardAttempt,
   getBlackboardContentItem,
+  listBlackboardCourseMessageFolders,
+  listBlackboardCourseMessageParticipants,
+  listBlackboardCourseMessages,
+  listBlackboardCourseRoster,
+  listBlackboardDiscussionGroups,
+  getBlackboardDiscussionMessages,
   getBlackboardUser,
   getBlackboardUploadSettings,
   getLibraryBookingUser,
@@ -224,23 +250,35 @@ import {
   getLibraryIdleSummary,
   getLibraryReservationCount,
   getNcesCourseDetail,
+  getNcesCourseStats,
+  getNcesTeacherDetail,
   getWsProgramDetail,
   getWsToken,
   listBlackboardAssignments,
+  listBlackboardAssignmentsWithAttempts,
+  nextBlackboardAnnouncement,
   listBlackboardCalendarItems,
   listBlackboardDeadlines,
+  listBlackboardDiscussionReplies,
+  listBlackboardDiscussions,
   listBlackboardContentAttachments,
   listBlackboardAttemptFiles,
   listBlackboardAttempts,
   listBlackboardContent,
+  listBlackboardContentTree,
   listBlackboardCourses,
   nextBlackboardDeadline,
   searchBlackboardContentTree,
+  summarizeBlackboardContentTypes,
   listBookingRooms,
   listLibraryLabs,
   listLibraryReservationsPage,
   listLibraryRooms,
   listMyBookingMeetings,
+  listNcesCourseReviews,
+  getNcesCourseFilterOptions,
+  getNcesGlobalStats,
+  getNcesRankings,
   createPrimoPublicAdapter,
   buildPmsPrintDeletePreview,
   buildPmsPrintUploadPreview,
@@ -252,18 +290,26 @@ import {
   listPmsStations,
   listPmsUsageHistory,
   listWsPrograms,
-  inspectBlackboardSubmissionFile,
   pmsDuplexLabel,
   pmsPaperName,
+  publicBlackboardAttemptFile,
   readBlackboardSubmissionPayload,
+  readBlackboardSubmissionTextPayload,
   readPmsUploadPayload,
+  getNcesCourseByCode,
   resolveNcesCourseLookups,
   searchLibraryCatalog,
   searchPrimoCatalogByBrowser,
   selectBlackboardAssignment,
   searchCrossref,
   searchNces,
+  listBlackboardAssignmentsAcrossCourses,
+  listBlackboardGrades,
+  tisToNcesTerm,
+  type NcesSearchResult,
   serviceStatus,
+  sampleText,
+  listBlackboardAnnouncements,
   syncBlackboardAttachments,
   updateBlackboardAttempt,
   uploadBlackboardTemporaryFile,
@@ -275,10 +321,20 @@ import {
   loadBlackboardCalendarLink,
   saveBlackboardCalendarLink,
   type BlackboardAttempt,
+  type BlackboardAnnouncement,
   type BlackboardAttemptFile,
   type BlackboardCalendarItemType,
+  type BlackboardCourseMembership,
+  type BlackboardCourseMessage,
+  type BlackboardDiscussion,
+  type BlackboardDiscussionGroup,
+  type BlackboardDiscussionMessage,
+  type BlackboardCourseMessageFolderType,
+  type BlackboardCourseMessageParticipationType,
   type BlackboardDeadline,
+  type BlackboardDiscussionMessageStatus,
   type BlackboardSubmissionFile,
+  type BlackboardSubmissionText,
   type BlackboardSubmissionPreflight as BlackboardSubmissionAssessment,
   type PmsPrintUploadOptions,
   type ServiceAdapter,
@@ -291,10 +347,28 @@ import {
   formatBookingCancelSuccess,
   formatBookingProfile,
   formatBookingRooms,
+  formatBlackboardAnnouncements,
+  formatBlackboardAssignmentsAcrossCourses,
   formatBlackboardAssignments,
+  formatBlackboardAssignmentsWithAttempts,
+  formatBlackboardDiscussion,
+  formatBlackboardDiscussionWritePreview,
+  formatBlackboardDiscussionWriteSuccess,
+  formatBlackboardDiscussionGroups,
+  formatBlackboardDiscussionReplies,
+  formatBlackboardDiscussions,
+  formatBlackboardGrades,
   formatBlackboardCalendar,
   formatBlackboardAttachmentDownload,
+  formatBlackboardAttemptFileDownload,
+  formatBlackboardAttemptFiles,
   formatBlackboardAttachments,
+  formatBlackboardMessageWritePreview,
+  formatBlackboardMessageWriteSuccess,
+  formatBlackboardRoster,
+  formatBlackboardMessageFolders,
+  formatBlackboardMessageParticipants,
+  formatBlackboardMessages,
   formatBlackboardAttempts,
   formatBlackboardContent,
   formatBlackboardCourses,
@@ -303,9 +377,19 @@ import {
   formatBlackboardSubmissionSuccess,
   formatBlackboardSubmitPreview,
   formatBlackboardSync,
+  formatBlackboardTree,
+  formatBlackboardTypes,
   formatBlackboardUser,
+  formatNcesCourseByCode,
   formatNcesCourses,
   formatNcesDetail,
+  formatNcesFilterOptions,
+  formatNcesGlobalStats,
+  formatNcesRankings,
+  formatNcesReviews,
+  formatNcesSearch,
+  formatNcesStats,
+  formatNcesTeacher,
   formatPaperDownload,
   formatPapers,
   formatLibraryBookingUser,
@@ -342,11 +426,11 @@ Usage:
   sustech capabilities [--json|--jsonl]
   sustech describe COMMAND... [--json|--jsonl]
   sustech consequences [OPERATION] [--json|--jsonl]
-  sustech doctor [--profile NAME] [--credentials-file PATH] [--service all|tis,bb,ws,booking,lib-booking,pms] [--live]
+  sustech doctor [--profile NAME] [--credentials-file PATH] [--service all|tis,bb,ws,booking,lib-booking,pms] [--live] [--browser [--interactive]]
   sustech auth login [--profile NAME] [--sid SID] [--service bb|tis|ws|booking|lib-booking|pms] [--password-stdin]
   sustech auth status [--profile NAME]
   sustech auth logout [--profile NAME]
-  sustech auth check [--profile NAME] [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--json|--jsonl]
+  sustech auth check [--profile NAME] [--service tis|bb|ws|booking|lib-booking|library-booking|pms] [--credentials-file PATH] [--browser [--interactive]] [--json|--jsonl]
   sustech calendar terms [--year YYYY] [--calendar-level undergraduate|graduate]
   sustech calendar day [YYYY-MM-DD|--date YYYY-MM-DD] [--calendar-level undergraduate|graduate]
   sustech academic snapshot save --destination PATH [--semester YYYY-YYYY-N] [--include-blackboard] [--overwrite]
@@ -358,12 +442,14 @@ Usage:
   sustech faculty get SLUG
   sustech faculty search QUERY [--department DEPARTMENT] [--limit N]
   sustech faculty render SLUG
-  sustech online search QUERY [--section talks|contact] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
+  sustech online search QUERY [--section talks|contact|manual] [--source SOURCE]... [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
   sustech talks list [--all]
   sustech talks search QUERY [--all]
   sustech online talks list [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
   sustech online talks search QUERY [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
   sustech online talks get ID
+  sustech online manual list [--source SOURCE]... [--limit N]
+  sustech online manual get ID_OR_TITLE [--source SOURCE]...
   sustech online contact search QUERY [--limit N]
   sustech online contact get ID
   sustech context [--date YYYY-MM-DD] [--calendar-level undergraduate|graduate] [--level terse|normal|verbose] [--live] [--credentials-file PATH]
@@ -376,26 +462,53 @@ Usage:
   sustech services status [SERVICE]
   sustech papers search QUERY [--max N] [--min-year YYYY] [--open-access|--resolve-oa]
   sustech papers fetch-oa DOI --destination PATH [--overwrite]
-  sustech nces browse [--page N] [--page-size N] [--sort rating|reviews|name]
-  sustech nces search QUERY
-  sustech nces course ID
-  sustech bb user
-  sustech bb courses [QUERY]
-  sustech bb content COURSE_ID [--parent-id CONTENT_ID]
-  sustech bb attachments COURSE_ID CONTENT_ID
-  sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite]
-  sustech bb assignments COURSE_ID
-  sustech bb deadlines [--days N] [--course QUERY]
-  sustech bb calendar [--since ISO-DATETIME] [--until ISO-DATETIME] [--type Course|GradebookColumn|Institution|OfficeHours|Personal] [--course-id COURSE_ID]
+  sustech nces browse [--page N] [--page-size N] [--sort rating|reviews|name] [--offering-unit NAME]
+  sustech nces filter-options
+  sustech nces global-stats
+  sustech nces rankings CATEGORY [--limit N]
+  sustech nces search QUERY [--page N] [--page-size N] [--type all|course|teacher|review]
+  sustech nces by-code CODE [--term TERM_ID] [--teacher NAME]... [--all-reviews]
+  sustech nces course ID [--all-reviews]
+  sustech nces reviews ID [--page N] [--page-size N] [--sort helpful|newest|oldest|rating-high|rating-low] [--term TERM_ID] [--rating 1-10]
+  sustech nces teacher ID
+  sustech nces stats ID
+  sustech bb user [--browser [--interactive]]
+  sustech bb courses [QUERY] [--browser [--interactive]]
+  sustech bb content COURSE_ID [--parent-id CONTENT_ID] [--browser [--interactive]]
+  sustech bb tree COURSE_ID [--content-id CONTENT_ID] [--max N] [--browser [--interactive]]
+  sustech bb types [--course QUERY] [--browser [--interactive]]
+  sustech bb attachments COURSE_ID CONTENT_ID [--browser [--interactive]]
+  sustech bb download COURSE_ID CONTENT_ID ATTACHMENT_ID --destination PATH [--overwrite] [--browser [--interactive]]
+  sustech bb roster COURSE_ID [--role ROLE_ID] [--availability Yes|No|Disabled] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb message-folders COURSE_ID [--page N] [--page-size N] [--browser [--interactive]]
+  sustech bb messages COURSE_ID [--folder-type Inbox|Sent|Delete|Custom] [--folder-name NAME] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb message-participants COURSE_ID MESSAGE_ID [--participation-type From|To|Cc|Bcc] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb message-send preview COURSE_ID [--subject TEXT] [--to-user USER_ID]... [--cc-user USER_ID]... [--bcc-user USER_ID]... --text-file PATH [--browser [--interactive]]
+  sustech bb message-send apply COURSE_ID [--subject TEXT] [--to-user USER_ID]... [--cc-user USER_ID]... [--bcc-user USER_ID]... --text-file PATH --expected-sha256 HEX --confirm
+  sustech bb discussions COURSE_ID [--title QUERY] [--gradable true|false] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb discussion-groups COURSE_ID DISCUSSION_ID [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb discussion COURSE_ID DISCUSSION_ID [--group-id GROUP_ID] [--user-id USER_ID] [--status Published|Deleted|Draft] [--is-read true|false] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb discussion-replies COURSE_ID DISCUSSION_ID MESSAGE_ID [--group-id GROUP_ID] [--user-id USER_ID] [--status Published|Deleted|Draft] [--is-read true|false] [--page N] [--page-size N] [--sort FIELD[(desc)]] [--browser [--interactive]]
+  sustech bb discussion-post preview COURSE_ID DISCUSSION_ID --text-file PATH [--group-id GROUP_ID] [--status Published|Deleted|Draft] [--browser [--interactive]]
+  sustech bb discussion-post apply COURSE_ID DISCUSSION_ID --text-file PATH --expected-sha256 HEX [--group-id GROUP_ID] [--status Published|Deleted|Draft] --confirm
+  sustech bb discussion-reply preview COURSE_ID DISCUSSION_ID MESSAGE_ID --text-file PATH [--group-id GROUP_ID] [--status Published|Deleted|Draft] [--browser [--interactive]]
+  sustech bb discussion-reply apply COURSE_ID DISCUSSION_ID MESSAGE_ID --text-file PATH --expected-sha256 HEX [--group-id GROUP_ID] [--status Published|Deleted|Draft] --confirm
+  sustech bb assignments [COURSE_ID] [--course QUERY] [--with-attempts] [--submission-state not_attempted|in_progress|submitted|completed|mixed|other] [--browser [--interactive]]
+  sustech bb grades [--course QUERY] [--submission-state in_progress|submitted|completed|mixed|other] [--limit N] [--browser [--interactive]]
+  sustech bb attempt-files COURSE_ID ATTEMPT_ID [--browser [--interactive]]
+  sustech bb attempt-download COURSE_ID ATTEMPT_ID FILE_ID --destination PATH [--overwrite] [--browser [--interactive]]
+  sustech bb announcements [--days N] [--course QUERY] [--browser [--interactive]]
+  sustech bb deadlines [--days N] [--course QUERY] [--submission-state not_attempted|in_progress|submitted|completed|mixed|other] [--browser [--interactive]]
+  sustech bb calendar [--since ISO-DATETIME] [--until ISO-DATETIME] [--type Course|GradebookColumn|Institution|OfficeHours|Personal] [--course-id COURSE_ID] [--browser [--interactive]]
   sustech bb calendar-link set --url-stdin [--profile NAME]
   sustech bb calendar-link show [--reveal] [--profile NAME]
   sustech bb calendar-link fetch [--destination PATH [--overwrite]] [--profile NAME]
   sustech bb calendar-link delete [--profile NAME]
-  sustech bb search QUERY [--course QUERY] [--kind file|folder|assignment|document|unknown] [--attachments include|only|none] [--page N] [--page-size N]
-  sustech bb sync COURSE_ID --destination DIR [--content-id CONTENT_ID] [--overwrite]
-  sustech bb attempts COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] [--status InProgress|NeedsGrading|Completed]
-  sustech bb submit preview --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH [--comment TEXT]
-  sustech bb submit apply --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] --file PATH --expected-sha256 HEX [--comment TEXT] [--allow-late] --confirm
+  sustech bb search QUERY [--course QUERY] [--kind file|folder|assignment|document|unknown] [--attachments include|only|none] [--page N] [--page-size N] [--browser [--interactive]]
+  sustech bb sync COURSE_ID --destination DIR [--content-id CONTENT_ID] [--overwrite] [--browser [--interactive]]
+  sustech bb attempts COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] [--status InProgress|NeedsGrading|Completed] [--browser [--interactive]]
+  sustech bb submit preview --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] (--file PATH|--text-file PATH) [--comment TEXT] [--browser [--interactive]]
+  sustech bb submit apply --course-id COURSE_ID [--content-id CONTENT_ID|--column-id COLUMN_ID] (--file PATH|--text-file PATH) --expected-sha256 HEX [--comment TEXT] [--allow-late] --confirm
   sustech ws programs [KEYWORD] [--page N] [--page-size N]
   sustech ws detail ID [--program-code CODE] [--program-token TOKEN]
   sustech library search QUERY [--limit N] [--browser [--interactive]]
@@ -504,6 +617,10 @@ type Values = OutputFlags & {
   "content-id"?: string;
   "column-id"?: string;
   file?: string;
+  subject?: string;
+  "to-user"?: string[];
+  "cc-user"?: string[];
+  "bcc-user"?: string[];
   comment?: string;
   "expected-sha256"?: string;
   destination?: string;
@@ -511,8 +628,11 @@ type Values = OutputFlags & {
   overwrite?: boolean;
   days?: string;
   course?: string;
+  role?: string;
+  availability?: string;
   kind?: string;
   attachments?: string;
+  gradable?: string;
   live?: boolean;
   "allow-late"?: boolean;
   "period-start"?: string;
@@ -534,9 +654,14 @@ type Values = OutputFlags & {
   minutes?: string;
   category?: string;
   section?: string;
+  source?: string[];
   page?: string;
   "page-size"?: string;
+  "folder-type"?: string;
+  "folder-name"?: string;
+  "participation-type"?: string;
   sort?: string;
+  rating?: string;
   "min-year"?: string;
   "open-access"?: boolean;
   "resolve-oa"?: boolean;
@@ -573,17 +698,27 @@ type Values = OutputFlags & {
   profile?: string;
   sid?: string;
   "password-stdin"?: boolean;
+  "text-file"?: string;
   path?: string;
   requirements?: string;
   details?: boolean;
   attempts?: string;
   since?: string;
   until?: string;
+  teacher?: string[];
+  "group-id"?: string;
+  "user-id"?: string;
+  "is-read"?: string;
   "url-stdin"?: boolean;
   reveal?: boolean;
   "include-blackboard"?: boolean;
   browser?: boolean;
   interactive?: boolean;
+  "with-attempts"?: boolean;
+  "all-reviews"?: boolean;
+  "submission-state"?: string;
+  term?: string;
+  "offering-unit"?: string;
   "early-period-threshold"?: string;
   "weight-early-session"?: string;
   "weight-gap-segment"?: string;
@@ -592,8 +727,6 @@ type Values = OutputFlags & {
   "weight-campus-switch"?: string;
   help?: boolean;
 };
-
-type AuthService = "tis" | "bb" | "ws" | "booking" | "lib-booking" | "pms";
 
 function brandArt(): string {
   return formatBrandArt(shouldUseBrandColor(process.stdout.isTTY));
@@ -2035,28 +2168,43 @@ async function runAuth(positionals: readonly string[], values: Values, output: O
 
 async function runDoctor(values: Values, output: OutputOptions): Promise<void> {
   const services = doctorServices(values.service);
+  if (values.browser && !values.live) {
+    throw usageError("--browser requires --live for doctor.");
+  }
+  if (values.interactive && !values.browser) {
+    throw usageError("--interactive requires --browser for Blackboard live diagnostics.");
+  }
+  if (values.browser && !services.includes("bb")) {
+    throw usageError("--browser is currently supported only when doctor includes Blackboard.");
+  }
   const backend = await getCredentialBackendStatus();
   const profile = await getCredentialStatus(values.profile);
   const liveResults: DoctorLiveResult[] = [];
-  let credentialSource: string | undefined;
+  let credentialSource: string | undefined = values.browser && services.length === 1 && services[0] === "bb"
+    ? "browser-session"
+    : undefined;
 
   if (values.live) {
     let credentials: Credentials | undefined;
     let credentialError: unknown;
-    try {
-      credentials = await resolvedCredentials(values);
-      credentialSource = credentials.source;
-    } catch (error) {
-      credentialError = error;
+    async function liveCredentials(): Promise<Credentials> {
+      if (credentials) return credentials;
+      if (credentialError !== undefined) throw credentialError;
+      try {
+        credentials = await resolvedCredentials(values);
+        credentialSource = credentials.source;
+        return credentials;
+      } catch (error) {
+        credentialError = error;
+        throw error;
+      }
     }
 
     for (const service of services) {
-      if (!credentials) {
-        liveResults.push({ service, status: "fail", ...doctorFailure(credentialError) });
-        continue;
-      }
       try {
-        const result = await authenticateCredentials(credentials, service);
+        const result = service === "bb" && values.browser
+          ? await authenticateBlackboardBrowserSession({ interactive: values.interactive })
+          : await authenticateCredentials(await liveCredentials(), service);
         liveResults.push({
           service,
           status: "pass",
@@ -2101,6 +2249,15 @@ async function checkAuthentication(
   profile?: string;
   credentialBackend?: string;
 }> {
+  if (values.interactive && !values.browser) {
+    throw usageError("--interactive requires --browser for Blackboard auth checks.");
+  }
+  if (values.browser) {
+    if (service !== "bb") {
+      throw usageError("--browser is currently supported only for Blackboard auth checks.");
+    }
+    return authenticateBlackboardBrowserSession({ interactive: values.interactive });
+  }
   const credentials = await resolvedCredentials(values);
   const result = await authenticateCredentials(credentials, service);
   return {
@@ -2114,49 +2271,7 @@ async function authenticateCredentials(
   credentials: Credentials,
   service: AuthService,
 ): Promise<{ authenticated: true; credentialSource: string; identity?: string }> {
-  if (service === "tis") {
-    await new TisSession(credentials).login();
-    return { authenticated: true, credentialSource: credentials.source };
-  }
-  if (service === "bb" || service === "ws") {
-    await new CasSession(credentials, casServiceConfig(service)).login();
-    return { authenticated: true, credentialSource: credentials.source };
-  }
-  if (service === "booking") {
-    const session = new BookingSession(credentials);
-    await session.login();
-    return {
-      authenticated: true,
-      credentialSource: credentials.source,
-      ...(session.userProfile?.name ? { identity: session.userProfile.name } : {}),
-    };
-  }
-  if (service === "lib-booking") {
-    const session = new LibraryBookingSession(credentials);
-    await session.login();
-    const user = await getLibraryBookingUser(session);
-    return {
-      authenticated: true,
-      credentialSource: credentials.source,
-      ...((user.trueName || user.logonName) ? { identity: user.trueName || user.logonName } : {}),
-    };
-  }
-  if (service === "pms") {
-    const session = new PmsSession({ username: credentials.sid, password: credentials.password });
-    await session.login();
-    const check = await session.check();
-    if (!check.authenticated) {
-      throw new CliError("PMS login completed but the session check failed.", "AUTHENTICATION_FAILED", 2, {
-        service: "pms",
-      });
-    }
-    return {
-      authenticated: true,
-      credentialSource: credentials.source,
-      ...(check.displayName ? { identity: check.displayName } : {}),
-    };
-  }
-  throw usageError("Unsupported authentication service.");
+  return authenticateServiceCredentials(credentials, service);
 }
 
 async function bookingService(values: Values): Promise<BookingSession> {
@@ -2190,6 +2305,9 @@ async function resolvedCredentials(values: Values): Promise<Credentials> {
 }
 
 async function casServiceAdapter(values: Values, service: "bb" | "ws"): Promise<ServiceAdapter> {
+  if (service === "bb" && values.browser) {
+    return createBlackboardBrowserAdapter({ interactive: values.interactive });
+  }
   const { session } = await authenticatedCasService(values, casServiceConfig(service));
   return {
     name: service,
@@ -2197,24 +2315,6 @@ async function casServiceAdapter(values: Values, service: "bb" | "ws"): Promise<
       return session.fetch(input, init);
     },
   };
-}
-
-function casServiceConfig(service: string): CasServiceConfig {
-  if (service === "bb") {
-    return {
-      name: "Blackboard",
-      baseUrl: "https://bb.sustech.edu.cn",
-      serviceUrl: "https://bb.sustech.edu.cn/webapps/bb-sso-BBLEARN/index.jsp",
-    };
-  }
-  if (service === "ws") {
-    return {
-      name: "SUSTech Global",
-      baseUrl: "https://ws.sustech.edu.cn",
-      serviceUrl: "https://ws.sustech.edu.cn/SUSTechHome.aspx",
-    };
-  }
-  throw usageError("--service must be tis, bb, or ws.");
 }
 
 async function tisClient(values: Values): Promise<TisClient> {
@@ -2416,6 +2516,7 @@ async function runOnline(
   const section = positionals[1];
   const operation = positionals[2];
   const limit = parsePositiveInteger(values.limit, 20, "--limit");
+  const sources = onlineManualSources(values.source);
   if (limit > 200) throw usageError("--limit cannot exceed 200 for SUSTech Online queries.");
   const since = values.since === undefined ? undefined : isoDate(values.since, "--since");
   const until = values.until === undefined ? undefined : isoDate(values.until, "--until");
@@ -2431,22 +2532,48 @@ async function runOnline(
     const query = positionals.slice(2).join(" ").trim();
     if (!query) throw usageError("A SUSTech Online search query is required.");
     const selectedSection = onlineSection(values.section);
-    if (selectedSection === "contact" && (since || until)) {
+    if (selectedSection !== undefined && selectedSection !== "talks" && (since || until)) {
       throw usageError("--since and --until apply only to talk searches.");
     }
-    const hits = await searchOnline(query, {
+    if (sources && sources.length > 0 && selectedSection !== "manual") {
+      throw usageError("--source applies only to `online search --section manual` and `online manual` commands.");
+    }
+    const report = await searchOnlineWithStatus(query, {
       section: selectedSection,
+      ...(selectedSection === "manual" && sources && sources.length > 0 ? { source: sources } : {}),
       since,
       until,
       limit,
     });
+    const hits = report.hits;
     writeSuccess({
       command: "online search",
-      data: { query, section: selectedSection ?? "all", hits, total: hits.length },
-      text: formatOnlineSearchHits(hits, query),
+      data: {
+        query,
+        section: selectedSection ?? "all",
+        hits,
+        total: hits.length,
+        partial: report.partial,
+        manualSourceStatuses: report.manualSourceStatuses,
+        ...(selectedSection === "manual" && report.manualMatchedTotal !== undefined
+          ? { manualMatchedTotal: report.manualMatchedTotal, returned: hits.length }
+          : {}),
+      },
+      text: formatOnlineSearchHits(hits, query, {
+        partial: report.partial,
+        manualSourceStatuses: report.manualSourceStatuses,
+      }),
       items: hits,
-      summary: { query, section: selectedSection ?? "all", total: hits.length },
-      meta,
+      summary: {
+        query,
+        section: selectedSection ?? "all",
+        total: hits.length,
+        ...(selectedSection === "manual" && report.manualMatchedTotal !== undefined
+          ? { manualMatchedTotal: report.manualMatchedTotal, returned: hits.length }
+          : {}),
+        partial: report.partial,
+      },
+      meta: { ...meta, partial: report.partial },
     }, output);
     return;
   }
@@ -2483,6 +2610,66 @@ async function runOnline(
     return;
   }
 
+  if (section === "manual" && operation === "list" && positionals.length === 3) {
+    if (since || until) throw usageError("--since and --until apply only to talk searches.");
+    const report = await listOnlineManualRecordsWithStatus({
+      limit,
+      ...(sources && sources.length > 0 ? { source: sources } : {}),
+    });
+    writeSuccess({
+      command: "online manual list",
+      data: {
+        source: sources && sources.length > 0 ? sources : "all",
+        records: report.records,
+        total: report.matchedTotal,
+        returned: report.records.length,
+        matchedTotal: report.matchedTotal,
+        partial: report.partial,
+        manualSourceStatuses: report.sourceStatuses,
+      },
+      text: formatOnlineManualRecords(
+        report.records,
+        sources && sources.length > 0
+          ? `SUSTech Online manual · ${sources.join(", ")}`
+          : "SUSTech Online manual",
+        { partial: report.partial, sourceStatuses: report.sourceStatuses },
+      ),
+      items: report.records,
+      summary: {
+        source: sources && sources.length > 0 ? sources : "all",
+        total: report.matchedTotal,
+        returned: report.records.length,
+        matchedTotal: report.matchedTotal,
+        partial: report.partial,
+      },
+      meta: { ...meta, partial: report.partial },
+    }, output);
+    return;
+  }
+  if (section === "manual" && operation === "get" && positionals.length >= 4) {
+    if (since || until) throw usageError("--since and --until apply only to talk searches.");
+    const identifier = positionals.slice(3).join(" ").trim();
+    const report = await getOnlineManualRecordWithStatus(required(identifier, "manual record id or exact title"), {
+      ...(sources && sources.length > 0 ? { source: sources } : {}),
+    });
+    writeSuccess({
+      command: "online manual get",
+      data: {
+        identifier,
+        record: report.record,
+        partial: report.partial,
+        manualSourceStatuses: report.sourceStatuses,
+      },
+      text: formatOnlineManualRecord(report.record, {
+        partial: report.partial,
+        sourceStatuses: report.sourceStatuses,
+      }),
+      meta: { ...meta, partial: report.partial },
+      summary: { id: report.record.id, sourceKey: report.record.sourceKey, partial: report.partial },
+    }, output);
+    return;
+  }
+
   if (section === "contact" && operation === "search") {
     const query = positionals.slice(3).join(" ").trim();
     if (!query) throw usageError("A contact search query is required.");
@@ -2507,10 +2694,27 @@ async function runOnline(
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
 }
 
-function onlineSection(value?: string): "talks" | "contact" | undefined {
+function onlineSection(value?: string): "talks" | "contact" | "manual" | undefined {
   if (value === undefined) return undefined;
-  if (value === "talks" || value === "contact") return value;
-  throw usageError("--section must be talks or contact.");
+  if (value === "talks" || value === "contact" || value === "manual") return value;
+  throw usageError("--section must be talks, contact, or manual.");
+}
+
+function onlineManualSources(values?: string[]): OnlineManualSourceKey[] | undefined {
+  if (values === undefined) return undefined;
+  const trimmed = values.map((value) => value.trim()).filter(Boolean);
+  if (trimmed.length === 0) return undefined;
+  const allowed = new Set<OnlineManualSourceKey>(["calendar", "facility", "life", "service", "study", "transport"]);
+  const unique: OnlineManualSourceKey[] = [];
+  for (const value of trimmed) {
+    if (!allowed.has(value as OnlineManualSourceKey)) {
+      throw usageError("--source must be service, study, transport, life, facility, or calendar.");
+    }
+    if (!unique.includes(value as OnlineManualSourceKey)) {
+      unique.push(value as OnlineManualSourceKey);
+    }
+  }
+  return unique;
 }
 
 async function runProfile(
@@ -2858,8 +3062,13 @@ async function runTisPlanDecision(
     degreeFailure = errorMessage(error);
   }
 
+  const ncesTermId = tisToNcesTerm(semester.xn, semester.xq);
   const ncesBatch = await resolveNcesCourseLookups(
     buildCourseDecisionNcesLookupRequests(selection.matched),
+    {
+      termId: ncesTermId,
+      ...(operation === "explain" ? { includeDetail: true } : {}),
+    },
   );
   const baseReport = recommendCourseSections({
     selectableCourses: selectable.courses,
@@ -2904,6 +3113,7 @@ async function runTisPlanDecision(
       mutation: false,
       path: view.path,
       semester,
+      ncesTermId,
       round,
       selectors,
       missingSelectors: selection.missingSelectors,
@@ -3015,11 +3225,14 @@ interface ContextLiveSourceStatus {
   message?: string;
 }
 
+const CONTEXT_BLACKBOARD_ANNOUNCEMENT_DAYS = 14;
+
 interface ContextLiveResult extends ContextInput {
   liveSources: {
     tisSchedule: ContextLiveSourceStatus;
     tisExams: ContextLiveSourceStatus;
     blackboardDeadlines: ContextLiveSourceStatus;
+    blackboardAnnouncements?: ContextLiveSourceStatus;
     tisEvaluations?: ContextLiveSourceStatus;
     weather?: ContextLiveSourceStatus;
     airQuality?: ContextLiveSourceStatus;
@@ -3038,6 +3251,7 @@ async function loadLiveContext(
     tisSchedule: { state: "missing" },
     tisExams: { state: contextLoadsNormalFields(level) ? "missing" : "not-requested" },
     blackboardDeadlines: { state: contextLoadsNormalFields(level) ? "missing" : "not-requested" },
+    ...(contextLoadsNormalFields(level) ? { blackboardAnnouncements: { state: "missing" as const } } : {}),
     ...(contextLoadsNormalFields(level) ? { tisEvaluations: { state: "missing" as const } } : {}),
     ...(contextLoadsNormalFields(level)
       ? {
@@ -3153,24 +3367,62 @@ async function loadLiveContext(
     if (!contextLoadsNormalFields(level)) return;
     try {
       const adapter = await casServiceAdapter(values, "bb");
-      const report = await listBlackboardDeadlines(adapter, { now });
-      const deadline = nextBlackboardDeadline(report);
-      if (deadline) result.nextDeadline = contextDeadlineSummary(deadline);
-      else if (report.failures.length === 0) result.nextDeadline = null;
-      liveSources.blackboardDeadlines = {
-        state: report.failures.length > 0 ? "partial" : deadline ? "provided" : "empty",
-        generatedAt: report.generatedAt,
-        failureCount: report.failures.length,
-        ...(report.failures[0]?.message ? { message: report.failures[0].message } : {}),
-      };
+      const [deadlinesResult, announcementsResult] = await Promise.allSettled([
+        listBlackboardDeadlines(adapter, { now }),
+        liveSources.blackboardAnnouncements
+          ? listBlackboardAnnouncements(adapter, { now, days: CONTEXT_BLACKBOARD_ANNOUNCEMENT_DAYS })
+          : Promise.resolve(undefined),
+      ]);
+
+      if (deadlinesResult.status === "fulfilled") {
+        const deadline = nextBlackboardDeadline(deadlinesResult.value);
+        if (deadline) result.nextDeadline = contextDeadlineSummary(deadline);
+        else if (deadlinesResult.value.failures.length === 0) result.nextDeadline = null;
+        liveSources.blackboardDeadlines = {
+          state: deadlinesResult.value.failures.length > 0 ? "partial" : deadline ? "provided" : "empty",
+          generatedAt: deadlinesResult.value.generatedAt,
+          failureCount: deadlinesResult.value.failures.length,
+          ...(deadlinesResult.value.failures[0]?.message ? { message: deadlinesResult.value.failures[0].message } : {}),
+        };
+      } else {
+        liveSources.blackboardDeadlines = {
+          state: "error",
+          message: errorMessage(deadlinesResult.reason),
+        };
+      }
+
+      if (liveSources.blackboardAnnouncements) {
+        if (announcementsResult.status === "fulfilled") {
+          const announcement = announcementsResult.value ? nextBlackboardAnnouncement(announcementsResult.value) : null;
+          if (announcement) result.recentAnnouncement = contextAnnouncementSummary(announcement);
+          else if (announcementsResult.value?.failures.length === 0) result.recentAnnouncement = null;
+          liveSources.blackboardAnnouncements = {
+            state: announcementsResult.value?.failures.length
+              ? "partial"
+              : announcement
+                ? "provided"
+                : "empty",
+            ...(announcementsResult.value
+              ? {
+                  generatedAt: announcementsResult.value.generatedAt,
+                  failureCount: announcementsResult.value.failures.length,
+                }
+              : {}),
+            ...(announcementsResult.value?.failures[0]?.message ? { message: announcementsResult.value.failures[0].message } : {}),
+          };
+        } else {
+          liveSources.blackboardAnnouncements = {
+            state: "error",
+            message: errorMessage(announcementsResult.reason),
+          };
+        }
+      }
     } catch (error) {
       const message = errorMessage(error);
-      liveSources.blackboardDeadlines = {
-        state: error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error",
-        message,
-      };
+      const state = error instanceof CliError && error.code === "CREDENTIALS_REQUIRED" ? "credentials-missing" : "error";
+      liveSources.blackboardDeadlines = { state, message };
+      if (liveSources.blackboardAnnouncements) liveSources.blackboardAnnouncements = { state, message };
     }
-
   };
 
   const loadEnvironment = async () => {
@@ -3215,10 +3467,27 @@ function contextDeadlineSummary(input: {
   };
 }
 
+function contextAnnouncementSummary(input: BlackboardAnnouncement): {
+  title: string;
+  source: "system" | "course";
+  course?: string;
+  activityAt?: string;
+} {
+  return {
+    title: input.title,
+    source: input.source,
+    ...(input.source === "course"
+      ? { course: [input.courseCode, input.courseName].filter(Boolean).join(" ").trim() || input.courseName || input.courseCode }
+      : {}),
+    ...(input.modified || input.created ? { activityAt: input.modified || input.created } : {}),
+  };
+}
+
 function formatContextLiveSources(sources: {
   tisSchedule: ContextLiveSourceStatus;
   tisExams: ContextLiveSourceStatus;
   blackboardDeadlines: ContextLiveSourceStatus;
+  blackboardAnnouncements?: ContextLiveSourceStatus;
   tisEvaluations?: ContextLiveSourceStatus;
   weather?: ContextLiveSourceStatus;
   airQuality?: ContextLiveSourceStatus;
@@ -3228,6 +3497,7 @@ function formatContextLiveSources(sources: {
     formatContextLiveSource("TIS schedule", sources.tisSchedule),
     formatContextLiveSource("TIS exams", sources.tisExams),
     formatContextLiveSource("Blackboard deadlines", sources.blackboardDeadlines),
+    ...(sources.blackboardAnnouncements ? [formatContextLiveSource("Blackboard announcements", sources.blackboardAnnouncements)] : []),
     ...(sources.tisEvaluations ? [formatContextLiveSource("TIS evaluations", sources.tisEvaluations)] : []),
     ...(sources.weather ? [formatContextLiveSource("Weather", sources.weather)] : []),
     ...(sources.airQuality ? [formatContextLiveSource("Air quality", sources.airQuality)] : []),
@@ -3725,33 +3995,240 @@ async function runNces(
     const perPage = parsePositiveInteger(values["page-size"], 30, "--page-size");
     if (perPage > 50) throw usageError("--page-size cannot exceed 50 for NCES.");
     const sort = ncesSort(values.sort);
-    const result = await browseNces({ page, perPage, sort });
+    const offeringUnit = optionalNonEmptyString(values["offering-unit"], "--offering-unit");
+    const result = await browseNces({ page, perPage, sort, ...(offeringUnit ? { offeringUnit } : {}) });
     writeSuccess({
       command: "nces browse",
       data: result,
-      text: formatNcesCourses(result.items, "NCES course evaluations"),
+      text: formatNcesCourses(result.items, `NCES course evaluations${result.offeringUnit ? ` · ${result.offeringUnit}` : ""}`),
       items: result.items,
-      summary: { page: result.page, perPage: result.perPage, pages: result.pages, total: result.total, shown: result.items.length },
+      summary: {
+        page: result.page,
+        perPage: result.perPage,
+        pages: result.pages,
+        total: result.total,
+        shown: result.items.length,
+        ...(result.offeringUnit ? { offeringUnit: result.offeringUnit } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "filter-options" && positionals.length === 2) {
+    const result = await getNcesCourseFilterOptions();
+    writeSuccess({
+      command: "nces filter-options",
+      data: result,
+      text: formatNcesFilterOptions(result),
+      items: result.offeringUnits.map((offeringUnit) => ({ offeringUnit })),
+      summary: { offeringUnits: result.offeringUnits.length },
+    }, output);
+    return;
+  }
+  if (command === "global-stats" && positionals.length === 2) {
+    const stats = await getNcesGlobalStats();
+    writeSuccess({
+      command: "nces global-stats",
+      data: stats,
+      text: formatNcesGlobalStats(stats),
+      summary: {
+        users: stats.userCount,
+        courses: stats.courseCount,
+        reviews: stats.reviewCount,
+        teachers: stats.teacherCount,
+        registeredTeachers: stats.registeredTeacherCount,
+      },
+    }, output);
+    return;
+  }
+  if (command === "rankings" && positionals.length === 3) {
+    const category = ncesRankingCategory(positionals[2]);
+    const limit = parsePositiveInteger(values.limit, 10, "--limit");
+    if (limit > 50) throw usageError("--limit cannot exceed 50 for NCES rankings.");
+    const rankings = await getNcesRankings();
+    const items = ncesRankingItems(rankings, category).slice(0, limit);
+    writeSuccess({
+      command: "nces rankings",
+      data: {
+        category,
+        limit,
+        total: ncesRankingItems(rankings, category).length,
+        items,
+        stats: rankings.stats,
+      },
+      text: formatNcesRankings(rankings, category, items),
+      items,
+      summary: {
+        category,
+        limit,
+        total: ncesRankingItems(rankings, category).length,
+        shown: items.length,
+      },
     }, output);
     return;
   }
   if (command === "search") {
     const query = positionals.slice(2).join(" ").trim();
     if (!query) throw usageError("An NCES search query is required.");
-    const result = await searchNces(query);
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const perPage = parsePositiveInteger(values["page-size"], 20, "--page-size");
+    if (perPage > 50) throw usageError("--page-size cannot exceed 50 for NCES.");
+    const type = ncesSearchType(values.type);
+    let result: NcesSearchResult;
+    if (type === "teacher") result = await searchNces(query, { page, perPage, type });
+    else if (type === "review") result = await searchNces(query, { page, perPage, type });
+    else result = await searchNces(query, { page, perPage, type });
+    const renderedItems = type === "all"
+      ? [...result.courseItems, ...result.teachers, ...result.sampleReviews]
+      : [...result.items];
     writeSuccess({
       command: "nces search",
       data: { query, ...result },
-      text: formatNcesCourses(result.items, `NCES search · ${query}`),
-      items: result.items,
-      summary: { query, total: result.total, shown: result.items.length, sampleReviews: result.sampleReviews.length },
+      text: formatNcesSearch(query, result.courseItems, result.teachers, result.sampleReviews, {
+        type,
+        courseTotal: result.courseTotal,
+        teacherTotal: result.teacherTotal,
+        reviewTotal: result.reviewTotal,
+        page,
+        perPage,
+      }),
+      items: renderedItems,
+      summary: {
+        query,
+        type,
+        page: result.page,
+        perPage: result.perPage,
+        total: result.total,
+        pages: result.pages,
+        courses: result.courseTotal,
+        teachers: result.teacherTotal,
+        reviews: result.reviewTotal,
+        shown: renderedItems.length,
+        ...(type === "all"
+          ? {
+            bucketMode: "mixed",
+            aggregateTotal: result.aggregateTotal,
+            aggregateShown: result.aggregateShown,
+            selectedBucket: result.selectedBucket,
+            selectedShown: result.selectedItems.length,
+            courseShown: result.courseItems.length,
+            teacherShown: result.teachers.length,
+            reviewShown: result.sampleReviews.length,
+          }
+          : { selectedBucket: result.selectedBucket, selectedShown: result.selectedItems.length }),
+      },
+    }, output);
+    return;
+  }
+  if (command === "by-code" && positionals.length === 3) {
+    const code = required(positionals[2], "NCES course code").trim().toUpperCase();
+    const term = ncesTerm(values.term);
+    const teachers = repeatedNonEmptyStrings(values.teacher, "--teacher");
+    const allReviews = Boolean(values["all-reviews"]);
+    const resolution = teachers.length > 0
+      ? (await resolveNcesCourseLookups(
+        [{ key: "by-code", code, teachers }],
+        { ...(term ? { termId: term } : {}), includeDetail: true },
+      )).items["by-code"]
+      : undefined;
+    const course = resolution
+      ? (allReviews && resolution.picked
+        ? await getNcesCourseDetail(resolution.picked.ncesId, {
+          ...(term ? { reviewTerm: term, preferredTerm: term } : {}),
+          allReviews: true,
+        })
+        : resolution.detail ?? null)
+      : await getNcesCourseByCode(code, { ...(term ? { term } : {}), ...(allReviews ? { allReviews: true } : {}) });
+    const availableTerms = course
+      ? [...new Set([
+          ...course.terms.map((item) => item.termId).filter(Boolean),
+          ...course.reviewTerms.filter(Boolean),
+        ])]
+      : [];
+    const termMatched = term === undefined
+      ? undefined
+      : resolution
+        ? resolution.signals.termMatched
+        : course === null
+          ? undefined
+          : availableTerms.includes(term) || course.semesters.includes(term.slice(0, 4) + ({ "1": "秋", "2": "春", "3": "夏" }[term[4]] ?? ""));
+    const text = resolution
+      ? [
+          `Teacher filter · ${teachers.join(", ")}`,
+          `Resolution · ${resolution.status} · confidence ${resolution.confidence}`,
+          ...(resolution.notes.length > 0 ? [`Notes · ${resolution.notes.join(" | ")}`] : []),
+          "",
+          formatNcesCourseByCode(code, term, course),
+        ].join("\n")
+      : formatNcesCourseByCode(code, term, course);
+    writeSuccess({
+      command: "nces by-code",
+      data: {
+        code,
+        term,
+        ...(termMatched === undefined ? {} : { termMatched }),
+        ...(teachers.length > 0 ? { teachers, resolution } : {}),
+        allReviews,
+        ...(course ? { availableTerms } : {}),
+        found: course !== null,
+        course,
+      },
+      text,
+      summary: {
+        code,
+        found: course !== null,
+        allReviews,
+        ...(teachers.length > 0 ? { teachers, resolutionStatus: resolution?.status, confidence: resolution?.confidence } : {}),
+        ...(term ? { term, termMatched: termMatched === true } : {}),
+      },
     }, output);
     return;
   }
   if (command === "course" && positionals.length === 3) {
     const id = parsePositiveInteger(positionals[2], 1, "NCES course ID");
-    const course = await getNcesCourseDetail(id);
-    writeSuccess({ command: "nces course", data: { id, found: course !== null, course }, text: formatNcesDetail(course) }, output);
+    const allReviews = Boolean(values["all-reviews"]);
+    const course = await getNcesCourseDetail(id, allReviews ? { allReviews: true } : {});
+    writeSuccess({
+      command: "nces course",
+      data: { id, allReviews, found: course !== null, course },
+      text: formatNcesDetail(course),
+      summary: { id, allReviews, found: course !== null },
+    }, output);
+    return;
+  }
+  if (command === "reviews" && positionals.length === 3) {
+    const id = parsePositiveInteger(positionals[2], 1, "NCES course ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const perPage = parsePositiveInteger(values["page-size"], 20, "--page-size");
+    if (perPage > 50) throw usageError("--page-size cannot exceed 50 for NCES.");
+    const sort = ncesReviewSort(values.sort);
+    const term = ncesTerm(values.term);
+    const rating = parseIntegerInRange(values.rating, "--rating", 1, 10);
+    const result = await listNcesCourseReviews(id, {
+      page,
+      perPage,
+      sort,
+      ...(term ? { term } : {}),
+      ...(rating !== undefined ? { rating } : {}),
+    });
+    writeSuccess({
+      command: "nces reviews",
+      data: result,
+      text: formatNcesReviews(result),
+      items: result.items,
+      summary: { id, page: result.page, perPage: result.perPage, pages: result.pages, total: result.total, shown: result.items.length },
+    }, output);
+    return;
+  }
+  if (command === "teacher" && positionals.length === 3) {
+    const id = parsePositiveInteger(positionals[2], 1, "NCES teacher ID");
+    const teacher = await getNcesTeacherDetail(id);
+    writeSuccess({ command: "nces teacher", data: { id, found: teacher !== null, teacher }, text: formatNcesTeacher(teacher) }, output);
+    return;
+  }
+  if (command === "stats" && positionals.length === 3) {
+    const id = parsePositiveInteger(positionals[2], 1, "NCES course ID");
+    const stats = await getNcesCourseStats(id);
+    writeSuccess({ command: "nces stats", data: { id, found: stats !== null, stats }, text: formatNcesStats(id, stats) }, output);
     return;
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
@@ -3762,6 +4239,9 @@ async function runBlackboard(
   values: Values,
   output: ReturnType<typeof resolveOutputOptions>,
 ): Promise<void> {
+  if (values.interactive && !values.browser) {
+    throw usageError("--interactive requires --browser for Blackboard commands.");
+  }
   const command = positionals[1];
   if (command === "calendar-link" && positionals.length === 3) {
     const operation = positionals[2];
@@ -3858,10 +4338,10 @@ async function runBlackboard(
   }
   if (command === "submit" && positionals[2] === "preview" && positionals.length === 3) {
     const target = blackboardSubmissionTarget(values);
-    const file = await inspectBlackboardSubmissionFile(required(values.file, "--file"));
+    const submission = await readBlackboardSubmissionInput(values);
     const comment = submissionComment(values.comment);
     const adapter = await casServiceAdapter(values, "bb");
-    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, file, comment);
+    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, submission, comment);
     writeSuccess({
       command: "bb submit preview",
       data: { mode: "preview", mutation: false, ...preflight },
@@ -3904,6 +4384,58 @@ async function runBlackboard(
     }, output);
     return;
   }
+  if (command === "tree" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const rootContentId = values["content-id"]
+      ? opaqueToken(values["content-id"], "--content-id")
+      : undefined;
+    const maxItems = parsePositiveInteger(values.max, 500, "--max");
+    if (maxItems > 5_000) throw usageError("--max cannot exceed 5000 for Blackboard tree.");
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardContentTree(adapter, {
+      courseId,
+      ...(rootContentId ? { rootContentId } : {}),
+      maxItems,
+    });
+    writeSuccess({
+      command: "bb tree",
+      data: report,
+      text: formatBlackboardTree(report),
+      items: report.entries,
+      summary: {
+        courseId: report.courseId,
+        ...(report.rootContentId ? { rootContentId: report.rootContentId } : {}),
+        maxItems: report.maxItems,
+        returnedItems: report.returnedItems,
+        truncated: report.truncated,
+        partial: report.partial,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
+  if (command === "types" && positionals.length === 2) {
+    const courseQuery = values.course?.trim() || undefined;
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await summarizeBlackboardContentTypes(adapter, { ...(courseQuery ? { courseQuery } : {}) });
+    writeSuccess({
+      command: "bb types",
+      data: report,
+      text: formatBlackboardTypes(report),
+      items: report.courses,
+      summary: {
+        ...(courseQuery ? { courseQuery } : {}),
+        coursesMatched: report.coursesMatched,
+        coursesScanned: report.coursesScanned,
+        totalItems: report.totalItems,
+        partial: report.partial,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
   if (command === "attachments" && positionals.length === 4) {
     const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
     const contentId = opaqueToken(required(positionals[3], "Blackboard content ID"), "Blackboard content ID");
@@ -3939,9 +4471,841 @@ async function runBlackboard(
     }, output);
     return;
   }
-  if (command === "assignments" && positionals.length === 3) {
-    const adapter = await casServiceAdapter(values, "bb");
+  if (command === "roster" && positionals.length === 3) {
     const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const role = optionalInlineText(values.role, "--role", 200);
+    const availability = blackboardMembershipAvailabilityValue(values.availability);
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard roster.");
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardCourseRoster(adapter, {
+      courseId,
+      ...(role ? { role } : {}),
+      ...(availability ? { availability } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb roster",
+      data: report,
+      text: formatBlackboardRoster(report),
+      items: report.memberships,
+      summary: {
+        courseId: report.courseId,
+        ...(report.role ? { role: report.role } : {}),
+        ...(report.availability ? { availability: report.availability } : {}),
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "message-folders" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard message folders.");
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardCourseMessageFolders(adapter, { courseId, page, pageSize });
+    writeSuccess({
+      command: "bb message-folders",
+      data: report,
+      text: formatBlackboardMessageFolders(report),
+      items: report.folders,
+      summary: {
+        courseId: report.courseId,
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "messages" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard course messages.");
+    const folderType = blackboardMessageFolderTypeValue(values["folder-type"]);
+    const folderName = optionalInlineText(values["folder-name"], "--folder-name", 200);
+    if (folderName && folderType !== "Custom") {
+      throw usageError("--folder-name requires --folder-type Custom for Blackboard course messages.");
+    }
+    if (folderType === "Custom" && !folderName) {
+      throw usageError("--folder-type Custom requires --folder-name for Blackboard course messages.");
+    }
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardCourseMessages(adapter, {
+      courseId,
+      ...(folderType ? { folderType } : {}),
+      ...(folderName ? { folderName } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb messages",
+      data: report,
+      text: formatBlackboardMessages(report),
+      items: report.messages,
+      summary: {
+        courseId: report.courseId,
+        ...(report.folderType ? { folderType: report.folderType } : {}),
+        ...(report.folderName ? { folderName: report.folderName } : {}),
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "message-participants" && positionals.length === 4) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const messageId = opaqueToken(required(positionals[3], "Blackboard message ID"), "Blackboard message ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard message participants.");
+    const participationType = blackboardMessageParticipationTypeValue(values["participation-type"]);
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardCourseMessageParticipants(adapter, {
+      courseId,
+      messageId,
+      ...(participationType ? { participationType } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb message-participants",
+      data: report,
+      text: formatBlackboardMessageParticipants(report),
+      items: report.participants,
+      summary: {
+        courseId: report.courseId,
+        messageId: report.messageId,
+        ...(report.participationType ? { participationType: report.participationType } : {}),
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "message-send" && positionals[2] === "preview" && positionals.length === 4) {
+    const target = blackboardCourseMessageWriteTarget(positionals, values);
+    const input = await readBlackboardCourseMessageWriteInput(values);
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardCourseMessageWritePreflight(adapter, values, target, input);
+    writeSuccess({
+      command: "bb message-send preview",
+      data: { mode: "preview", mutation: false, ...preflight },
+      text: formatBlackboardMessageWritePreview(preflight),
+    }, output);
+    return;
+  }
+  if (command === "message-send" && positionals[2] === "apply" && positionals.length === 4) {
+    const target = blackboardCourseMessageWriteTarget(positionals, values);
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "Blackboard course message",
+        "Blackboard course messages notify selected course participants. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
+    const input = await readBlackboardCourseMessageWriteInput(values);
+    if (input.textFile.sha256 !== expectedSha256) {
+      throw new CliError(
+        "The selected Blackboard message text no longer matches the reviewed preview hash. Re-run preview before sending.",
+        "BLACKBOARD_MESSAGE_HASH_MISMATCH",
+        4,
+        {
+          file: input.textFile.absolutePath,
+          expectedSha256,
+          actualSha256: input.textFile.sha256,
+        },
+      );
+    }
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardCourseMessageWritePreflight(adapter, values, target, input);
+    ensureBlackboardCourseMessageWriteAllowed(preflight);
+    let createdMessageId = "";
+    let stage: "create" | "verify" = "create";
+    try {
+      const created = await createBlackboardCourseMessage(adapter, target.courseId, {
+        ...(preflight.target.subject ? { subject: preflight.target.subject } : {}),
+        body: input.body,
+        toUsers: preflight.target.toUsers,
+        ccUsers: preflight.target.ccUsers,
+        bccUsers: preflight.target.bccUsers,
+      });
+      createdMessageId = created.id;
+      stage = "verify";
+      const snapshot = await observeBlackboardCourseMessageWrite(adapter, preflight, createdMessageId);
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard course message could not be read back after the create request.",
+          }
+        : verifyBlackboardCourseMessageWrite(preflight, input, snapshot.message ?? created);
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "Blackboard accepted the message-send request, but the read-back verification was inconclusive.",
+          "BLACKBOARD_MESSAGE_SEND_NOT_CONFIRMED",
+          1,
+          {
+            courseId: target.courseId,
+            messageId: createdMessageId,
+            recipients: {
+              toUsers: preflight.target.toUsers,
+              ccUsers: preflight.target.ccUsers,
+              bccUsers: preflight.target.bccUsers,
+            },
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeSuccess({
+        command: "bb message-send apply",
+        data: {
+          mode: "apply",
+          mutation: true,
+          target: preflight.target,
+          courseId: preflight.courseId,
+          courseCode: preflight.courseCode,
+          courseName: preflight.courseName,
+          recipients: preflight.recipients,
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        },
+        text: formatBlackboardMessageWriteSuccess({
+          target: preflight.target,
+          courseCode: preflight.courseCode,
+          courseName: preflight.courseName,
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        }),
+      }, output);
+      return;
+    } catch (error) {
+      const snapshot = createdMessageId
+        ? await observeBlackboardCourseMessageWrite(adapter, preflight, createdMessageId)
+        : {};
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard course message could not be read back after the request failed.",
+          }
+        : verifyBlackboardCourseMessageWrite(preflight, input, snapshot.message);
+      if (createdMessageId && verification.status === "confirmed" && snapshot.message) {
+        writeSuccess({
+          command: "bb message-send apply",
+          data: {
+            mode: "apply",
+            mutation: true,
+            target: preflight.target,
+            courseId: preflight.courseId,
+            courseCode: preflight.courseCode,
+            courseName: preflight.courseName,
+            recipients: preflight.recipients,
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+            recoveredAfterError: true,
+          },
+          text: formatBlackboardMessageWriteSuccess({
+            target: preflight.target,
+            courseCode: preflight.courseCode,
+            courseName: preflight.courseName,
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+          }),
+          meta: { recoveredAfterError: true },
+        }, output);
+        return;
+      }
+      throw new CliError(
+        "Blackboard message-send outcome is uncertain. Do not retry automatically.",
+        "BLACKBOARD_MESSAGE_SEND_OUTCOME_UNKNOWN",
+        5,
+        {
+          stage,
+          courseId: target.courseId,
+          ...(createdMessageId ? { messageId: createdMessageId } : {}),
+          textFile: input.textFile.absolutePath,
+          verification,
+          cause: error instanceof Error ? error.message : String(error),
+          warning: "DO_NOT_RETRY_AUTOMATICALLY",
+        },
+      );
+    }
+  }
+  if (command === "discussions" && positionals.length === 3) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard discussions.");
+    const title = optionalInlineText(values.title, "--title", 200);
+    const gradable = blackboardDiscussionGradableValue(values.gradable);
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardDiscussions(adapter, {
+      courseId,
+      ...(title ? { title } : {}),
+      ...(gradable !== undefined ? { gradable } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb discussions",
+      data: report,
+      text: formatBlackboardDiscussions(report),
+      items: report.discussions,
+      summary: {
+        courseId: report.courseId,
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "discussion-groups" && positionals.length === 4) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const discussionId = opaqueToken(required(positionals[3], "Blackboard discussion ID"), "Blackboard discussion ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard discussion groups.");
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardDiscussionGroups(adapter, {
+      courseId,
+      discussionId,
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb discussion-groups",
+      data: report,
+      text: formatBlackboardDiscussionGroups(report),
+      items: report.groups,
+      summary: {
+        courseId: report.courseId,
+        discussionId: report.discussion.id,
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "discussion" && positionals.length === 4) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const discussionId = opaqueToken(required(positionals[3], "Blackboard discussion ID"), "Blackboard discussion ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard discussion messages.");
+    const groupId = values["group-id"] ? opaqueToken(values["group-id"], "--group-id") : undefined;
+    const userId = values["user-id"] ? opaqueToken(values["user-id"], "--user-id") : undefined;
+    const status = blackboardDiscussionMessageStatusValue(values.status);
+    const isRead = blackboardDiscussionReadValue(values["is-read"]);
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await getBlackboardDiscussionMessages(adapter, {
+      courseId,
+      discussionId,
+      ...(groupId ? { groupId } : {}),
+      ...(userId ? { userId } : {}),
+      ...(status ? { status } : {}),
+      ...(isRead !== undefined ? { isRead } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb discussion",
+      data: report,
+      text: formatBlackboardDiscussion(report),
+      items: report.messages,
+      summary: {
+        courseId: report.courseId,
+        discussionId: report.discussion.id,
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "discussion-replies" && positionals.length === 5) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const discussionId = opaqueToken(required(positionals[3], "Blackboard discussion ID"), "Blackboard discussion ID");
+    const messageId = opaqueToken(required(positionals[4], "Blackboard message ID"), "Blackboard message ID");
+    const page = parsePositiveInteger(values.page, 1, "--page");
+    const pageSize = parsePositiveInteger(values["page-size"], 25, "--page-size");
+    if (pageSize > 100) throw usageError("--page-size cannot exceed 100 for Blackboard discussion replies.");
+    const groupId = values["group-id"] ? opaqueToken(values["group-id"], "--group-id") : undefined;
+    const userId = values["user-id"] ? opaqueToken(values["user-id"], "--user-id") : undefined;
+    const status = blackboardDiscussionMessageStatusValue(values.status);
+    const isRead = blackboardDiscussionReadValue(values["is-read"]);
+    const sort = optionalInlineText(values.sort, "--sort", 200);
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardDiscussionReplies(adapter, {
+      courseId,
+      discussionId,
+      messageId,
+      ...(groupId ? { groupId } : {}),
+      ...(userId ? { userId } : {}),
+      ...(status ? { status } : {}),
+      ...(isRead !== undefined ? { isRead } : {}),
+      page,
+      pageSize,
+      ...(sort ? { sort } : {}),
+    });
+    writeSuccess({
+      command: "bb discussion-replies",
+      data: report,
+      text: formatBlackboardDiscussionReplies(report),
+      items: report.replies,
+      summary: {
+        courseId: report.courseId,
+        discussionId: report.discussionId,
+        messageId: report.messageId,
+        page: report.page,
+        pageSize: report.pageSize,
+        returned: report.returned,
+        hasMore: report.hasMore,
+        ...(report.nextPage ? { nextPage: report.nextPage } : {}),
+      },
+    }, output);
+    return;
+  }
+  if (command === "discussion-post" && positionals[2] === "preview" && positionals.length === 5) {
+    const target = blackboardDiscussionWriteTarget("post", positionals, values);
+    const input = await readBlackboardDiscussionWriteInput(values);
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardDiscussionWritePreflight(adapter, {
+      credentialsFile: values["credentials-file"],
+      profile: values.profile,
+    }, target, input);
+    writeSuccess({
+      command: "bb discussion-post preview",
+      data: { mode: "preview", mutation: false, ...preflight },
+      text: formatBlackboardDiscussionWritePreview(preflight),
+    }, output);
+    return;
+  }
+  if (command === "discussion-post" && positionals[2] === "apply" && positionals.length === 5) {
+    const target = blackboardDiscussionWriteTarget("post", positionals, values);
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "Blackboard discussion post",
+        "Blackboard discussion posting creates a visible course message. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
+    const input = await readBlackboardDiscussionWriteInput(values);
+    if (input.textFile.sha256 !== expectedSha256) {
+      throw new CliError(
+        "The selected Blackboard discussion text no longer matches the reviewed preview hash. Re-run preview before posting.",
+        "BLACKBOARD_DISCUSSION_HASH_MISMATCH",
+        4,
+        {
+          file: input.textFile.absolutePath,
+          expectedSha256,
+          actualSha256: input.textFile.sha256,
+        },
+      );
+    }
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardDiscussionWritePreflight(adapter, {
+      credentialsFile: values["credentials-file"],
+      profile: values.profile,
+    }, target, input);
+    ensureBlackboardDiscussionWriteAllowed(preflight);
+    let createdMessageId = "";
+    let stage: "create" | "verify" = "create";
+    try {
+      const created = await createBlackboardDiscussionMessage(adapter, target.courseId, target.discussionId, {
+        body: input.body,
+        ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+        status: preflight.target.status,
+      });
+      createdMessageId = created.id;
+      stage = "verify";
+      const snapshot = await observeBlackboardDiscussionWrite(adapter, preflight, createdMessageId);
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard discussion message could not be read back after the create request.",
+          }
+        : verifyBlackboardDiscussionWrite(preflight, input, snapshot.message ?? created);
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "Blackboard accepted the discussion-post request, but the read-back verification was inconclusive.",
+          "BLACKBOARD_DISCUSSION_POST_NOT_CONFIRMED",
+          1,
+          {
+            courseId: target.courseId,
+            discussionId: target.discussionId,
+            ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+            messageId: createdMessageId,
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeSuccess({
+        command: "bb discussion-post apply",
+        data: {
+          mode: "apply",
+          mutation: true,
+          target: preflight.target,
+          courseId: preflight.courseId,
+          courseCode: preflight.courseCode,
+          courseName: preflight.courseName,
+          discussion: preflight.discussion,
+          ...(preflight.group ? { group: preflight.group } : {}),
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        },
+        text: formatBlackboardDiscussionWriteSuccess({
+          target: preflight.target,
+          courseCode: preflight.courseCode,
+          discussion: preflight.discussion,
+          ...(preflight.group ? { group: preflight.group } : {}),
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        }),
+      }, output);
+      return;
+    } catch (error) {
+      const snapshot = createdMessageId
+        ? await observeBlackboardDiscussionWrite(adapter, preflight, createdMessageId)
+        : {};
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard discussion message could not be read back after the request failed.",
+          }
+        : verifyBlackboardDiscussionWrite(preflight, input, snapshot.message);
+      if (createdMessageId && verification.status === "confirmed" && snapshot.message) {
+        writeSuccess({
+          command: "bb discussion-post apply",
+          data: {
+            mode: "apply",
+            mutation: true,
+            target: preflight.target,
+            courseId: preflight.courseId,
+            courseCode: preflight.courseCode,
+            courseName: preflight.courseName,
+            discussion: preflight.discussion,
+            ...(preflight.group ? { group: preflight.group } : {}),
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+            recoveredAfterError: true,
+          },
+          text: formatBlackboardDiscussionWriteSuccess({
+            target: preflight.target,
+            courseCode: preflight.courseCode,
+            discussion: preflight.discussion,
+            ...(preflight.group ? { group: preflight.group } : {}),
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+          }),
+          meta: { recoveredAfterError: true },
+        }, output);
+        return;
+      }
+      throw new CliError(
+        "Blackboard discussion-post outcome is uncertain. Do not retry automatically.",
+        "BLACKBOARD_DISCUSSION_POST_OUTCOME_UNKNOWN",
+        5,
+        {
+          stage,
+          courseId: target.courseId,
+          discussionId: target.discussionId,
+          ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+          ...(createdMessageId ? { messageId: createdMessageId } : {}),
+          textFile: input.textFile.absolutePath,
+          verification,
+          cause: error instanceof Error ? error.message : String(error),
+          warning: "DO_NOT_RETRY_AUTOMATICALLY",
+        },
+      );
+    }
+  }
+  if (command === "discussion-reply" && positionals[2] === "preview" && positionals.length === 6) {
+    const target = blackboardDiscussionWriteTarget("reply", positionals, values);
+    const input = await readBlackboardDiscussionWriteInput(values);
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardDiscussionWritePreflight(adapter, {
+      credentialsFile: values["credentials-file"],
+      profile: values.profile,
+    }, target, input);
+    writeSuccess({
+      command: "bb discussion-reply preview",
+      data: { mode: "preview", mutation: false, ...preflight },
+      text: formatBlackboardDiscussionWritePreview(preflight),
+    }, output);
+    return;
+  }
+  if (command === "discussion-reply" && positionals[2] === "apply" && positionals.length === 6) {
+    const target = blackboardDiscussionWriteTarget("reply", positionals, values);
+    if (!values.confirm) {
+      throw new ConfirmationRequiredError(
+        "Blackboard discussion reply",
+        "Blackboard discussion replies create a visible course message. Re-run the exact previewed command with --confirm.",
+      );
+    }
+    const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
+    const input = await readBlackboardDiscussionWriteInput(values);
+    if (input.textFile.sha256 !== expectedSha256) {
+      throw new CliError(
+        "The selected Blackboard discussion reply text no longer matches the reviewed preview hash. Re-run preview before replying.",
+        "BLACKBOARD_DISCUSSION_HASH_MISMATCH",
+        4,
+        {
+          file: input.textFile.absolutePath,
+          expectedSha256,
+          actualSha256: input.textFile.sha256,
+        },
+      );
+    }
+    const adapter = await casServiceAdapter(values, "bb");
+    const preflight = await buildBlackboardDiscussionWritePreflight(adapter, {
+      credentialsFile: values["credentials-file"],
+      profile: values.profile,
+    }, target, input);
+    ensureBlackboardDiscussionWriteAllowed(preflight);
+    let createdReplyId = "";
+    let stage: "create" | "verify" = "create";
+    try {
+      const created = await createBlackboardDiscussionReply(
+        adapter,
+        target.courseId,
+        target.discussionId,
+        target.messageId!,
+        {
+          body: input.body,
+          ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+          status: preflight.target.status,
+        },
+      );
+      createdReplyId = created.id;
+      stage = "verify";
+      const snapshot = await observeBlackboardDiscussionWrite(adapter, preflight, createdReplyId);
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard reply could not be read back after the create request.",
+          }
+        : verifyBlackboardDiscussionWrite(preflight, input, snapshot.message ?? created);
+      if (verification.status !== "confirmed") {
+        throw new CliError(
+          "Blackboard accepted the discussion-reply request, but the read-back verification was inconclusive.",
+          "BLACKBOARD_DISCUSSION_REPLY_NOT_CONFIRMED",
+          1,
+          {
+            courseId: target.courseId,
+            discussionId: target.discussionId,
+            messageId: target.messageId,
+            ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+            replyId: createdReplyId,
+            verification,
+            warning: "DO_NOT_RETRY_AUTOMATICALLY",
+          },
+        );
+      }
+      writeSuccess({
+        command: "bb discussion-reply apply",
+        data: {
+          mode: "apply",
+          mutation: true,
+          target: preflight.target,
+          courseId: preflight.courseId,
+          courseCode: preflight.courseCode,
+          courseName: preflight.courseName,
+          discussion: preflight.discussion,
+          ...(preflight.group ? { group: preflight.group } : {}),
+          ...(preflight.parentMessage ? { parentMessage: preflight.parentMessage } : {}),
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        },
+        text: formatBlackboardDiscussionWriteSuccess({
+          target: preflight.target,
+          courseCode: preflight.courseCode,
+          discussion: preflight.discussion,
+          ...(preflight.group ? { group: preflight.group } : {}),
+          ...(preflight.parentMessage ? { parentMessage: preflight.parentMessage } : {}),
+          body: preflight.body,
+          message: snapshot.message ?? created,
+          verification,
+        }),
+      }, output);
+      return;
+    } catch (error) {
+      const snapshot = createdReplyId
+        ? await observeBlackboardDiscussionWrite(adapter, preflight, createdReplyId)
+        : {};
+      const verification = snapshot.error
+        ? {
+            status: "unavailable" as const,
+            message: "The created Blackboard reply could not be read back after the request failed.",
+          }
+        : verifyBlackboardDiscussionWrite(preflight, input, snapshot.message);
+      if (createdReplyId && verification.status === "confirmed" && snapshot.message) {
+        writeSuccess({
+          command: "bb discussion-reply apply",
+          data: {
+            mode: "apply",
+            mutation: true,
+            target: preflight.target,
+            courseId: preflight.courseId,
+            courseCode: preflight.courseCode,
+            courseName: preflight.courseName,
+            discussion: preflight.discussion,
+            ...(preflight.group ? { group: preflight.group } : {}),
+            ...(preflight.parentMessage ? { parentMessage: preflight.parentMessage } : {}),
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+            recoveredAfterError: true,
+          },
+          text: formatBlackboardDiscussionWriteSuccess({
+            target: preflight.target,
+            courseCode: preflight.courseCode,
+            discussion: preflight.discussion,
+            ...(preflight.group ? { group: preflight.group } : {}),
+            ...(preflight.parentMessage ? { parentMessage: preflight.parentMessage } : {}),
+            body: preflight.body,
+            message: snapshot.message,
+            verification,
+          }),
+          meta: { recoveredAfterError: true },
+        }, output);
+        return;
+      }
+      throw new CliError(
+        "Blackboard discussion-reply outcome is uncertain. Do not retry automatically.",
+        "BLACKBOARD_DISCUSSION_REPLY_OUTCOME_UNKNOWN",
+        5,
+        {
+          stage,
+          courseId: target.courseId,
+          discussionId: target.discussionId,
+          messageId: target.messageId,
+          ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+          ...(createdReplyId ? { replyId: createdReplyId } : {}),
+          textFile: input.textFile.absolutePath,
+          verification,
+          cause: error instanceof Error ? error.message : String(error),
+          warning: "DO_NOT_RETRY_AUTOMATICALLY",
+        },
+      );
+    }
+  }
+  if (command === "assignments" && (positionals.length === 2 || positionals.length === 3)) {
+    const courseId = positionals.length === 3
+      ? opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID")
+      : undefined;
+    const courseQuery = values.course?.trim() || undefined;
+    if (courseId && courseQuery) {
+      throw usageError("Use either a Blackboard course ID positional or --course QUERY, not both.");
+    }
+    const submissionState = blackboardAssignmentSubmissionStateValue(values["submission-state"]);
+    const adapter = await casServiceAdapter(values, "bb");
+    if (!courseId) {
+      const report = await listBlackboardAssignmentsAcrossCourses(adapter, {
+        ...(courseQuery ? { courseQuery } : {}),
+        withAttempts: values["with-attempts"] === true,
+        ...(submissionState ? { submissionState } : {}),
+      });
+      writeSuccess({
+        command: "bb assignments",
+        data: report,
+        text: formatBlackboardAssignmentsAcrossCourses(report),
+        items: report.assignments,
+        summary: {
+          ...(courseQuery ? { courseQuery } : {}),
+          withAttempts: report.withAttempts,
+          ...(submissionState ? { submissionState } : {}),
+          coursesMatched: report.coursesMatched,
+          coursesScanned: report.coursesScanned,
+          total: report.totalAssignments,
+          returned: report.assignments.length,
+          attemptedAssignments: report.attemptedAssignments,
+          partial: report.partial,
+          failures: report.failures.length,
+        },
+        ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+      }, output);
+      return;
+    }
+    if (values["with-attempts"] === true || submissionState !== undefined) {
+      const report = await listBlackboardAssignmentsWithAttempts(adapter, courseId);
+      const assignments = submissionState
+        ? filterBlackboardAssignmentsBySubmissionState(report.assignments, submissionState)
+        : report.assignments;
+      const attemptedAssignments = assignments.filter((item) => (item.attemptSummary?.totalAttempts ?? 0) > 0).length;
+      writeSuccess({
+        command: "bb assignments",
+        data: {
+          withAttempts: true,
+          ...(submissionState ? { submissionState } : {}),
+          ...report,
+          assignments,
+          returnedAssignments: assignments.length,
+        },
+        text: formatBlackboardAssignmentsWithAttempts(report, {
+          assignments,
+          ...(submissionState ? { submissionState } : {}),
+        }),
+        items: assignments,
+        summary: {
+          courseId,
+          withAttempts: true,
+          ...(submissionState ? { submissionState } : {}),
+          total: report.totalAssignments,
+          returned: assignments.length,
+          attemptedAssignments,
+          partial: report.partial,
+          failures: report.failures.length,
+        },
+        ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+      }, output);
+      return;
+    }
     const assignments = await listBlackboardAssignments(adapter, courseId);
     writeSuccess({
       command: "bb assignments",
@@ -3952,14 +5316,122 @@ async function runBlackboard(
     }, output);
     return;
   }
+  if (command === "grades" && positionals.length === 2) {
+    const submissionState = blackboardGradesSubmissionStateValue(values["submission-state"]);
+    const courseQuery = values.course?.trim() || undefined;
+    const limit = parsePositiveInteger(values.limit, 50, "--limit");
+    if (limit > 200) throw usageError("--limit cannot exceed 200 for Blackboard grades.");
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardGrades(adapter, {
+      ...(courseQuery ? { courseQuery } : {}),
+      ...(submissionState ? { submissionState } : {}),
+      limit,
+    });
+    writeSuccess({
+      command: "bb grades",
+      data: report,
+      text: formatBlackboardGrades(report),
+      items: report.grades,
+      summary: {
+        ...(courseQuery ? { courseQuery } : {}),
+        ...(submissionState ? { submissionState } : {}),
+        limit,
+        coursesMatched: report.coursesMatched,
+        coursesScanned: report.coursesScanned,
+        total: report.attemptedAssignments,
+        returned: report.grades.length,
+        partial: report.partial,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
+  if (command === "attempt-files" && positionals.length === 4) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const attemptId = opaqueToken(required(positionals[3], "Blackboard attempt ID"), "Blackboard attempt ID");
+    const adapter = await casServiceAdapter(values, "bb");
+    const files = await listBlackboardAttemptFiles(adapter, courseId, attemptId);
+    const publicFiles = files.map(publicBlackboardAttemptFile);
+    writeSuccess({
+      command: "bb attempt-files",
+      data: { courseId, attemptId, files: publicFiles, total: files.length },
+      text: formatBlackboardAttemptFiles(attemptId, files),
+      items: publicFiles,
+      summary: { courseId, attemptId, total: files.length },
+    }, output);
+    return;
+  }
+  if (command === "attempt-download" && positionals.length === 5) {
+    const courseId = opaqueToken(required(positionals[2], "Blackboard course ID"), "Blackboard course ID");
+    const attemptId = opaqueToken(required(positionals[3], "Blackboard attempt ID"), "Blackboard attempt ID");
+    const fileId = opaqueToken(required(positionals[4], "Blackboard attempt file ID"), "Blackboard attempt file ID");
+    const destination = required(values.destination, "--destination");
+    const adapter = await casServiceAdapter(values, "bb");
+    const result = await downloadBlackboardAttemptFile(
+      adapter,
+      courseId,
+      attemptId,
+      fileId,
+      destination,
+      { overwrite: values.overwrite === true },
+    );
+    writeSuccess({
+      command: "bb attempt-download",
+      data: {
+        courseId,
+        attemptId,
+        file: publicBlackboardAttemptFile(result.file),
+        destination: result.destination,
+        size: result.size,
+        sha256: result.sha256,
+        contentType: result.contentType,
+        overwritten: result.overwritten,
+      },
+      text: formatBlackboardAttemptFileDownload(result, attemptId),
+      summary: { courseId, attemptId, fileId: result.file.id, destination: result.destination, size: result.size, overwritten: result.overwritten },
+    }, output);
+    return;
+  }
+  if (command === "announcements" && positionals.length === 2) {
+    const days = values.days === undefined ? undefined : parsePositiveInteger(values.days, 1, "--days");
+    const courseQuery = values.course?.trim() || undefined;
+    const adapter = await casServiceAdapter(values, "bb");
+    const report = await listBlackboardAnnouncements(adapter, {
+      now: new Date(),
+      ...(days !== undefined ? { days } : {}),
+      ...(courseQuery ? { courseQuery } : {}),
+    });
+    writeSuccess({
+      command: "bb announcements",
+      data: report,
+      text: formatBlackboardAnnouncements(report),
+      items: report.announcements,
+      summary: {
+        ...(days !== undefined ? { days } : {}),
+        ...(courseQuery ? { courseQuery } : {}),
+        coursesMatched: report.coursesMatched,
+        coursesScanned: report.coursesScanned,
+        systemAnnouncements: report.systemAnnouncements,
+        courseAnnouncements: report.courseAnnouncements,
+        total: report.announcements.length,
+        partial: report.partial,
+        failures: report.failures.length,
+      },
+      ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
+    }, output);
+    return;
+  }
   if (command === "deadlines" && positionals.length === 2) {
     const days = values.days === undefined ? undefined : parsePositiveInteger(values.days, 1, "--days");
     const courseQuery = values.course?.trim() || undefined;
+    const submissionState = blackboardAssignmentSubmissionStateValue(values["submission-state"]);
     const adapter = await casServiceAdapter(values, "bb");
     const report = await listBlackboardDeadlines(adapter, {
       now: new Date(),
       ...(days !== undefined ? { days } : {}),
       ...(courseQuery ? { courseQuery } : {}),
+      ...(submissionState ? { submissionState } : {}),
     });
     writeSuccess({
       command: "bb deadlines",
@@ -3969,9 +5441,11 @@ async function runBlackboard(
       summary: {
         ...(days !== undefined ? { days } : {}),
         ...(courseQuery ? { courseQuery } : {}),
+        ...(submissionState ? { submissionState } : {}),
         coursesMatched: report.coursesMatched,
         coursesScanned: report.coursesScanned,
         total: report.deadlines.length,
+        partial: report.partial,
         failures: report.failures.length,
       },
       ...(report.failures.length > 0 ? { meta: { failures: report.failures } } : {}),
@@ -4090,7 +5564,6 @@ async function runBlackboard(
   }
   if (command === "submit" && positionals[2] === "apply" && positionals.length === 3) {
     const target = blackboardSubmissionTarget(values);
-    const filePath = required(values.file, "--file");
     if (!values.confirm) {
       throw new ConfirmationRequiredError(
         "Blackboard submission",
@@ -4098,43 +5571,49 @@ async function runBlackboard(
       );
     }
     const expectedSha256 = blackboardExpectedSha256(required(values["expected-sha256"], "--expected-sha256"));
-    const payload = await readBlackboardSubmissionPayload(filePath);
-    const file = payload.file;
+    const submission = await readBlackboardSubmissionInput(values);
     const comment = submissionComment(values.comment);
-    if (file.sha256 !== expectedSha256) {
+    const actualSha256 = submission.kind === "file" ? submission.file.sha256 : submission.textFile.sha256;
+    const sourcePath = submission.kind === "file" ? submission.file.absolutePath : submission.textFile.absolutePath;
+    if (actualSha256 !== expectedSha256) {
       throw new CliError(
-        "The selected file no longer matches the reviewed preview hash. Re-run preview before submitting.",
+        "The selected Blackboard submission input no longer matches the reviewed preview hash. Re-run preview before submitting.",
         "BLACKBOARD_FILE_HASH_MISMATCH",
         4,
         {
-          file: file.absolutePath,
+          file: sourcePath,
           expectedSha256,
-          actualSha256: file.sha256,
+          actualSha256,
         },
       );
     }
     const adapter = await casServiceAdapter(values, "bb");
-    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, file, comment);
+    const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, submission, comment);
     ensureBlackboardSubmissionAllowed(preflight, values["allow-late"] === true);
 
     const assignment = preflight.assignment;
     let createdAttemptId = "";
     let uploadedId = "";
-    let stage: "upload" | "create_attempt" | "attach_file" | "submit_attempt" | "verify" = "upload";
+    let stage: "upload" | "create_attempt" | "attach_file" | "submit_attempt" | "verify" = submission.kind === "file" ? "upload" : "create_attempt";
     try {
-      stage = "upload";
-      const uploaded = await uploadBlackboardTemporaryFile(adapter, file, payload.bytes);
-      uploadedId = uploaded.id;
+      if (submission.kind === "file") {
+        stage = "upload";
+        const uploaded = await uploadBlackboardTemporaryFile(adapter, submission.file, submission.bytes);
+        uploadedId = uploaded.id;
+      }
       stage = "create_attempt";
       const attempt = await createBlackboardAttempt(adapter, target.courseId, assignment.id, {
+        ...(submission.kind === "text" ? { studentSubmission: submission.text } : {}),
         ...(comment ? { studentComments: comment } : {}),
       });
       createdAttemptId = attempt.id;
-      stage = "attach_file";
-      await attachBlackboardAttemptFile(adapter, target.courseId, createdAttemptId, {
-        name: file.name,
-        uploadId: uploadedId,
-      });
+      if (submission.kind === "file") {
+        stage = "attach_file";
+        await attachBlackboardAttemptFile(adapter, target.courseId, createdAttemptId, {
+          name: submission.file.name,
+          uploadId: uploadedId,
+        });
+      }
       stage = "submit_attempt";
       const submitted = await updateBlackboardAttempt(adapter, target.courseId, assignment.id, createdAttemptId, {
         status: "NeedsGrading",
@@ -4143,7 +5622,7 @@ async function runBlackboard(
       const snapshot = await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId);
       const observedAttempt = snapshot.attempt ?? submitted;
       const verification = snapshot.attempt
-        ? verifyBlackboardSubmission(snapshot.attempt.status, snapshot.files, file.name)
+        ? verifyBlackboardSubmission(snapshot.attempt, snapshot.files, submission)
         : {
             status: "unavailable" as const,
             message: "The submitted attempt status could not be read back from Blackboard.",
@@ -4163,7 +5642,7 @@ async function runBlackboard(
           },
         );
       }
-      writeBlackboardSubmissionResult(output, preflight, file, comment, observedAttempt, snapshot.files, verification);
+      writeBlackboardSubmissionResult(output, preflight, submission, comment, observedAttempt, snapshot.files, verification);
       return;
     } catch (error) {
       if (error instanceof CliError && error.code === "BLACKBOARD_FILE_CHANGED") throw error;
@@ -4178,12 +5657,14 @@ async function runBlackboard(
       const snapshot = createdAttemptId
         ? await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId)
         : { files: [] as BlackboardAttemptFile[] };
-      const verification = verifyBlackboardSubmission(snapshot.attempt?.status ?? "", snapshot.files, file.name);
+      const verification = snapshot.attempt
+        ? verifyBlackboardSubmission(snapshot.attempt, snapshot.files, submission)
+        : { status: "unavailable" as const, message: "Blackboard did not expose enough read-back state to confirm the submission." };
       if (snapshot.attempt && verification.status === "confirmed") {
         writeBlackboardSubmissionResult(
           output,
           preflight,
-          file,
+          submission,
           comment,
           snapshot.attempt,
           snapshot.files,
@@ -4204,7 +5685,9 @@ async function runBlackboard(
           ...(createdAttemptId ? { attemptId: createdAttemptId } : {}),
           candidateAttemptIds,
           ...(uploadedId ? { uploadId: uploadedId } : {}),
-          fileName: file.name,
+          ...(submission.kind === "file"
+            ? { fileName: submission.file.name }
+            : { textFile: submission.textFile.absolutePath }),
           ...(snapshot.attempt?.status ? { attemptStatus: snapshot.attempt.status } : {}),
           observedFiles: snapshot.files.map((entry) => entry.name),
           verification,
@@ -5134,6 +6617,14 @@ type BlackboardSubmissionVerification = {
   message: string;
 };
 
+type BlackboardCliSubmissionInput =
+  | { kind: "file"; file: BlackboardSubmissionFile; bytes: Uint8Array }
+  | { kind: "text"; textFile: BlackboardSubmissionText; text: string };
+
+type BlackboardCliSubmissionSummary =
+  | { kind: "file"; file: BlackboardSubmissionFile }
+  | { kind: "text"; textFile: BlackboardSubmissionText };
+
 type BlackboardSubmissionPreviewData = {
   checkedAt: string;
   target: BlackboardSubmissionTarget;
@@ -5149,7 +6640,7 @@ type BlackboardSubmissionPreviewData = {
   attemptsUsed: number;
   remainingAttempts?: number;
   inProgressAttempts: number;
-  file: Awaited<ReturnType<typeof inspectBlackboardSubmissionFile>>;
+  submission: BlackboardCliSubmissionSummary;
   commentSummary: { present: boolean; length: number };
   uploadSettings?: Awaited<ReturnType<typeof getBlackboardUploadSettings>>;
   blockers: BlackboardSubmissionAssessment["blockers"];
@@ -5221,9 +6712,116 @@ function blackboardAttemptStatus(value: string | undefined):
   throw usageError("--status must be InProgress, NeedsGrading, or Completed for Blackboard attempts.");
 }
 
+function blackboardDiscussionGradableValue(value: string | undefined): boolean | undefined {
+  return blackboardBooleanFilterValue(value, "--gradable");
+}
+
+function blackboardDiscussionReadValue(value: string | undefined): boolean | undefined {
+  return blackboardBooleanFilterValue(value, "--is-read");
+}
+
+function blackboardMembershipAvailabilityValue(value: string | undefined):
+  "Yes" | "No" | "Disabled" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "Yes" || value === "No" || value === "Disabled") return value;
+  throw usageError("--availability must be Yes, No, or Disabled for Blackboard roster.");
+}
+
+function blackboardMessageFolderTypeValue(value: string | undefined):
+  Exclude<BlackboardCourseMessageFolderType, "">
+  | undefined {
+  if (value === undefined) return undefined;
+  if (value === "Inbox" || value === "Sent" || value === "Delete" || value === "Custom") return value;
+  throw usageError("--folder-type must be Inbox, Sent, Delete, or Custom for Blackboard course messages.");
+}
+
+function blackboardMessageParticipationTypeValue(value: string | undefined):
+  Exclude<BlackboardCourseMessageParticipationType, "">
+  | undefined {
+  if (value === undefined) return undefined;
+  if (value === "From" || value === "To" || value === "Cc" || value === "Bcc") return value;
+  throw usageError("--participation-type must be From, To, Cc, or Bcc for Blackboard course-message participants.");
+}
+
+function blackboardBooleanFilterValue(value: string | undefined, option: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  throw usageError(`${option} must be true or false.`);
+}
+
+function blackboardDiscussionMessageStatusValue(value: string | undefined):
+  Exclude<BlackboardDiscussionMessageStatus, "">
+  | undefined {
+  if (value === undefined) return undefined;
+  if (value === "Published" || value === "Deleted" || value === "Draft") return value;
+  throw usageError("--status must be Published, Deleted, or Draft for Blackboard discussions.");
+}
+
+function blackboardAssignmentSubmissionStateValue(value: string | undefined):
+  | "not_attempted"
+  | "in_progress"
+  | "submitted"
+  | "completed"
+  | "mixed"
+  | "other"
+  | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value === "not_attempted"
+    || value === "in_progress"
+    || value === "submitted"
+    || value === "completed"
+    || value === "mixed"
+    || value === "other"
+  ) return value;
+  throw usageError("--submission-state must be not_attempted, in_progress, submitted, completed, mixed, or other.");
+}
+
+function blackboardGradesSubmissionStateValue(value: string | undefined):
+  | "in_progress"
+  | "submitted"
+  | "completed"
+  | "mixed"
+  | "other"
+  | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value === "in_progress"
+    || value === "submitted"
+    || value === "completed"
+    || value === "mixed"
+    || value === "other"
+  ) return value;
+  throw usageError("--submission-state must be in_progress, submitted, completed, mixed, or other for Blackboard grades.");
+}
+
 function submissionComment(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+async function readBlackboardSubmissionInput(values: Values): Promise<BlackboardCliSubmissionInput> {
+  const filePath = values.file?.trim();
+  const textFilePath = values["text-file"]?.trim();
+  if (filePath && textFilePath) {
+    throw usageError("Choose exactly one of --file or --text-file for Blackboard submission.");
+  }
+  if (filePath) {
+    const payload = await readBlackboardSubmissionPayload(filePath);
+    return { kind: "file", file: payload.file, bytes: payload.bytes };
+  }
+  if (textFilePath) {
+    const payload = await readBlackboardSubmissionTextPayload(textFilePath);
+    return { kind: "text", textFile: payload.textFile, text: payload.text };
+  }
+  throw usageError("One of --file or --text-file is required.");
+}
+
+function blackboardSubmissionSummary(input: BlackboardCliSubmissionInput): BlackboardCliSubmissionSummary {
+  return input.kind === "file"
+    ? { kind: "file", file: input.file }
+    : { kind: "text", textFile: input.textFile };
 }
 
 function summariseSubmissionComment(comment: string | undefined): { present: boolean; length: number } {
@@ -5238,11 +6836,851 @@ function blackboardExpectedSha256(value: string): string {
   return normalised;
 }
 
+interface BlackboardCourseMessageWriteTarget {
+  courseId: string;
+  subject?: string;
+  toUsers: string[];
+  ccUsers: string[];
+  bccUsers: string[];
+}
+
+interface BlackboardCourseMessageWriteInput {
+  textFile: BlackboardSubmissionText;
+  body: string;
+}
+
+interface BlackboardCourseMessageWriteResolvedRecipient {
+  userId: string;
+  displayName: string;
+  courseRoleId: string;
+}
+
+interface BlackboardCourseMessageWritePreflight {
+  checkedAt: string;
+  target: BlackboardCourseMessageWriteTarget;
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  recipients: {
+    toUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+    ccUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+    bccUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+  };
+  body: {
+    textFile: BlackboardSubmissionText;
+    preview: string;
+  };
+  blockers: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  applyAllowed: boolean;
+  confirmation: {
+    required: true;
+    available: boolean;
+    expectedSha256: string;
+    argv?: string[];
+    command?: string;
+  };
+}
+
+interface BlackboardCourseMessageWriteVerification {
+  status: "confirmed" | "not_observed" | "unavailable";
+  message: string;
+}
+
+export type BlackboardDiscussionWriteMode = "post" | "reply";
+
+export interface BlackboardDiscussionWriteTarget {
+  mode: BlackboardDiscussionWriteMode;
+  courseId: string;
+  discussionId: string;
+  messageId?: string;
+  groupId?: string;
+  status: Exclude<BlackboardDiscussionMessageStatus, "">;
+}
+
+export interface BlackboardDiscussionWriteInput {
+  textFile: BlackboardSubmissionText;
+  body: string;
+}
+
+export interface BlackboardDiscussionWritePreflight {
+  checkedAt: string;
+  target: BlackboardDiscussionWriteTarget;
+  courseId: string;
+  courseCode: string;
+  courseName: string;
+  discussion: BlackboardDiscussion;
+  group?: BlackboardDiscussionGroup;
+  parentMessage?: BlackboardDiscussionMessage;
+  body: {
+    textFile: BlackboardSubmissionText;
+    preview: string;
+  };
+  blockers: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  applyAllowed: boolean;
+  confirmation: {
+    required: true;
+    available: boolean;
+    expectedSha256: string;
+    argv?: string[];
+    command?: string;
+  };
+}
+
+export interface BlackboardDiscussionWriteConfirmationOptions {
+  credentialsFile?: string;
+  profile?: string;
+}
+
+interface BlackboardDiscussionWriteVerification {
+  status: "confirmed" | "not_observed" | "unavailable";
+  message: string;
+}
+
+function blackboardCourseMessageWriteTarget(
+  positionals: string[],
+  values: Values,
+): BlackboardCourseMessageWriteTarget {
+  const subject = optionalInlineText(values.subject, "--subject", 200);
+  const toUsers = blackboardMessageRecipientOption(values["to-user"], "--to-user");
+  const ccUsers = blackboardMessageRecipientOption(values["cc-user"], "--cc-user");
+  const bccUsers = blackboardMessageRecipientOption(values["bcc-user"], "--bcc-user");
+  if (toUsers.length + ccUsers.length + bccUsers.length === 0) {
+    throw usageError("At least one of --to-user, --cc-user, or --bcc-user is required for Blackboard course messages.");
+  }
+  assertDistinctBlackboardMessageRecipientOptions({ toUsers, ccUsers, bccUsers });
+  return {
+    courseId: opaqueToken(required(positionals[3], "Blackboard course ID"), "Blackboard course ID"),
+    ...(subject ? { subject } : {}),
+    toUsers,
+    ccUsers,
+    bccUsers,
+  };
+}
+
+async function readBlackboardCourseMessageWriteInput(values: Values): Promise<BlackboardCourseMessageWriteInput> {
+  const textFilePath = values["text-file"]?.trim();
+  if (!textFilePath) throw usageError("--text-file is required for Blackboard course messages.");
+  const payload = await readBlackboardSubmissionTextPayload(textFilePath);
+  if (!cleanText(payload.text)) {
+    throw new CliError(
+      "The Blackboard course-message text file cannot be blank after trimming whitespace.",
+      "BLACKBOARD_MESSAGE_TEXT_EMPTY",
+      2,
+      { file: payload.textFile.absolutePath },
+    );
+  }
+  return {
+    textFile: payload.textFile,
+    body: payload.text,
+  };
+}
+
+async function buildBlackboardCourseMessageWritePreflight(
+  adapter: ServiceAdapter,
+  values: Values,
+  target: BlackboardCourseMessageWriteTarget,
+  input: BlackboardCourseMessageWriteInput,
+): Promise<BlackboardCourseMessageWritePreflight> {
+  const blockers: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string }> = [];
+  const sentReport = await listBlackboardCourseMessages(adapter, {
+    courseId: target.courseId,
+    folderType: "Sent",
+    page: 1,
+    pageSize: 1,
+    sort: "postedDate(desc)",
+  });
+  const courseId = sentReport.courseId;
+  const courseCode = sentReport.courseCode;
+  const courseName = sentReport.courseName;
+  const resolvedRecipients = await resolveBlackboardCourseMessageRecipients(adapter, courseId, {
+    toUsers: target.toUsers,
+    ccUsers: target.ccUsers,
+    bccUsers: target.bccUsers,
+  });
+  const missingRecipients = resolvedRecipients.missing;
+  if (missingRecipients.length > 0) {
+    blockers.push({
+      code: "RECIPIENT_NOT_FOUND",
+      message: `The selected Blackboard recipients could not be found by exact ID in this course roster: ${missingRecipients.join(", ")}.`,
+    });
+  }
+  if (!target.subject) {
+    warnings.push({
+      code: "SUBJECT_EMPTY",
+      message: "The Blackboard course message will be created without a subject line.",
+    });
+  }
+  if (target.toUsers.length === 0) {
+    warnings.push({
+      code: "TO_RECIPIENTS_EMPTY",
+      message: "This Blackboard course message has no direct To recipients; only Cc and/or Bcc recipients will be used.",
+    });
+  }
+  const confirmation = blockers.length === 0
+    ? buildBlackboardCourseMessageWriteApplyConfirmation(target, input.textFile, {
+      credentialsFile: values["credentials-file"],
+      profile: values.profile,
+    })
+    : undefined;
+  return {
+    checkedAt: new Date().toISOString(),
+    target,
+    courseId,
+    courseCode,
+    courseName,
+    recipients: {
+      toUsers: resolvedRecipients.toUsers,
+      ccUsers: resolvedRecipients.ccUsers,
+      bccUsers: resolvedRecipients.bccUsers,
+    },
+    body: {
+      textFile: input.textFile,
+      preview: sampleText(cleanText(input.body), 240),
+    },
+    blockers,
+    warnings,
+    applyAllowed: blockers.length === 0,
+    confirmation: {
+      required: true,
+      available: Boolean(confirmation),
+      expectedSha256: input.textFile.sha256,
+      ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+    },
+  };
+}
+
+function ensureBlackboardCourseMessageWriteAllowed(preflight: BlackboardCourseMessageWritePreflight): void {
+  if (preflight.blockers.length === 0) return;
+  throw new CliError(
+    "Blackboard course-message write is blocked by the current live target state.",
+    "BLACKBOARD_MESSAGE_SEND_BLOCKED",
+    4,
+    {
+      courseId: preflight.target.courseId,
+      blockers: preflight.blockers,
+      warning: "NO_MUTATION_PERFORMED",
+    },
+  );
+}
+
+function buildBlackboardCourseMessageWriteApplyConfirmation(
+  target: BlackboardCourseMessageWriteTarget,
+  textFile: BlackboardSubmissionText,
+  options: {
+    credentialsFile?: string;
+    profile?: string;
+  } = {},
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "bb",
+    "message-send",
+    "apply",
+    target.courseId,
+    ...(options.credentialsFile ? ["--credentials-file", options.credentialsFile] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    ...(target.subject ? ["--subject", target.subject] : []),
+    ...target.toUsers.flatMap((userId) => ["--to-user", userId]),
+    ...target.ccUsers.flatMap((userId) => ["--cc-user", userId]),
+    ...target.bccUsers.flatMap((userId) => ["--bcc-user", userId]),
+    "--text-file",
+    textFile.absolutePath,
+    "--expected-sha256",
+    textFile.sha256,
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+function blackboardMessageRecipientOption(value: string[] | undefined, option: "--to-user" | "--cc-user" | "--bcc-user"): string[] {
+  const items: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value ?? []) {
+    const token = opaqueToken(entry, option);
+    const comparable = blackboardComparableId(token);
+    if (seen.has(comparable)) {
+      throw usageError(`${option} must not repeat the same Blackboard user ID.`);
+    }
+    seen.add(comparable);
+    items.push(token);
+  }
+  return items;
+}
+
+function assertDistinctBlackboardMessageRecipientOptions(input: {
+  toUsers: readonly string[];
+  ccUsers: readonly string[];
+  bccUsers: readonly string[];
+}): void {
+  const seen = new Map<string, "--to-user" | "--cc-user" | "--bcc-user">();
+  for (const [option, values] of [
+    ["--to-user", input.toUsers],
+    ["--cc-user", input.ccUsers],
+    ["--bcc-user", input.bccUsers],
+  ] as const) {
+    for (const value of values) {
+      const comparable = blackboardComparableId(value);
+      const existing = seen.get(comparable);
+      if (existing) {
+        throw usageError(`${option} duplicates a Blackboard recipient already selected with ${existing}.`);
+      }
+      seen.set(comparable, option);
+    }
+  }
+}
+
+async function resolveBlackboardCourseMessageRecipients(
+  adapter: ServiceAdapter,
+  courseId: string,
+  requested: {
+    toUsers: readonly string[];
+    ccUsers: readonly string[];
+    bccUsers: readonly string[];
+  },
+): Promise<{
+  toUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+  ccUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+  bccUsers: BlackboardCourseMessageWriteResolvedRecipient[];
+  missing: string[];
+}> {
+  const needed = new Set([
+    ...requested.toUsers.map((entry) => blackboardComparableId(entry)),
+    ...requested.ccUsers.map((entry) => blackboardComparableId(entry)),
+    ...requested.bccUsers.map((entry) => blackboardComparableId(entry)),
+  ]);
+  const resolved = new Map<string, BlackboardCourseMessageWriteResolvedRecipient>();
+  for (let page = 1; page <= 100 && resolved.size < needed.size; page += 1) {
+    const report = await listBlackboardCourseRoster(adapter, {
+      courseId,
+      page,
+      pageSize: 100,
+    });
+    for (const membership of report.memberships) {
+      if (!membership.userId) continue;
+      const comparable = blackboardComparableId(membership.userId);
+      if (!needed.has(comparable) || resolved.has(comparable)) continue;
+      resolved.set(comparable, blackboardCourseMessageResolvedRecipient(membership));
+    }
+    if (!report.hasMore) break;
+  }
+  const pick = (items: readonly string[]) => items
+    .map((entry) => resolved.get(blackboardComparableId(entry)))
+    .filter((entry): entry is BlackboardCourseMessageWriteResolvedRecipient => entry !== undefined);
+  const missing = [...needed].filter((entry) => !resolved.has(entry)).sort((left, right) => left.localeCompare(right, "en-US"));
+  return {
+    toUsers: pick(requested.toUsers),
+    ccUsers: pick(requested.ccUsers),
+    bccUsers: pick(requested.bccUsers),
+    missing,
+  };
+}
+
+function blackboardCourseMessageResolvedRecipient(
+  membership: BlackboardCourseMembership,
+): BlackboardCourseMessageWriteResolvedRecipient {
+  return {
+    userId: membership.userId,
+    displayName: membership.user?.displayName || membership.userId,
+    courseRoleId: membership.courseRoleId,
+  };
+}
+
+async function findBlackboardCourseMessageById(
+  adapter: ServiceAdapter,
+  options: { courseId: string; messageId: string },
+): Promise<{ courseCode: string; courseName: string; message?: BlackboardCourseMessage }> {
+  let latest: Awaited<ReturnType<typeof listBlackboardCourseMessages>> | undefined;
+  for (let page = 1; page <= 100; page += 1) {
+    const report = await listBlackboardCourseMessages(adapter, {
+      courseId: options.courseId,
+      folderType: "Sent",
+      page,
+      pageSize: 100,
+      sort: "postedDate(desc)",
+    });
+    latest = report;
+    const matched = report.messages.find((entry) => entry.id === options.messageId);
+    if (matched) {
+      return {
+        courseCode: report.courseCode,
+        courseName: report.courseName,
+        message: matched,
+      };
+    }
+    if (!report.hasMore) break;
+  }
+  if (!latest) {
+    throw new CliError("The Blackboard course messages could not be read.", "BLACKBOARD_MESSAGE_READ_FAILED", 1, {
+      courseId: options.courseId,
+      folderType: "Sent",
+    });
+  }
+  return {
+    courseCode: latest.courseCode,
+    courseName: latest.courseName,
+  };
+}
+
+async function observeBlackboardCourseMessageWrite(
+  adapter: ServiceAdapter,
+  preflight: BlackboardCourseMessageWritePreflight,
+  createdId: string,
+): Promise<{ message?: BlackboardCourseMessage; error?: unknown }> {
+  try {
+    const observed = await findBlackboardCourseMessageById(adapter, {
+      courseId: preflight.target.courseId,
+      messageId: createdId,
+    });
+    return { ...(observed.message ? { message: observed.message } : {}) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function verifyBlackboardCourseMessageWrite(
+  preflight: BlackboardCourseMessageWritePreflight,
+  input: BlackboardCourseMessageWriteInput,
+  message: BlackboardCourseMessage | undefined,
+): BlackboardCourseMessageWriteVerification {
+  if (!message) {
+    return {
+      status: "not_observed",
+      message: "The created Blackboard course message could not be found by exact ID in the Sent-folder read-back.",
+    };
+  }
+  const mismatches: string[] = [];
+  const expectedSubject = preflight.target.subject ?? "";
+  const expectedBody = cleanText(input.body);
+  if ((message.subject || "") !== expectedSubject) mismatches.push("subject");
+  if (message.body !== expectedBody) mismatches.push("body");
+  if (message.isReply) mismatches.push("isReply");
+  if (!sameBlackboardComparableIds(message.toUsers, preflight.target.toUsers)) mismatches.push("toUsers");
+  if (!sameBlackboardComparableIds(message.ccUsers, preflight.target.ccUsers)) mismatches.push("ccUsers");
+  if (!sameBlackboardComparableIds(message.bccUsers, preflight.target.bccUsers)) mismatches.push("bccUsers");
+  if (mismatches.length === 0) {
+    return {
+      status: "confirmed",
+      message: "The created Blackboard course message was read back with the expected ID, recipients, subject, and body.",
+    };
+  }
+  return {
+    status: "not_observed",
+    message: `Blackboard read-back mismatched: ${mismatches.join(", ")}.`,
+  };
+}
+
+function blackboardComparableId(value: string): string {
+  return value.startsWith("_") && value.endsWith("_1") ? value.slice(1, -2) : value;
+}
+
+function sameBlackboardComparableIds(left: readonly string[], right: readonly string[]): boolean {
+  const leftIds = [...new Set(left.map((entry) => blackboardComparableId(entry)))].sort((a, b) => a.localeCompare(b, "en-US"));
+  const rightIds = [...new Set(right.map((entry) => blackboardComparableId(entry)))].sort((a, b) => a.localeCompare(b, "en-US"));
+  return leftIds.length === rightIds.length && leftIds.every((entry, index) => entry === rightIds[index]);
+}
+
+function blackboardDiscussionWriteTarget(
+  mode: BlackboardDiscussionWriteMode,
+  positionals: string[],
+  values: Values,
+): BlackboardDiscussionWriteTarget {
+  return {
+    mode,
+    courseId: opaqueToken(required(positionals[3], "Blackboard course ID"), "Blackboard course ID"),
+    discussionId: opaqueToken(required(positionals[4], "Blackboard discussion ID"), "Blackboard discussion ID"),
+    ...(mode === "reply" ? { messageId: opaqueToken(required(positionals[5], "Blackboard message ID"), "Blackboard message ID") } : {}),
+    ...(values["group-id"] ? { groupId: opaqueToken(values["group-id"], "--group-id") } : {}),
+    status: blackboardDiscussionMessageStatusValue(values.status) ?? "Published",
+  };
+}
+
+async function readBlackboardDiscussionWriteInput(values: Values): Promise<BlackboardDiscussionWriteInput> {
+  const textFilePath = values["text-file"]?.trim();
+  if (!textFilePath) throw usageError("--text-file is required for Blackboard discussion writes.");
+  const payload = await readBlackboardSubmissionTextPayload(textFilePath);
+  if (!cleanText(payload.text)) {
+    throw new CliError(
+      "The Blackboard discussion text file cannot be blank after trimming whitespace.",
+      "BLACKBOARD_DISCUSSION_TEXT_EMPTY",
+      2,
+      { file: payload.textFile.absolutePath },
+    );
+  }
+  return {
+    textFile: payload.textFile,
+    body: payload.text,
+  };
+}
+
+export async function buildBlackboardDiscussionWritePreflight(
+  adapter: ServiceAdapter,
+  options: BlackboardDiscussionWriteConfirmationOptions,
+  target: BlackboardDiscussionWriteTarget,
+  input: BlackboardDiscussionWriteInput,
+): Promise<BlackboardDiscussionWritePreflight> {
+  const blockers: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string }> = [];
+  let courseCode = target.courseId;
+  let courseName = target.courseId;
+  let discussion: BlackboardDiscussion;
+  let group: BlackboardDiscussionGroup | undefined;
+  let parentMessage: BlackboardDiscussionMessage | undefined;
+  let effectiveGroupId = target.groupId;
+
+  if (target.mode === "reply") {
+    const parent = await findBlackboardDiscussionMessageById(adapter, {
+      courseId: target.courseId,
+      discussionId: target.discussionId,
+      messageId: target.messageId!,
+    });
+    courseCode = parent.courseCode;
+    courseName = parent.courseName;
+    discussion = parent.discussion;
+    parentMessage = parent.message;
+    if (!parentMessage) {
+      blockers.push({
+        code: "PARENT_MESSAGE_NOT_FOUND",
+        message: "The selected Blackboard discussion message could not be found by exact ID.",
+      });
+    } else {
+      if (target.groupId && parentMessage.groupId && target.groupId !== parentMessage.groupId) {
+        blockers.push({
+          code: "GROUP_MISMATCH",
+          message: "The selected --group-id does not match the parent discussion message's group.",
+        });
+      } else if (target.groupId && !parentMessage.groupId) {
+        blockers.push({
+          code: "GROUP_NOT_ALLOWED",
+          message: "The selected parent discussion message is not group-scoped, so --group-id should be omitted.",
+        });
+      }
+      effectiveGroupId = target.groupId ?? (parentMessage.groupId || undefined);
+    }
+  } else {
+    const report = await getBlackboardDiscussionMessages(adapter, {
+      courseId: target.courseId,
+      discussionId: target.discussionId,
+      ...(target.groupId ? { groupId: target.groupId } : {}),
+      page: 1,
+      pageSize: 1,
+    });
+    courseCode = report.courseCode;
+    courseName = report.courseName;
+    discussion = report.discussion;
+  }
+
+  if (discussion.source === "original-html" || parentMessage?.source === "original-html") {
+    blockers.push({
+      code: "REST_SURFACE_REQUIRED",
+      message: "This Blackboard discussion is only available through the Original HTML fallback. Discussion writes remain unavailable until the course exposes a compatible Learn REST discussion API.",
+    });
+  }
+
+  if (discussion.groupDiscussion) {
+    if (!effectiveGroupId) {
+      blockers.push({
+        code: "GROUP_REQUIRED",
+        message: "This Blackboard discussion is group-scoped. Pass the exact --group-id before applying a new post.",
+      });
+    } else {
+      group = await findBlackboardDiscussionGroupById(adapter, target.courseId, target.discussionId, effectiveGroupId);
+      if (!group) {
+        blockers.push({
+          code: "GROUP_NOT_FOUND",
+          message: "The selected Blackboard discussion group could not be found by exact ID.",
+        });
+      }
+    }
+  } else if (effectiveGroupId) {
+    blockers.push({
+      code: "GROUP_NOT_ALLOWED",
+      message: "This Blackboard discussion is not group-scoped, so --group-id should be omitted.",
+    });
+  }
+
+  if (target.status === "Draft") {
+    warnings.push({
+      code: "STATUS_DRAFT",
+      message: "Blackboard will create this discussion message as a Draft rather than a published post.",
+    });
+  } else if (target.status === "Deleted") {
+    warnings.push({
+      code: "STATUS_DELETED",
+      message: "Blackboard will create this discussion message with Deleted status if the server accepts it.",
+    });
+  }
+
+  const resolvedTarget: BlackboardDiscussionWriteTarget = {
+    ...target,
+    ...(effectiveGroupId ? { groupId: effectiveGroupId } : {}),
+  };
+  const confirmation = blockers.length === 0
+    ? buildBlackboardDiscussionWriteApplyConfirmation(
+      resolvedTarget,
+      input.textFile,
+      {
+        credentialsFile: options.credentialsFile,
+        profile: options.profile,
+      },
+    )
+    : undefined;
+  return {
+    checkedAt: new Date().toISOString(),
+    target: resolvedTarget,
+    courseId: target.courseId,
+    courseCode,
+    courseName,
+    discussion: discussion!,
+    ...(group ? { group } : {}),
+    ...(parentMessage ? { parentMessage } : {}),
+    body: {
+      textFile: input.textFile,
+      preview: sampleText(cleanText(input.body), 240),
+    },
+    blockers,
+    warnings,
+    applyAllowed: blockers.length === 0,
+    confirmation: {
+      required: true,
+      available: Boolean(confirmation),
+      expectedSha256: input.textFile.sha256,
+      ...(confirmation ? { argv: confirmation.argv, command: confirmation.command } : {}),
+    },
+  };
+}
+
+function ensureBlackboardDiscussionWriteAllowed(preflight: BlackboardDiscussionWritePreflight): void {
+  if (preflight.blockers.length === 0) return;
+  throw new CliError(
+    "Blackboard discussion write is blocked by the current live target state.",
+    "BLACKBOARD_DISCUSSION_WRITE_BLOCKED",
+    4,
+    {
+      courseId: preflight.target.courseId,
+      discussionId: preflight.target.discussionId,
+      ...(preflight.target.messageId ? { messageId: preflight.target.messageId } : {}),
+      ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+      blockers: preflight.blockers,
+      warning: "NO_MUTATION_PERFORMED",
+    },
+  );
+}
+
+function buildBlackboardDiscussionWriteApplyConfirmation(
+  target: BlackboardDiscussionWriteTarget,
+  textFile: BlackboardSubmissionText,
+  options: {
+    credentialsFile?: string;
+    profile?: string;
+  } = {},
+): { required: true; argv: string[]; command: string } {
+  const argv = [
+    "sustech",
+    "bb",
+    target.mode === "post" ? "discussion-post" : "discussion-reply",
+    "apply",
+    target.courseId,
+    target.discussionId,
+    ...(target.messageId ? [target.messageId] : []),
+    ...(options.credentialsFile ? ["--credentials-file", options.credentialsFile] : []),
+    ...(options.profile ? ["--profile", options.profile] : []),
+    "--text-file",
+    textFile.absolutePath,
+    "--expected-sha256",
+    textFile.sha256,
+    ...(target.groupId ? ["--group-id", target.groupId] : []),
+    "--status",
+    target.status,
+    "--confirm",
+  ];
+  return { required: true, argv, command: argv.map(shellQuote).join(" ") };
+}
+
+async function findBlackboardDiscussionGroupById(
+  adapter: ServiceAdapter,
+  courseId: string,
+  discussionId: string,
+  groupId: string,
+): Promise<BlackboardDiscussionGroup | undefined> {
+  for (let page = 1; page <= 100; page += 1) {
+    const report = await listBlackboardDiscussionGroups(adapter, {
+      courseId,
+      discussionId,
+      page,
+      pageSize: 100,
+    });
+    const matched = report.groups.find((entry) => entry.groupId === groupId);
+    if (matched) return matched;
+    if (!report.hasMore) return undefined;
+  }
+  return undefined;
+}
+
+async function findBlackboardDiscussionMessageById(
+  adapter: ServiceAdapter,
+  options: {
+    courseId: string;
+    discussionId: string;
+    messageId: string;
+    groupId?: string;
+  },
+): Promise<{
+  courseCode: string;
+  courseName: string;
+  discussion: BlackboardDiscussion;
+  message?: BlackboardDiscussionMessage;
+}> {
+  let latest: Awaited<ReturnType<typeof getBlackboardDiscussionMessages>> | undefined;
+  for (let page = 1; page <= 100; page += 1) {
+    const report = await getBlackboardDiscussionMessages(adapter, {
+      courseId: options.courseId,
+      discussionId: options.discussionId,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      page,
+      pageSize: 100,
+    });
+    latest = report;
+    const matched = report.messages.find((entry) => entry.id === options.messageId);
+    if (matched) {
+      return {
+        courseCode: report.courseCode,
+        courseName: report.courseName,
+        discussion: report.discussion,
+        message: matched,
+      };
+    }
+    if (!report.hasMore) break;
+  }
+  if (!latest) {
+    throw new CliError("The Blackboard discussion messages could not be read.", "BLACKBOARD_DISCUSSION_NOT_FOUND", 1, {
+      courseId: options.courseId,
+      discussionId: options.discussionId,
+    });
+  }
+  return {
+    courseCode: latest.courseCode,
+    courseName: latest.courseName,
+    discussion: latest.discussion,
+  };
+}
+
+async function findBlackboardDiscussionReplyById(
+  adapter: ServiceAdapter,
+  options: {
+    courseId: string;
+    discussionId: string;
+    messageId: string;
+    replyId: string;
+    groupId?: string;
+  },
+): Promise<{
+  courseCode: string;
+  courseName: string;
+  reply?: BlackboardDiscussionMessage;
+}> {
+  let latest: Awaited<ReturnType<typeof listBlackboardDiscussionReplies>> | undefined;
+  for (let page = 1; page <= 100; page += 1) {
+    const report = await listBlackboardDiscussionReplies(adapter, {
+      courseId: options.courseId,
+      discussionId: options.discussionId,
+      messageId: options.messageId,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      page,
+      pageSize: 100,
+    });
+    latest = report;
+    const matched = report.replies.find((entry) => entry.id === options.replyId);
+    if (matched) {
+      return {
+        courseCode: report.courseCode,
+        courseName: report.courseName,
+        reply: matched,
+      };
+    }
+    if (!report.hasMore) break;
+  }
+  if (!latest) {
+    throw new CliError("The Blackboard discussion replies could not be read.", "BLACKBOARD_DISCUSSION_NOT_FOUND", 1, {
+      courseId: options.courseId,
+      discussionId: options.discussionId,
+      messageId: options.messageId,
+    });
+  }
+  return {
+    courseCode: latest.courseCode,
+    courseName: latest.courseName,
+  };
+}
+
+async function observeBlackboardDiscussionWrite(
+  adapter: ServiceAdapter,
+  preflight: BlackboardDiscussionWritePreflight,
+  createdId: string,
+): Promise<{ message?: BlackboardDiscussionMessage; error?: unknown }> {
+  try {
+    if (preflight.target.mode === "reply") {
+      const observed = await findBlackboardDiscussionReplyById(adapter, {
+        courseId: preflight.target.courseId,
+        discussionId: preflight.target.discussionId,
+        messageId: preflight.target.messageId!,
+        replyId: createdId,
+        ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+      });
+      return { ...(observed.reply ? { message: observed.reply } : {}) };
+    }
+    const observed = await findBlackboardDiscussionMessageById(adapter, {
+      courseId: preflight.target.courseId,
+      discussionId: preflight.target.discussionId,
+      messageId: createdId,
+      ...(preflight.target.groupId ? { groupId: preflight.target.groupId } : {}),
+    });
+    return { ...(observed.message ? { message: observed.message } : {}) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function verifyBlackboardDiscussionWrite(
+  preflight: BlackboardDiscussionWritePreflight,
+  input: BlackboardDiscussionWriteInput,
+  message: BlackboardDiscussionMessage | undefined,
+): BlackboardDiscussionWriteVerification {
+  if (!message) {
+    return {
+      status: "not_observed",
+      message: preflight.target.mode === "reply"
+        ? "The created Blackboard reply could not be found by exact ID in the reply read-back."
+        : "The created Blackboard discussion message could not be found by exact ID in the discussion read-back.",
+    };
+  }
+  const mismatches: string[] = [];
+  const expectedBody = cleanText(input.body);
+  if (message.body !== expectedBody) mismatches.push("body");
+  if (message.status !== preflight.target.status) mismatches.push("status");
+  if (preflight.target.groupId && message.groupId !== preflight.target.groupId) mismatches.push("groupId");
+  if (preflight.target.mode === "reply" && message.parentId !== preflight.target.messageId) mismatches.push("parentId");
+  if (mismatches.length === 0) {
+    return {
+      status: "confirmed",
+      message: preflight.target.mode === "reply"
+        ? "The created Blackboard reply was read back with the expected ID, parent message, body, and status."
+        : "The created Blackboard discussion message was read back with the expected ID, body, and status.",
+    };
+  }
+  return {
+    status: "not_observed",
+    message: `Blackboard read-back mismatched: ${mismatches.join(", ")}.`,
+  };
+}
+
 async function buildBlackboardSubmissionPreflight(
   adapter: ServiceAdapter,
   values: Values,
   target: BlackboardSubmissionTarget,
-  file: Awaited<ReturnType<typeof inspectBlackboardSubmissionFile>>,
+  submission: BlackboardCliSubmissionInput,
   comment: string | undefined,
 ): Promise<BlackboardSubmissionPreviewData> {
   const assignments = await listBlackboardAssignments(adapter, target.courseId);
@@ -5261,7 +7699,9 @@ async function buildBlackboardSubmissionPreflight(
     assignment,
     content,
     attempts,
-    file,
+    submission: submission.kind === "file"
+      ? { kind: "file", file: submission.file }
+      : { kind: "text", text: submission.textFile },
     ...(uploadSettings ? { uploadSettings } : {}),
   });
   const attemptsAllowed = assessed.attemptsAllowed;
@@ -5283,7 +7723,7 @@ async function buildBlackboardSubmissionPreflight(
     columnId: assignment.id,
   };
   const handoff = assessed.ready
-      ? buildBlackboardSubmitApplyConfirmation(resolvedTarget, file.absolutePath, file.sha256, {
+      ? buildBlackboardSubmitApplyConfirmation(resolvedTarget, blackboardSubmissionSummary(submission), {
         credentialsFile: values["credentials-file"],
         profile: values.profile,
         comment,
@@ -5305,9 +7745,9 @@ async function buildBlackboardSubmissionPreflight(
     attemptsUsed,
     ...(remainingAttempts !== undefined ? { remainingAttempts } : {}),
     inProgressAttempts: assessed.inProgressAttemptIds.length,
-    file,
+    submission: blackboardSubmissionSummary(submission),
     commentSummary: summariseSubmissionComment(comment),
-    ...(uploadSettings ? { uploadSettings } : {}),
+    ...(submission.kind === "file" && uploadSettings ? { uploadSettings } : {}),
     blockers: assessed.blockers,
     warnings,
     late: assessed.late,
@@ -5315,7 +7755,7 @@ async function buildBlackboardSubmissionPreflight(
     confirmation: {
       required: true,
       available: Boolean(handoff),
-      expectedSha256: file.sha256,
+      expectedSha256: submission.kind === "file" ? submission.file.sha256 : submission.textFile.sha256,
       ...(handoff ? { argv: handoff.argv, command: handoff.command } : {}),
     },
   };
@@ -5408,18 +7848,30 @@ async function observeBlackboardAttemptCreation(
 }
 
 function verifyBlackboardSubmission(
-  status: string,
+  attempt: BlackboardAttempt,
   files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>>,
-  expectedFileName: string,
+  submission: BlackboardCliSubmissionInput,
 ): BlackboardSubmissionVerification {
-  const observedFile = files.some((entry) => entry.name === expectedFileName);
-  if ((status === "NeedsGrading" || status === "Completed") && observedFile) {
-    return { status: "confirmed", message: "NeedsGrading/Completed and the uploaded filename were read back from Blackboard." };
+  if (submission.kind === "file") {
+    const observedFile = files.some((entry) => entry.name === submission.file.name);
+    if ((attempt.status === "NeedsGrading" || attempt.status === "Completed") && observedFile) {
+      return { status: "confirmed", message: "NeedsGrading/Completed and the uploaded filename were read back from Blackboard." };
+    }
+    if (attempt.status) {
+      return {
+        status: "not_observed",
+        message: `Attempt status was ${attempt.status}, but the expected uploaded filename was not fully observed in the read-back state.`,
+      };
+    }
+    return { status: "unavailable", message: "Blackboard did not expose enough read-back state to confirm the submission." };
   }
-  if (status) {
+  if ((attempt.status === "NeedsGrading" || attempt.status === "Completed") && attempt.studentSubmission === submission.text) {
+    return { status: "confirmed", message: "NeedsGrading/Completed and the submitted text were read back from Blackboard." };
+  }
+  if (attempt.status) {
     return {
       status: "not_observed",
-      message: `Attempt status was ${status}, but the expected uploaded filename was not fully observed in the read-back state.`,
+      message: `Attempt status was ${attempt.status}, but the expected submission text was not fully observed in the read-back state.`,
     };
   }
   return { status: "unavailable", message: "Blackboard did not expose enough read-back state to confirm the submission." };
@@ -5428,13 +7880,14 @@ function verifyBlackboardSubmission(
 function writeBlackboardSubmissionResult(
   output: ReturnType<typeof resolveOutputOptions>,
   preflight: BlackboardSubmissionPreviewData,
-  file: BlackboardSubmissionFile,
+  submission: BlackboardCliSubmissionInput,
   comment: string | undefined,
   attempt: BlackboardAttempt,
   files: readonly BlackboardAttemptFile[],
   verification: BlackboardSubmissionVerification,
   recoveredAfterError = false,
 ): void {
+  const publicFiles = files.map(publicBlackboardAttemptFile);
   writeSuccess({
     command: "bb submit apply",
     data: {
@@ -5442,7 +7895,8 @@ function writeBlackboardSubmissionResult(
       mutation: true,
       target: preflight.target,
       assignment: preflight.assignment,
-      file,
+      submission: blackboardSubmissionSummary(submission),
+      ...(submission.kind === "file" ? { file: submission.file } : { textFile: submission.textFile }),
       commentSummary: summariseSubmissionComment(comment),
       preflight: {
         checkedAt: preflight.checkedAt,
@@ -5452,12 +7906,13 @@ function writeBlackboardSubmissionResult(
         ...(preflight.assignment.grading.due ? { due: preflight.assignment.grading.due } : {}),
       },
       attempt,
-      files,
+      files: publicFiles,
       verification,
-      ...(preflight.uploadSettings ? { uploadSettings: preflight.uploadSettings } : {}),
+      ...(submission.kind === "file" && preflight.uploadSettings ? { uploadSettings: preflight.uploadSettings } : {}),
     },
     text: formatBlackboardSubmissionSuccess({
       assignment: preflight.assignment,
+      submission: blackboardSubmissionSummary(submission),
       attempt,
       files,
       verification,
@@ -5468,8 +7923,7 @@ function writeBlackboardSubmissionResult(
 
 function buildBlackboardSubmitApplyConfirmation(
   target: BlackboardSubmissionTarget,
-  absolutePath: string,
-  expectedSha256: string,
+  submission: BlackboardCliSubmissionSummary,
   options: {
     credentialsFile?: string;
     profile?: string;
@@ -5488,10 +7942,11 @@ function buildBlackboardSubmitApplyConfirmation(
     target.courseId,
     ...(target.contentId ? ["--content-id", target.contentId] : []),
     ...(target.columnId ? ["--column-id", target.columnId] : []),
-    "--file",
-    absolutePath,
+    ...(submission.kind === "file"
+      ? ["--file", submission.file.absolutePath]
+      : ["--text-file", submission.textFile.absolutePath]),
     "--expected-sha256",
-    expectedSha256,
+    submission.kind === "file" ? submission.file.sha256 : submission.textFile.sha256,
     ...(options.comment ? ["--comment", options.comment] : []),
     ...(options.allowLate ? ["--allow-late"] : []),
     "--confirm",
@@ -5566,7 +8021,7 @@ function runDescribe(
 function commandUsageLines(command: string): string[] {
   const usageLines = HELP.split("\n").slice(3);
   const prefix = `  sustech ${command}`;
-  const start = usageLines.findIndex((line) => line.startsWith(prefix));
+  const start = usageLines.findIndex((line) => line === prefix || line.startsWith(`${prefix} `));
   if (start < 0) return [`sustech ${command}`];
   const collected: string[] = [];
   for (let index = start; index < usageLines.length; index += 1) {
@@ -5620,11 +8075,15 @@ function commandConsequenceOperations(command: string): string[] {
     "tis enroll apply": ["tis.enroll"],
     "tis bid apply": ["tis.bid"],
     "bb download": ["blackboard.download"],
+    "bb attempt-download": ["blackboard.attempt-download"],
     "bb sync": ["blackboard.sync"],
     "bb calendar-link set": ["blackboard.calendar-link.store"],
     "bb calendar-link fetch": ["blackboard.calendar-link.fetch"],
     "bb calendar-link delete": ["blackboard.calendar-link.delete"],
     "bb submit apply": ["blackboard.submit"],
+    "bb message-send apply": ["blackboard.message-send"],
+    "bb discussion-post apply": ["blackboard.discussion-post"],
+    "bb discussion-reply apply": ["blackboard.discussion-reply"],
     "booking create apply": ["booking.create"],
     "booking cancel apply": ["booking.cancel"],
     "lib-booking create apply": ["library-booking.create"],
@@ -5857,6 +8316,74 @@ function ncesSort(value: string | undefined): "rating" | "reviews" | "name" {
   if (value === undefined || value === "rating") return "rating";
   if (value === "reviews" || value === "name") return value;
   throw usageError("--sort must be rating, reviews, or name for NCES.");
+}
+
+function ncesSearchType(value: string | undefined): "all" | "course" | "teacher" | "review" {
+  if (value === undefined || value === "all") return "all";
+  if (value === "course" || value === "teacher" || value === "review") return value;
+  throw usageError("--type must be all, course, teacher, or review for NCES search.");
+}
+
+function ncesReviewSort(value: string | undefined): "helpful" | "newest" | "oldest" | "rating-high" | "rating-low" {
+  if (value === undefined || value === "helpful") return "helpful";
+  if (value === "newest" || value === "oldest" || value === "rating-high" || value === "rating-low") return value;
+  throw usageError("--sort must be helpful, newest, oldest, rating-high, or rating-low for NCES reviews.");
+}
+
+function ncesRankingCategory(
+  value: string | undefined,
+): "top-teachers" | "top-rated-courses" | "popular-courses" | "top-reviews" | "long-reviews" | "top-users" {
+  if (
+    value === "top-teachers"
+    || value === "top-rated-courses"
+    || value === "popular-courses"
+    || value === "top-reviews"
+    || value === "long-reviews"
+    || value === "top-users"
+  ) return value;
+  throw usageError("NCES rankings CATEGORY must be top-teachers, top-rated-courses, popular-courses, top-reviews, long-reviews, or top-users.");
+}
+
+function ncesTerm(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const term = value.trim();
+  if (!/^\d{5}$/u.test(term)) throw usageError("--term must be a five-digit NCES term ID such as 20252.");
+  return term;
+}
+
+function optionalNonEmptyString(value: string | boolean | string[] | undefined, flag: string): string | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (Array.isArray(value)) throw usageError(`${flag} accepts exactly one value.`);
+  const normalized = String(value).trim();
+  if (!normalized) throw usageError(`${flag} cannot be empty.`);
+  return normalized;
+}
+
+function repeatedNonEmptyStrings(value: readonly string[] | undefined, flag: string): string[] {
+  if (!value) return [];
+  const items: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const normalized = entry.trim();
+    if (!normalized) throw usageError(`${flag} cannot be empty.`);
+    const key = normalized.toLocaleLowerCase("zh-Hans-CN");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(normalized);
+  }
+  return items;
+}
+
+function ncesRankingItems(
+  rankings: Awaited<ReturnType<typeof getNcesRankings>>,
+  category: ReturnType<typeof ncesRankingCategory>,
+) {
+  if (category === "top-teachers") return rankings.topTeachers;
+  if (category === "top-rated-courses") return rankings.topRatedCourses;
+  if (category === "popular-courses") return rankings.popularCourses;
+  if (category === "top-reviews") return rankings.topReviews;
+  if (category === "long-reviews") return rankings.longReviews;
+  return rankings.topUsers;
 }
 
 function blackboardContentKind(value: string): "file" | "folder" | "assignment" | "document" | "unknown" {
@@ -6162,8 +8689,19 @@ function usageError(message: string): CliError {
   return new CliError(message, "USAGE", 2, { help: "Run `sustech --help` for usage." });
 }
 
-main(process.argv.slice(2)).catch((error: unknown) => {
-  const argv = process.argv.slice(2);
-  const command = inferCommandName(argv);
-  process.exitCode = writeError(error, command, inferOutputOptions(argv));
-});
+function isDirectExecution(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolvePath(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  main(process.argv.slice(2)).catch((error: unknown) => {
+    const argv = process.argv.slice(2);
+    const command = inferCommandName(argv);
+    process.exitCode = writeError(error, command, inferOutputOptions(argv));
+  });
+}

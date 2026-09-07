@@ -40,9 +40,18 @@ Public data does not require an account:
 ```bash
 sustech calendar day 2026-09-01
 sustech faculty search "computer vision"
+sustech online search "校园卡" --section manual
+sustech online manual list --source service --limit 10
+sustech online manual get ID_OR_TITLE
 sustech online talks list --limit 10
 sustech talks list
 sustech online contact search "教学"
+sustech nces filter-options
+sustech nces browse --offering-unit "计算机科学与工程系" --page-size 5
+sustech nces global-stats
+sustech nces rankings top-teachers --limit 5
+sustech nces by-code CS302 --term 20252
+sustech nces reviews 244 --sort newest --page-size 5
 sustech transit lines
 sustech library search "graph neural networks" --limit 5
 ```
@@ -60,6 +69,18 @@ sustech tis plan explain CS330 --round bxxk
 sustech tis degree missing
 sustech tis degree progress
 sustech bb calendar --type GradebookColumn
+sustech bb announcements --days 14
+sustech bb deadlines --days 14 --submission-state not_attempted --json
+sustech bb tree _8537_1 --max 50
+sustech bb types --course MSE306
+sustech bb roster _8537_1 --role Student --page-size 10
+sustech bb discussions _5325_1 --page-size 10
+sustech bb grades --course MSE306 --submission-state completed --limit 10 --json
+sustech bb assignments --course MSE306 --with-attempts --json
+sustech bb assignments _8537_1 --with-attempts --json
+sustech bb assignments _8537_1 --submission-state not_attempted --json
+sustech bb messages _8537_1 --folder-type Inbox --page-size 10
+sustech bb attempt-files _8537_1 _2201_1
 sustech tis schedule
 sustech bb courses
 ```
@@ -115,8 +136,9 @@ For an agent without Skill support, provide this short instruction:
 
 A Skill is the onboarding layer; the CLI remains the executable source of
 truth. The package also ships a local `stdio` MCP entrypoint, `sustech-mcp`, for
-clients that support native tools. It needs no hosted server and exposes `33`
-typed public/local read-only tools plus JSON resources, resource templates, and
+clients that support native tools. It needs no hosted server and exposes `42`
+typed read-only tools in total (`39` public allowlisted tools plus `3` metadata
+tools), plus JSON resources, resource templates, and
 prompts for discovery, public campus data, library, faculty, transit, NCES,
 papers, and selected SUSTech Online reads. Authenticated data, browser flows,
 local writes, and remote mutations remain unavailable through MCP. See
@@ -134,9 +156,9 @@ version's exact command, authentication, network, and confirmation metadata.
 | Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
 | Academic context | calendar, Context v2 live summaries, profile reports, academic snapshots, `academic changes`, one-shot `academic watch` | Public and authenticated reads; guarded local exports |
 | TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, `tis plan solve/explain/recommend`, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
-| Blackboard | courses, deadlines, calendar reads, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; the native calendar link is a separate stored secret and local writes are guarded |
+| Blackboard | courses, roster, course messages, message send preview/apply, discussions, recursive content trees, content type summaries, announcements, deadlines, calendar reads, cross-course grades, per-course and cross-course assignment/attempt overviews, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; `bb roster`, `bb messages` / `bb message-participants`, `bb message-send preview/apply`, `bb discussion-groups`, announcement aggregation, `bb tree`, cross-course `bb grades`, cross-course `bb assignments --course ...`, `bb assignments --with-attempts` / `--submission-state`, `bb deadlines --submission-state`, and `bb types` preserve partial failures. Blackboard discussions use the official Learn REST discussion API when the target course exposes it; Original-course forum lists, `bb discussion` thread reads, and `bb discussion-replies` thread-detail reads fall back to the Blackboard HTML discussion board, while group reads and discussion writes that still require the REST surface fail closed with `BLACKBOARD_DISCUSSIONS_UNSUPPORTED`. The native calendar link is a separate stored secret, and local writes are guarded |
 | Library and campus services | Primo catalog search/detail, WS programs, eHall booking, library booking, PMS jobs and usage | Public catalog reads plus authenticated reads; booking and queue writes are confirm-gated |
-| Research and courses | Crossref/OA papers, NCES browse and search, SUSTech Online talks | Public; OA downloads use guarded local paths; NCES and SUSTech Online remain community references only |
+| Research and courses | Crossref/OA papers, NCES browse/filter-options/global-stats/rankings/search/by-code/course/reviews/teacher/stats, SUSTech Online talks and selected handbook search | Public; OA downloads use guarded local paths; NCES and SUSTech Online remain community references only |
 | Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
 | Community directory | Selected institutional SUSTech Online contacts with provenance and freshness advisories | Public community source; emergency, financial, personal, dining/chat, and professor-list sections are excluded |
 
@@ -215,7 +237,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.10.0",
+    "version": "0.11.0",
     "runtime": "node v22.19.0"
   }
 }
@@ -249,6 +271,8 @@ password. Credential-helper commands are bounded to five seconds and report
 ```bash
 sustech auth login --profile main
 sustech auth check --profile main --service bb --json
+sustech auth check --service bb --browser --interactive --json
+sustech doctor --service bb --live --browser --interactive --json
 sustech auth logout --profile main
 ```
 
@@ -256,6 +280,11 @@ Headless runners can use credentials supplied by their own secret manager via
 the documented environment variables or credentials file. Service sessions and
 cookies remain in memory. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
 for precedence, backend requirements, and non-interactive use.
+
+For Blackboard only, `auth check` and `doctor --live` also support a read-only
+browser-backed verification path with `--browser`, plus `--interactive` when
+the user needs to finish CAS manually. That path never accepts browser
+credentials in the CLI and never persists browser cookies.
 
 Blackboard also exposes a private native calendar subscription link. Treat that
 link like a bearer token or password: store it only through stdin, let `show`
@@ -308,8 +337,14 @@ Blackboard attachment and submission example:
 
 ```bash
 sustech bb attachments _8537_1 _629896_1 --json
+sustech bb grades --course CS208 --submission-state completed --limit 10 --json
+sustech bb assignments --course CS208 --with-attempts --json
+sustech bb assignments _8537_1 --with-attempts --json
 sustech bb download _8537_1 _629896_1 ATTACHMENT_ID \
   --destination ./homework.pdf
+sustech bb attempt-files _8537_1 _2201_1 --json
+sustech bb attempt-download _8537_1 _2201_1 FILE_ID \
+  --destination ./submitted-homework.pdf
 
 sustech bb submit preview \
   --course-id _8537_1 --content-id _629896_1 --file homework.pdf
@@ -356,7 +391,7 @@ sustech context --live --level verbose
 `context` now has three explicit detail levels:
 
 - `terse`: date, teaching week and parity, holiday/makeup timetable, and current/next class; only the timetable is requested with `--live`
-- `normal` (default): adds the next assignment deadline, evaluation, exam, weather and AQI with `--live`
+- `normal` (default): adds the next assignment deadline, recent Blackboard announcement, evaluation, exam, weather and AQI with `--live`
 - `verbose`: also retrieves library opening status
 
 All dates and display times use **Asia/Shanghai**, including on overseas machines.
@@ -420,6 +455,12 @@ review instead of being promoted to a definite requirement match.
 
 - Blackboard submission follows official Learn REST attempt/upload endpoints
   and is fixture-tested, but it has not yet performed a real Blackboard write.
+- Student-submitted attempt files are separate from teacher-provided content
+  attachments. `bb attempt-files` lists one attempt's files, and
+  `bb attempt-download` downloads one of them to an explicit local path when
+  Blackboard exposes a working attempt-file download endpoint for that record;
+  otherwise the CLI now fails closed with
+  `BLACKBOARD_ATTEMPT_FILE_UNAVAILABLE`.
 - Primo catalog access has both direct and browser-backed paths, but direct
   public HTTP access can still depend on the local runtime's TLS behavior. When
   in doubt, use `--browser` and complete any CAS step manually.
@@ -428,9 +469,15 @@ review instead of being promoted to a definite requirement match.
   an interactive slide CAPTCHA. The CLI will not bypass that challenge. A
   previously stored Blackboard native calendar link can still be fetched
   without CAS.
-- The supported submission surface is Classic/Original assignment attempts;
-  the CLI does not scrape or silently fall back to the legacy
-  `uploadAssignment` HTML form.
+- Blackboard submission stays on the official Learn REST path: file attachments
+  remain limited to Classic/Original assignment attempts, and supported
+  assignment targets can also submit text through the attempt payload. The CLI
+  does not scrape or silently fall back to the legacy `uploadAssignment` HTML
+  form.
+- Blackboard `bb message-send preview/apply` stays on the official course
+  message create endpoint, binds apply to the previewed SHA-256 plus exact
+  recipient IDs, and verifies the created message by Sent-folder read-back. It
+  is still protocol/fixture-tested only.
 - Newly added TIS selection, booking, library-booking, and PMS write paths are
   protocol/fixture-tested only. No real account mutation was performed while
   building this expansion.

@@ -17,8 +17,12 @@ import {
 } from "../services/library.js";
 import { getNcesCourseDetail, pickBestNcesSection, searchNces, tisToNcesTerm } from "../services/nces.js";
 import { resolveOpenAccess, searchCrossref } from "../services/papers.js";
-import { ServiceError } from "../services/base.js";
+import { ServiceError, decodeHtml } from "../services/base.js";
 import type { ServiceAdapter } from "../services/base.js";
+
+test("HTML decoding preserves invalid Unicode entities instead of crashing public reads", () => {
+  assert.equal(decodeHtml("&#65; &#x1F600; &#99999999; &#x110000;"), "A 😀 &#99999999; &#x110000;");
+});
 
 test("service errors redact authentication tokens from diagnostic URLs", () => {
   const error = new ServiceError("failed", {
@@ -579,12 +583,14 @@ test("NCES search and detail normalize public course and review JSON", async () 
   const search = await searchNces("cs101", { adapter });
   assert.equal(search.total, 1);
   assert.equal(search.items[0]?.code, "CS101B");
-  assert.equal(search.items[0]?.difficulty.label, "Easy");
+  assert.equal(search.items[0]?.difficulty?.label, "Easy");
+  assert.equal(search.sampleReviews[0]?.author, "Alice");
   assert.equal(search.sampleReviews[0]?.content, "Great course");
 
   const detail = await getNcesCourseDetail(212, { adapter });
   assert.ok(detail);
   assert.equal(detail?.department, "计算机科学与工程系");
+  assert.equal(detail?.reviews[0]?.author, "Alice");
   assert.equal(detail?.reviews[0]?.term, "2022春");
   assert.equal(tisToNcesTerm("2025-2026", "2"), "20262");
 

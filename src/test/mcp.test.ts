@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { fileURLToPath } from "node:url";
+import { PUBLIC_MCP_TOOL_BY_COMMAND } from "../mcp/public-tool-names.js";
 import { MCP_TOOL_BY_COMMAND } from "../mcp/registry.js";
 import { createSustechMcpServer } from "../mcp/server.js";
 import {
@@ -51,6 +52,15 @@ test("MCP runner reuses CLI JSON envelopes", async () => {
   assert.equal(description.exitCode, 0);
   assert.equal(description.envelope.ok, true);
   assert.equal(description.envelope.command, "describe");
+});
+
+test("public MCP tool names centralize every non-core typed command name", () => {
+  assert.equal(Object.keys(MCP_TOOL_BY_COMMAND).length, Object.keys(PUBLIC_MCP_TOOL_BY_COMMAND).length + 3);
+  assert.equal(PUBLIC_MCP_TOOL_BY_COMMAND["calendar day"], "sustech_calendar_day");
+  assert.equal(PUBLIC_MCP_TOOL_BY_COMMAND["online search"], "sustech_online_search");
+  assert.equal(PUBLIC_MCP_TOOL_BY_COMMAND["online manual list"], "sustech_online_manual_list");
+  assert.equal(PUBLIC_MCP_TOOL_BY_COMMAND["online manual get"], "sustech_online_manual_get");
+  assert.equal(PUBLIC_MCP_TOOL_BY_COMMAND["online contact get"], "sustech_online_contact_get");
 });
 
 test("MCP runner terminates the CLI when the client cancels", async () => {
@@ -142,9 +152,17 @@ test("MCP exposes discovery, description, and a typed public-read allowlist", as
     );
     assert.ok(listed.tools.every((tool) => tool.name !== "sustech_run"));
     assert.ok(listed.tools.every((tool) => tool.annotations?.readOnlyHint === true));
-    assert.equal(listed.tools.length, 33);
+    assert.equal(listed.tools.length, 42);
     assert.ok(listed.tools.some((tool) => tool.name === "sustech_library_search_url"));
+    assert.ok(listed.tools.some((tool) => tool.name === "sustech_online_manual_list"));
+    assert.ok(listed.tools.some((tool) => tool.name === "sustech_online_manual_get"));
+    assert.ok(listed.tools.some((tool) => tool.name === "sustech_nces_filter_options"));
+    assert.ok(listed.tools.some((tool) => tool.name === "sustech_nces_global_stats"));
+    assert.ok(listed.tools.some((tool) => tool.name === "sustech_nces_rankings"));
     assert.ok(listed.tools.some((tool) => tool.name === "sustech_transit_live"));
+    const ncesByCodeTool = listed.tools.find((tool) => tool.name === "sustech_nces_by_code");
+    assert.ok(ncesByCodeTool);
+    assert.match(JSON.stringify(ncesByCodeTool.inputSchema), /teacher/u);
 
     const discovered = await client.callTool({
       name: "sustech_discover",
@@ -157,6 +175,13 @@ test("MCP exposes discovery, description, and a typed public-read allowlist", as
     const run = await client.callTool({ name: "sustech_version", arguments: {} });
     assert.equal(run.isError, undefined);
     assert.equal((run.structuredContent as { ok: boolean }).ok, true);
+
+    const invalidManualWindow = await client.callTool({
+      name: "sustech_online_search",
+      arguments: { query: "校园卡", section: "manual", since: "2026-09-01" },
+    });
+    assert.equal(invalidManualWindow.isError, true);
+    assert.match(invalidManualWindow.content[0]?.type === "text" ? invalidManualWindow.content[0].text : "", /invalid|argument|unrecognized key/u);
 
     const consequences = await client.callTool({
       name: "sustech_consequences",

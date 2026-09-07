@@ -1,20 +1,42 @@
 import type {
   BlackboardAssignment,
+  BlackboardAssignmentsAggregateReport,
+  BlackboardAssignmentsWithAttemptsReport,
+  BlackboardGradesReport,
+  BlackboardAnnouncement,
+  BlackboardAnnouncementsReport,
   BlackboardAttempt,
   BlackboardAttemptFile,
+  BlackboardAttemptFileDownload,
+  BlackboardCourseMembership,
+  BlackboardCourseMessageFoldersPage,
+  BlackboardCourseMessageParticipantsPage,
+  BlackboardCourseMessagesPage,
+  BlackboardCourseRosterPage,
   BlackboardCourse,
+  BlackboardDiscussion,
+  BlackboardDiscussionGroup,
+  BlackboardDiscussionMessage,
+  BlackboardDiscussionGroupsPage,
+  BlackboardDiscussionMessagesPage,
+  BlackboardDiscussionRepliesPage,
+  BlackboardDiscussionsPage,
   BlackboardDeadline,
   BlackboardDeadlineReport,
   BlackboardCalendarItemsReport,
   BlackboardContentAttachment,
   BlackboardContentAttachmentDownload,
+  BlackboardContentTreeReport,
+  BlackboardContentTypesReport,
   BlackboardContentItem,
   BlackboardSearchMatch,
   BlackboardSearchReport,
   BlackboardSubmissionFile,
+  BlackboardSubmissionText,
   BlackboardSyncReport,
   BlackboardUser,
 } from "./blackboard.js";
+import { sampleText } from "./base.js";
 import type { BookingUserProfile } from "./booking-auth.js";
 import type {
   BookingCancelPreview,
@@ -37,7 +59,25 @@ import type {
   PrimoCatalogSearchPage,
   LibraryReservation,
 } from "./library.js";
-import type { NcesCourseDetail, NcesCourseSummary } from "./nces.js";
+import {
+  termIdToDisplay,
+  type NcesCourseDetail,
+  type NcesCourseFilterOptions,
+  type NcesGlobalStats,
+  type NcesRankedCourse,
+  type NcesRankings,
+  type NcesRankingCategory,
+  type NcesCourseStats,
+  type NcesCourseSummary,
+  type NcesDistributionPoint,
+  type NcesReview,
+  type NcesReviewPage,
+  type NcesReviewRanking,
+  type NcesTeacherDetail,
+  type NcesTeacherRanking,
+  type NcesTeacherSummary,
+  type NcesUserRanking,
+} from "./nces.js";
 import type { OpenAccessPdfDownload, PaperSummary } from "./papers.js";
 import type {
   PmsPrintDeletePreview,
@@ -456,20 +496,233 @@ export function formatNcesCourses(courses: readonly NcesCourseSummary[], title: 
     `${title} · ${courses.length}`,
     ...courses.map((course) => [
       `${course.code.padEnd(10)} ${course.name} · ${course.teacher || "teacher unavailable"}`,
-      `  rating ${course.rating} / reviews ${course.reviewCount} · ${course.semester}`,
-      `  difficulty ${course.difficulty.label} · workload ${course.workload.label} · grading ${course.grading.label} · takeaways ${course.takeaways.label}`,
+      `  rating ${formatNullableNcesRating(course.rating)} / reviews ${course.reviewCount} · ${course.semester}`,
+      `  difficulty ${formatNullableNcesDimension(course.difficulty)} · workload ${formatNullableNcesDimension(course.workload)} · grading ${formatNullableNcesDimension(course.grading)} · takeaways ${formatNullableNcesDimension(course.takeaways)}`,
       `  ${course.directUrl}`,
     ].join("\n")),
   ].join("\n");
 }
 
+export function formatNcesFilterOptions(options: NcesCourseFilterOptions): string {
+  if (options.offeringUnits.length === 0) return "NCES browse filters\nNo live offering-unit filters were returned.";
+  return [
+    `NCES browse filters · ${options.offeringUnits.length} offering unit(s)`,
+    ...options.offeringUnits.map((unit) => `- ${unit}`),
+  ].join("\n");
+}
+
+export function formatNcesGlobalStats(stats: NcesGlobalStats): string {
+  return [
+    `NCES global stats · ${stats.courseCount} course(s) · ${stats.reviewCount} review(s)`,
+    `${stats.userCount} user(s) · ${stats.teacherCount} teacher(s) · ${stats.registeredTeacherCount} registered teacher(s) · running ${stats.runningDays} day(s)`,
+    `Average course rating ${stats.courseAverageRating} · average reviews per course ${stats.averageReviewsPerCourse}`,
+    `Review scores · ${formatDistributionPreview(stats.reviewRateDistribution)}`,
+    `Course rating buckets · ${formatDistributionPreview(stats.courseRateDistribution)}`,
+    `Recent review months · ${formatDistributionTail(stats.reviewMonthlyDistribution, 3)}`,
+    `Recent new-user months · ${formatDistributionTail(stats.userMonthlyDistribution, 3)}`,
+    "Community-maintained evaluation data; not an official academic record.",
+  ].join("\n");
+}
+
 export function formatNcesDetail(course: NcesCourseDetail | null): string {
   if (!course) return "NCES course\nCourse not found.";
-  return [
+  const lines = [
     formatNcesCourses([course], "NCES course"),
-    `Reviews · ${course.reviews.length}`,
+    ...([course.department, course.courseType, course.credit === undefined ? "" : `${course.credit} credits`].filter(Boolean).length > 0
+      ? [[course.department, course.courseType, course.credit === undefined ? "" : `${course.credit} credits`].filter(Boolean).join(" · ")]
+      : []),
+    ...(course.teachers.length > 0 ? [`Teachers · ${course.teachers.map((teacher) => teacher.name).join(", ")}`] : []),
+    ...(course.description ? [`Description · ${course.description}`] : []),
+    formatNcesDetailReviewSummary(course),
     ...course.reviews.map((review) => `  ${review.rating}★ · ${review.term} · +${review.upvotes}\n  ${review.content}`),
+  ];
+  if (course.aiSummary) {
+    lines.push(
+      `NCES AI summary · ${course.aiSummary.sourceReviewCount} source review(s) · ${course.aiSummary.generatedAt || "generation time unavailable"}`,
+      course.aiSummary.overview,
+      `Advisory · ${course.aiSummary.advisory}`,
+    );
+  }
+  return lines.join("\n\n");
+}
+
+export function formatNcesSearch(
+  query: string,
+  courses: readonly NcesCourseSummary[],
+  teachers: readonly NcesTeacherSummary[],
+  reviews: readonly NcesReview[],
+  options: {
+    type?: "all" | "course" | "teacher" | "review";
+    courseTotal?: number;
+    teacherTotal?: number;
+    reviewTotal?: number;
+    page?: number;
+    perPage?: number;
+  } = {},
+): string {
+  const blocks: string[] = [];
+  const header = options.type === "all"
+    ? `NCES search · ${query}\nBucket totals · courses ${options.courseTotal ?? courses.length} · teachers ${options.teacherTotal ?? teachers.length} · reviews ${options.reviewTotal ?? reviews.length}${options.page !== undefined && options.perPage !== undefined ? ` · page ${options.page} · page size ${options.perPage}` : ""}`
+    : "";
+  if (courses.length > 0) blocks.push(formatNcesCourses(courses, `NCES courses · ${query}`));
+  if (teachers.length > 0) {
+    blocks.push([
+      `NCES teachers · ${teachers.length}`,
+      ...teachers.map((teacher) => `${teacher.teacherId} · ${teacher.name}${teacher.title ? ` · ${teacher.title}` : ""}\n  ${teacher.directUrl}`),
+    ].join("\n"));
+  }
+  if (reviews.length > 0) {
+    blocks.push([
+      `NCES review matches · ${reviews.length}`,
+      ...reviews.map((review) => `${review.rating}★ · ${review.author} · ${review.term}\n  ${review.content}`),
+    ].join("\n"));
+  }
+  if (blocks.length === 0) return `${header || `NCES search · ${query}`}\n${header ? "" : ""}${header ? "\n\n" : "\n"}No matching public community records.`;
+  return header ? `${header}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n");
+}
+
+export function formatNcesTeacher(teacher: NcesTeacherDetail | null): string {
+  if (!teacher) return "NCES teacher\nTeacher not found.";
+  return [
+    `NCES teacher · ${teacher.name}`,
+    [teacher.title, teacher.email, teacher.officePhone].filter(Boolean).join(" · ") || "Public profile details unavailable.",
+    `Community rating ${formatNullableNcesRating(teacher.reviewCount > 0 ? teacher.averageRate : null)} · ${teacher.reviewCount} review(s)`,
+    ...(teacher.researchInterest ? [`Research · ${teacher.researchInterest}`] : []),
+    ...(teacher.description ? [`Profile · ${teacher.description}`] : []),
+    formatNcesCourses(teacher.courses, "Courses"),
+    teacher.directUrl,
+  ].join("\n");
+}
+
+export function formatNcesStats(courseId: number, stats: NcesCourseStats | null): string {
+  if (!stats) return `NCES course stats · ${courseId}\nCourse stats not found.`;
+  return [
+    `NCES course stats · ${courseId} · ${stats.reviewCount} review(s)`,
+    `Ratings · ${Object.entries(stats.ratingDistribution).map(([rating, count]) => `${rating}★:${count}`).join(" · ") || "unavailable"}`,
+    ...stats.termStats.map((term) => `${term.term} · ${term.reviewCount} review(s)${term.ratingAverage === undefined ? "" : ` · ${term.ratingAverage}★`}`),
+    "Community-maintained evaluation data; not an official academic record.",
+  ].join("\n");
+}
+
+export function formatNcesRankings(
+  rankings: NcesRankings,
+  category: NcesRankingCategory,
+  items: readonly NcesTeacherRanking[] | readonly NcesRankedCourse[] | readonly NcesReviewRanking[] | readonly NcesUserRanking[],
+): string {
+  return [
+    `NCES rankings · ${category} · ${items.length}`,
+    `Community averages · rating ${rankings.stats.averageRating} · reviews/course ${rankings.stats.averageReviewCount} · upvotes/review ${rankings.stats.averageReviewUpvotes} · chars/review ${rankings.stats.averageReviewLength}`,
+    ...formatRankingItems(category, items),
+    "Community-maintained evaluation data; not an official academic record.",
+  ].join("\n");
+}
+
+export function formatNcesReviews(page: NcesReviewPage): string {
+  return [
+    `NCES reviews · course ${page.courseId} · ${page.items.length}/${page.total} · page ${page.page}/${page.pages || "?"}`,
+    ...page.items.map((review) => `${review.rating}★ · ${review.author} · ${review.term} · +${review.upvotes}\n  ${review.content}`),
+    "Community-maintained reviews; verify important course facts against official sources.",
+  ].join("\n");
+}
+
+export function formatNcesCourseByCode(
+  code: string,
+  term: string | undefined,
+  course: NcesCourseDetail | null,
+): string {
+  if (!course) {
+    return `NCES by code\n${code}${term ? ` · ${term}` : ""}\nCourse not found.`;
+  }
+  const availableTerms = [...new Set([
+    ...course.terms.map((item) => item.termId).filter(Boolean),
+    ...course.reviewTerms.filter(Boolean),
+  ])];
+  const termMatched = term === undefined
+    ? undefined
+    : availableTerms.includes(term) || course.semesters.includes(termIdToDisplay(term));
+  return [
+    `NCES by code · ${code}${term ? ` · requested ${termIdToDisplay(term)}` : ""}`,
+    `${course.code.padEnd(10)} ${course.name} · ${course.teacher || "teacher unavailable"}`,
+    `Department ${course.department || "unavailable"}${course.courseType ? ` · ${course.courseType}` : ""}`,
+    `Community rating ${formatNullableNcesRating(course.rating)} / reviews ${course.reviewCount}`,
+    `Available terms · ${availableTerms.length > 0 ? availableTerms.map((termId) => termIdToDisplay(termId)).join(", ") : "unavailable"}`,
+    ...(term ? [`Requested term match · ${termMatched ? "yes" : "not confirmed in course offerings"}`] : []),
+    course.directUrl,
+    formatNcesDetailReviewSummary(course),
+    ...course.reviews.map((review) => `  ${review.rating}★ · ${review.term} · +${review.upvotes}\n  ${review.content}`),
+    ...(course.aiSummary
+      ? [
+          `NCES AI summary · ${course.aiSummary.sourceReviewCount} source review(s) · ${course.aiSummary.generatedAt || "generation time unavailable"}`,
+          course.aiSummary.overview,
+          `Advisory · ${course.aiSummary.advisory}`,
+        ]
+      : []),
   ].join("\n\n");
+}
+
+function formatNcesDetailReviewSummary(course: NcesCourseDetail): string {
+  const reviewWindow = `${course.reviews.length}/${course.reviewResultsTotal || course.reviews.length}`;
+  const reviewPages = course.reviewResultsPages > 0 ? course.reviewResultsPages : 0;
+  if (course.reviewFilterTerm) {
+    return `Reviews loaded · ${reviewWindow} for ${termIdToDisplay(course.reviewFilterTerm)} across ${reviewPages} page(s) · course total ${course.reviewCount}; use \`nces reviews ${course.ncesId} --term ${course.reviewFilterTerm}\` for paginated inspection.`;
+  }
+  if (course.reviews.length < course.reviewResultsTotal) {
+    return `Reviews loaded · ${reviewWindow} across ${reviewPages} page(s) from NCES · course total ${course.reviewCount}; use \`nces reviews ${course.ncesId}\` for paginated inspection or rerun with \`--all-reviews\` to load every current page.`;
+  }
+  if (course.reviewCount !== course.reviewResultsTotal) {
+    return `Reviews loaded · ${reviewWindow} across ${reviewPages} page(s) from NCES · course total ${course.reviewCount}.`;
+  }
+  return `Reviews loaded · ${reviewWindow} across ${reviewPages} page(s) from NCES.`;
+}
+
+function formatDistributionPreview(points: readonly NcesDistributionPoint[]): string {
+  if (points.length === 0) return "unavailable";
+  return points.map((point) => `${point.label}:${point.value}`).join(" · ");
+}
+
+function formatDistributionTail(points: readonly NcesDistributionPoint[], count: number): string {
+  if (points.length === 0) return "unavailable";
+  return points.slice(-count).map((point) => `${point.label}:${point.value}`).join(" · ");
+}
+
+function formatRankingItems(
+  category: NcesRankingCategory,
+  items: readonly NcesTeacherRanking[] | readonly NcesRankedCourse[] | readonly NcesReviewRanking[] | readonly NcesUserRanking[],
+): string[] {
+  if (category === "top-teachers") {
+    return (items as readonly NcesTeacherRanking[]).map((teacher, index) => [
+      `${index + 1}. ${teacher.name}${teacher.department ? ` · ${teacher.department}` : ""}`,
+      `   normalized ${teacher.normalizedRating} · courses ${teacher.courseCount} · reviews ${teacher.reviewCount}`,
+      `   ${teacher.directUrl}`,
+    ].join("\n"));
+  }
+  if (category === "top-rated-courses" || category === "popular-courses") {
+    return (items as readonly NcesRankedCourse[]).map((course, index) => [
+      `${index + 1}. ${course.code} ${course.name} · ${course.teacher || "teacher unavailable"}`,
+      `   normalized ${course.normalizedRating} · rating ${formatNullableNcesRating(course.rating)} · reviews ${course.reviewCount} · ${course.semester}`,
+      `   ${course.directUrl}`,
+    ].join("\n"));
+  }
+  if (category === "top-reviews" || category === "long-reviews") {
+    return (items as readonly NcesReviewRanking[]).map((review, index) => [
+      `${index + 1}. ${review.courseName} · review ${review.reviewId}`,
+      `   ${review.author} · anonymous ${review.anonymous ? "yes" : "no"} · upvotes ${review.upvotes} · length ${review.contentLength}`,
+      `   ${review.courseUrl}`,
+    ].join("\n"));
+  }
+  return (items as readonly NcesUserRanking[]).map((user, index) => [
+    `${index + 1}. ${user.username}${user.identity ? ` · ${user.identity}` : ""}`,
+    `   reviews ${user.reviewCount} · upvotes ${user.reviewUpvotes} · length ${user.reviewLength} · score ${user.score}`,
+    ...(user.avatar ? [`   avatar ${user.avatar}`] : []),
+  ].join("\n"));
+}
+
+function formatNullableNcesRating(value: number | null): string {
+  return value === null ? "unavailable" : String(value);
+}
+
+function formatNullableNcesDimension(value: NcesCourseSummary["difficulty"]): string {
+  return value?.label ?? "unavailable";
 }
 
 export function formatBlackboardUser(user: BlackboardUser): string {
@@ -535,13 +788,445 @@ export function formatBlackboardAssignments(items: readonly BlackboardAssignment
   ].join("\n");
 }
 
+export function formatBlackboardAssignmentsWithAttempts(
+  report: BlackboardAssignmentsWithAttemptsReport,
+  options: {
+    assignments?: readonly BlackboardAssignmentsWithAttemptsReport["assignments"][number][];
+    submissionState?: string;
+  } = {},
+): string {
+  const assignments = options.assignments ?? report.assignments;
+  if (assignments.length === 0) {
+    return options.submissionState
+      ? `Blackboard assignments\nNo assignment columns matched submission state ${options.submissionState}.`
+      : "Blackboard assignments\nNo assignment columns.";
+  }
+  const attemptedShown = assignments.filter((item) => (item.attemptSummary?.totalAttempts ?? 0) > 0).length;
+  return [
+    `Blackboard assignments · ${assignments.length}/${report.totalAssignments}${options.submissionState ? ` · state ${options.submissionState}` : ""} · ${attemptedShown} with attempt(s)${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
+    ...assignments.map(({ assignment, attemptSummary }) => [
+      `${assignment.contentId.padEnd(12)} column ${assignment.id.padEnd(8)} ${assignment.title}${assignment.scorePossible === undefined ? "" : ` · ${assignment.scorePossible} points`}`,
+      `  ${assignment.grading.due ? `due ${assignment.grading.due}` : "no due date returned"}${assignment.grading.attemptsAllowed === undefined || assignment.grading.attemptsAllowed === 0 ? "" : ` · ${assignment.grading.attemptsAllowed} attempt(s)`}`,
+      attemptSummary
+        ? `  ${formatBlackboardAssignmentAttemptSummary(attemptSummary)}`
+        : "  attempt summary unavailable",
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardAssignmentsAcrossCourses(
+  report: BlackboardAssignmentsAggregateReport,
+): string {
+  const header = `Blackboard assignments · ${report.assignments.length}/${report.totalAssignments} across ${report.coursesMatched} course(s)`
+    + `${report.courseQuery ? ` · query ${report.courseQuery}` : ""}`
+    + `${report.withAttempts ? " · attempts included" : ""}`
+    + `${report.submissionState ? ` · state ${report.submissionState}` : ""}`
+    + `${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`;
+  if (report.assignments.length === 0) {
+    return report.submissionState
+      ? `${header}\nNo assignment columns matched submission state ${report.submissionState}.`
+      : `${header}\nNo assignment columns returned.`;
+  }
+  return [
+    header,
+    ...report.assignments.map(({ courseId, courseCode, courseName, assignment, attemptSummary }) => [
+      `${courseCode || courseId} · ${courseName || courseId}`,
+      `  ${assignment.contentId.padEnd(12)} column ${assignment.id.padEnd(8)} ${assignment.title}${assignment.scorePossible === undefined ? "" : ` · ${assignment.scorePossible} points`}`,
+      `  ${assignment.grading.due ? `due ${assignment.grading.due}` : "no due date returned"}${assignment.grading.attemptsAllowed === undefined || assignment.grading.attemptsAllowed === 0 ? "" : ` · ${assignment.grading.attemptsAllowed} attempt(s)`}`,
+      ...(report.withAttempts ? [attemptSummary ? `  ${formatBlackboardAssignmentAttemptSummary(attemptSummary)}` : "  attempt summary unavailable"] : []),
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardGrades(report: BlackboardGradesReport): string {
+  const header = `Blackboard grades · ${report.grades.length}/${report.attemptedAssignments} attempted item(s)`
+    + `${report.courseQuery ? ` · query ${report.courseQuery}` : ""}`
+    + `${report.submissionState ? ` · state ${report.submissionState}` : ""}`
+    + `${report.limit !== undefined ? ` · limit ${report.limit}` : ""}`
+    + `${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`;
+  if (report.grades.length === 0) {
+    return report.submissionState
+      ? `${header}\nNo attempted Blackboard items matched submission state ${report.submissionState}.`
+      : `${header}\nNo attempted Blackboard items returned.`;
+  }
+  return [
+    header,
+    ...report.grades.map(({ courseId, courseCode, courseName, assignment, attemptSummary }) => [
+      `${courseCode || courseId} · ${courseName || courseId}`,
+      `  ${assignment.title}${assignment.scorePossible === undefined ? "" : ` · ${assignment.scorePossible} points`}`,
+      `  ${formatBlackboardAssignmentAttemptSummary(attemptSummary)}`,
+      ...(assignment.grading.due ? [`  due ${assignment.grading.due} · content ${assignment.contentId} · column ${assignment.id}`] : [`  content ${assignment.contentId} · column ${assignment.id}`]),
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardAnnouncements(report: BlackboardAnnouncementsReport): string {
+  const header = `Blackboard announcements · ${report.announcements.length}`
+    + `${report.days !== undefined ? ` within ${report.days} day(s)` : ""}`
+    + `${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`;
+  if (report.announcements.length === 0) {
+    return `${header}\nNo announcements returned.`;
+  }
+  return [
+    header,
+    ...report.announcements.map((announcement) => formatBlackboardAnnouncement(announcement)),
+  ].join("\n");
+}
+
+export function formatBlackboardDiscussions(report: BlackboardDiscussionsPage): string {
+  const originalFallback = report.discussions.some((discussion) => discussion.source === "original-html");
+  const header = `Blackboard discussions · ${report.courseCode || report.courseId}`
+    + `${report.title ? ` · title ${report.title}` : ""}`
+    + `${report.gradable !== undefined ? ` · gradable ${report.gradable ? "true" : "false"}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${originalFallback ? " · Original HTML fallback" : ""}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.discussions.length === 0) {
+    return `${header}\nNo discussion forums returned.`;
+  }
+  return [
+    header,
+    ...report.discussions.map((discussion) => [
+      `${discussion.id.padEnd(10)} ${discussion.title || "Untitled discussion"}`
+        + `${discussion.gradable ? " · gradable" : ""}`
+        + `${discussion.groupDiscussion ? " · group" : ""}`
+        + `${discussion.source === "original-html" ? " · original-html" : ""}`
+        + `${discussion.available ? "" : " · unavailable"}`,
+      `  created ${discussion.createdDate || "unknown"} · updated ${discussion.modifiedDate || "unknown"}`
+        + `${discussion.gradebookColumnId ? ` · column ${discussion.gradebookColumnId}` : ""}`,
+      ...(
+        discussion.totalPosts !== undefined
+          ? [
+            `  posts ${discussion.totalPosts} · unread ${discussion.unreadPosts ?? 0} · unread replies to me ${discussion.unreadRepliesToMe ?? 0} · participants ${discussion.totalParticipants ?? 0}`
+              + `${discussion.metadataPartial ? " · metadata partial" : ""}`,
+          ]
+          : discussion.metadataPartial
+            ? ["  metadata partial"]
+            : []
+      ),
+      ...(discussion.description ? [`  description ${sampleText(discussion.description, 180)}`] : []),
+      ...(discussion.topic?.body ? [`  topic ${sampleText(discussion.topic.body, 180)}`] : []),
+    ].join("\n")),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardDiscussionGroups(report: BlackboardDiscussionGroupsPage): string {
+  const discussion = report.discussion;
+  const header = `Blackboard discussion groups · ${report.courseCode || report.courseId} · ${discussion.title || discussion.id}`
+    + `${discussion.groupDiscussion ? " · group" : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.groups.length === 0) {
+    return `${header}\nNo discussion groups returned.`;
+  }
+  return [
+    header,
+    ...report.groups.map(formatBlackboardDiscussionGroupLine),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardDiscussion(report: BlackboardDiscussionMessagesPage): string {
+  const discussion = report.discussion;
+  const originalFallback = discussion.source === "original-html" || report.messages.some((message) => message.source === "original-html");
+  const header = `Blackboard discussion · ${report.courseCode || report.courseId} · ${discussion.title || discussion.id}`
+    + `${discussion.gradable ? " · gradable" : ""}`
+    + `${discussion.groupDiscussion ? " · group" : ""}`
+    + `${report.status ? ` · status ${report.status}` : ""}`
+    + `${report.userId ? ` · user ${report.userId}` : ""}`
+    + `${report.groupId ? ` · groupId ${report.groupId}` : ""}`
+    + `${report.isRead !== undefined ? ` · isRead ${report.isRead ? "true" : "false"}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${originalFallback ? " · Original HTML fallback" : ""}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  const lines = [
+    header,
+    `Discussion ID ${discussion.id} · available ${discussion.available ? "yes" : "no"} · created ${discussion.createdDate || "unknown"} · updated ${discussion.modifiedDate || "unknown"}`
+      + `${discussion.gradebookColumnId ? ` · column ${discussion.gradebookColumnId}` : ""}`
+      + `${discussion.metadataPartial ? " · metadata partial" : ""}`,
+  ];
+  if (discussion.totalPosts !== undefined) {
+    lines.push(
+      `Discussion stats · posts ${discussion.totalPosts} · unread ${discussion.unreadPosts ?? 0} · unread replies to me ${discussion.unreadRepliesToMe ?? 0} · participants ${discussion.totalParticipants ?? 0}`,
+    );
+  }
+  if (discussion.topic?.body) {
+    lines.push(`Topic ${sampleText(discussion.topic.body, 240)}`);
+  }
+  if (report.messages.length === 0) {
+    lines.push("No discussion messages returned.");
+    return lines.join("\n");
+  }
+  lines.push(...report.messages.map((message) => [
+    `${message.id.padEnd(10)} ${message.subject ? `${message.subject} · ` : ""}${message.author || message.userId || "Unknown author"} · ${message.status || "status unavailable"}${message.isRead ? " · read" : " · unread"}${message.source === "original-html" ? " · original-html" : ""}`,
+    `  posted ${message.postDate || message.createdDate || "unknown"}${message.groupId ? ` · group ${message.groupId}` : ""}${message.parentId ? ` · parent ${message.parentId}` : ""}`,
+    ...(
+      message.totalPosts !== undefined
+        ? [`  posts ${message.totalPosts} · unread ${message.unreadPosts ?? 0} · unread replies to me ${message.unreadRepliesToMe ?? 0}${message.metadataPartial ? " · metadata partial" : ""}`]
+        : message.metadataPartial
+          ? ["  metadata partial"]
+          : []
+    ),
+    `  ${sampleText(message.body, 240) || "(empty)"}`,
+  ].join("\n")));
+  if (report.hasMore) lines.push(`Next page: ${report.nextPage}`);
+  return lines.join("\n");
+}
+
+function formatBlackboardDiscussionGroupLine(group: BlackboardDiscussionGroup): string {
+  return `${group.groupId.padEnd(10)} thread ${group.threadId || "unavailable"} · discussion ${group.discussionId}`;
+}
+
+export function formatBlackboardDiscussionReplies(report: BlackboardDiscussionRepliesPage): string {
+  const originalFallback = report.replies.some((reply) => reply.source === "original-html");
+  const header = `Blackboard discussion replies · ${report.courseCode || report.courseId} · discussion ${report.discussionId} · message ${report.messageId}`
+    + `${report.status ? ` · status ${report.status}` : ""}`
+    + `${report.userId ? ` · user ${report.userId}` : ""}`
+    + `${report.groupId ? ` · groupId ${report.groupId}` : ""}`
+    + `${report.isRead !== undefined ? ` · isRead ${report.isRead ? "true" : "false"}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${originalFallback ? " · Original HTML fallback" : ""}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.replies.length === 0) {
+    return `${header}\nNo discussion replies returned.`;
+  }
+  return [
+    header,
+    ...report.replies.map((reply) => [
+      `${reply.id.padEnd(10)} ${reply.author || reply.userId || "Unknown author"} · ${reply.status || "status unavailable"}${reply.isRead ? " · read" : " · unread"}${reply.source === "original-html" ? " · original-html" : ""}`,
+      `  posted ${reply.postDate || reply.createdDate || "unknown"}${reply.parentId ? ` · parent ${reply.parentId}` : ""}`,
+      ...(reply.totalPosts !== undefined
+        ? [`  posts ${reply.totalPosts} · unread ${reply.unreadPosts ?? 0} · unread replies to me ${reply.unreadRepliesToMe ?? 0}${reply.metadataPartial ? " · metadata partial" : ""}`]
+        : reply.metadataPartial
+          ? ["  metadata partial"]
+          : []),
+      `  ${sampleText(reply.body, 240) || "(empty)"}`,
+    ].join("\n")),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardDiscussionWritePreview(input: {
+  target: { mode: "post" | "reply"; courseId: string; discussionId: string; messageId?: string; groupId?: string; status: string };
+  courseCode: string;
+  discussion: BlackboardDiscussion;
+  group?: BlackboardDiscussionGroup;
+  parentMessage?: BlackboardDiscussionMessage;
+  body: { textFile: BlackboardSubmissionText; preview: string };
+  blockers: readonly { code: string; message: string }[];
+  warnings: readonly { code: string; message: string }[];
+  applyAllowed: boolean;
+  confirmation: { available: boolean; command?: string };
+}): string {
+  const header = `Blackboard discussion ${input.target.mode === "reply" ? "reply" : "post"} preview · ${input.courseCode || input.target.courseId} · ${input.discussion.title || input.discussion.id}`;
+  const lines = [
+    header,
+    `Discussion ID ${input.discussion.id} · status ${input.target.status}${input.target.groupId ? ` · group ${input.target.groupId}` : ""}${input.target.messageId ? ` · parent ${input.target.messageId}` : ""}`,
+    `Text file: ${input.body.textFile.absolutePath}`,
+    `SHA-256: ${input.body.textFile.sha256} · chars ${input.body.textFile.charCount}`,
+    `Body preview: ${input.body.preview || "(empty)"}`,
+  ];
+  if (input.group) lines.push(`Resolved group thread: ${input.group.threadId || "unavailable"}`);
+  if (input.parentMessage) lines.push(`Parent message: ${input.parentMessage.id} · ${input.parentMessage.author || input.parentMessage.userId || "unknown author"}`);
+  if (input.blockers.length > 0) {
+    lines.push(...input.blockers.map((entry) => `Blocker ${entry.code}: ${entry.message}`));
+  }
+  if (input.warnings.length > 0) {
+    lines.push(...input.warnings.map((entry) => `Warning ${entry.code}: ${entry.message}`));
+  }
+  lines.push(
+    input.applyAllowed && input.confirmation.available
+      ? `Apply command: ${input.confirmation.command}`
+      : "Apply command unavailable until blockers are resolved.",
+  );
+  return lines.join("\n");
+}
+
+export function formatBlackboardDiscussionWriteSuccess(input: {
+  target: { mode: "post" | "reply"; groupId?: string; messageId?: string };
+  courseCode: string;
+  discussion: BlackboardDiscussion;
+  group?: BlackboardDiscussionGroup;
+  parentMessage?: BlackboardDiscussionMessage;
+  body: { textFile: BlackboardSubmissionText; preview: string };
+  message: BlackboardDiscussionMessage;
+  verification: { status: string; message: string };
+}): string {
+  const header = `Blackboard discussion ${input.target.mode === "reply" ? "reply" : "post"} applied · ${input.courseCode} · ${input.discussion.title || input.discussion.id}`;
+  return [
+    header,
+    `Message ID ${input.message.id} · status ${input.message.status || "unknown"}${input.target.groupId ? ` · group ${input.target.groupId}` : ""}${input.target.messageId ? ` · parent ${input.target.messageId}` : ""}`,
+    `Text file: ${input.body.textFile.absolutePath}`,
+    `Body preview: ${input.body.preview || "(empty)"}`,
+    ...(input.group ? [`Resolved group thread: ${input.group.threadId || "unavailable"}`] : []),
+    ...(input.parentMessage ? [`Parent message: ${input.parentMessage.id} · ${input.parentMessage.author || input.parentMessage.userId || "unknown author"}`] : []),
+    `Verification: ${input.verification.status} · ${input.verification.message}`,
+  ].join("\n");
+}
+
+export function formatBlackboardMessageFolders(report: BlackboardCourseMessageFoldersPage): string {
+  const header = `Blackboard message folders · ${report.courseCode || report.courseId} · page ${report.page}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.folders.length === 0) {
+    return `${header}\nNo message folders returned.`;
+  }
+  return [
+    header,
+    ...report.folders.map((folder) =>
+      `${(folder.label || folder.name || "Unnamed folder").padEnd(20)} ${folder.type || "type unavailable"} · unread ${folder.unreadCount} / total ${folder.totalCount}`
+      + `${folder.name && folder.label !== folder.name ? ` · name ${folder.name}` : ""}`),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardMessages(report: BlackboardCourseMessagesPage): string {
+  const header = `Blackboard messages · ${report.courseCode || report.courseId}`
+    + `${report.folderType ? ` · folder ${report.folderType}` : ""}`
+    + `${report.folderName ? `/${report.folderName}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.messages.length === 0) {
+    return `${header}\nNo course messages returned.`;
+  }
+  return [
+    header,
+    ...report.messages.map((message) => [
+      `${message.id.padEnd(10)} ${message.subject || "(no subject)"} · ${message.type || "type unavailable"}${message.isRead ? " · read" : " · unread"}${message.isReply ? " · reply" : ""}`,
+      `  posted ${message.postedDate || "unknown"} · sender ${message.sender?.displayName || message.senderId || "unknown"}`
+        + `${message.toUsers.length > 0 ? ` · to ${message.toUsers.length}` : ""}`
+        + `${message.ccUsers.length > 0 ? ` · cc ${message.ccUsers.length}` : ""}`
+        + `${message.bccUsers.length > 0 ? ` · bcc ${message.bccUsers.length}` : ""}`,
+      ...(message.attachment?.fileName ? [`  attachment ${message.attachment.fileName}${message.attachment.mimeType ? ` · ${message.attachment.mimeType}` : ""}`] : []),
+      `  ${sampleText(message.body, 240) || "(empty)"}`,
+    ].join("\n")),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardMessageParticipants(report: BlackboardCourseMessageParticipantsPage): string {
+  const header = `Blackboard message participants · ${report.courseCode || report.courseId} · message ${report.messageId}`
+    + `${report.participationType ? ` · type ${report.participationType}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.participants.length === 0) {
+    return `${header}\nNo message participants returned.`;
+  }
+  return [
+    header,
+    ...report.participants.map((participant) =>
+      `${participant.userId.padEnd(10)} ${participant.displayName || participant.userId || "Unknown participant"} · ${participant.participationType || "type unavailable"}`
+      + `${participant.user?.userName ? ` · username ${participant.user.userName}` : ""}`),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+export function formatBlackboardMessageWritePreview(input: {
+  target: { courseId: string; subject?: string; toUsers: string[]; ccUsers: string[]; bccUsers: string[] };
+  courseCode: string;
+  courseName: string;
+  recipients: {
+    toUsers: Array<{ userId: string; displayName: string; courseRoleId: string }>;
+    ccUsers: Array<{ userId: string; displayName: string; courseRoleId: string }>;
+    bccUsers: Array<{ userId: string; displayName: string; courseRoleId: string }>;
+  };
+  body: { textFile: BlackboardSubmissionText; preview: string };
+  blockers: readonly { code: string; message: string }[];
+  warnings: readonly { code: string; message: string }[];
+  applyAllowed: boolean;
+  confirmation: { available: boolean; command?: string };
+}): string {
+  const header = `Blackboard message-send preview · ${input.courseCode || input.target.courseId} · ${input.courseName || input.courseCode || input.target.courseId}`;
+  const lines = [
+    header,
+    `Subject: ${input.target.subject || "(no subject)"}`,
+    `Text file: ${input.body.textFile.absolutePath}`,
+    `SHA-256: ${input.body.textFile.sha256} · chars ${input.body.textFile.charCount}`,
+    `Recipients: to ${input.recipients.toUsers.length} · cc ${input.recipients.ccUsers.length} · bcc ${input.recipients.bccUsers.length}`,
+    `Body preview: ${input.body.preview || "(empty)"}`,
+  ];
+  for (const [label, recipients] of [
+    ["To", input.recipients.toUsers],
+    ["Cc", input.recipients.ccUsers],
+    ["Bcc", input.recipients.bccUsers],
+  ] as const) {
+    if (recipients.length === 0) continue;
+    lines.push(`${label}: ${recipients.map((entry) => `${entry.userId} ${entry.displayName} (${entry.courseRoleId || "role unavailable"})`).join(" | ")}`);
+  }
+  if (input.blockers.length > 0) {
+    lines.push(...input.blockers.map((entry) => `Blocker ${entry.code}: ${entry.message}`));
+  }
+  if (input.warnings.length > 0) {
+    lines.push(...input.warnings.map((entry) => `Warning ${entry.code}: ${entry.message}`));
+  }
+  lines.push(
+    input.applyAllowed && input.confirmation.available
+      ? `Apply command: ${input.confirmation.command}`
+      : "Apply command unavailable until blockers are resolved.",
+  );
+  return lines.join("\n");
+}
+
+export function formatBlackboardMessageWriteSuccess(input: {
+  target: { subject?: string };
+  courseCode: string;
+  courseName: string;
+  body: { textFile: BlackboardSubmissionText; preview: string };
+  message: BlackboardCourseMessagesPage["messages"][number];
+  verification: { status: string; message: string };
+}): string {
+  const header = `Blackboard message-send applied · ${input.courseCode} · ${input.courseName || input.courseCode}`;
+  return [
+    header,
+    `Message ID ${input.message.id} · subject ${input.message.subject || "(no subject)"}`,
+    `Text file: ${input.body.textFile.absolutePath}`,
+    `Recipients: to ${input.message.toUsers.length} · cc ${input.message.ccUsers.length} · bcc ${input.message.bccUsers.length}`,
+    `Body preview: ${input.body.preview || "(empty)"}`,
+    `Verification: ${input.verification.status} · ${input.verification.message}`,
+  ].join("\n");
+}
+
+export function formatBlackboardRoster(report: BlackboardCourseRosterPage): string {
+  const header = `Blackboard roster · ${report.courseCode || report.courseId}`
+    + `${report.role ? ` · role ${report.role}` : ""}`
+    + `${report.availability ? ` · availability ${report.availability}` : ""}`
+    + `${report.sort ? ` · sort ${report.sort}` : ""}`
+    + ` · page ${report.page}`
+    + `${report.hasMore ? " · more available" : ""}`;
+  if (report.memberships.length === 0) {
+    return `${header}\nNo course memberships returned.`;
+  }
+  return [
+    header,
+    ...report.memberships.map(formatBlackboardMembershipLine),
+    ...(report.hasMore ? [`Next page: ${report.nextPage}`] : []),
+  ].join("\n");
+}
+
+function formatBlackboardMembershipLine(membership: BlackboardCourseMembership): string {
+  const user = membership.user;
+  const email = user?.institutionEmail || user?.email;
+  return `${membership.userId.padEnd(10)} ${(user?.displayName || membership.userId || "Unknown user").padEnd(24)} ${membership.courseRoleId || "role unavailable"}`
+    + `${membership.availability ? ` · ${membership.availability}` : ""}`
+    + `${email ? ` · ${email}` : ""}`
+    + `${membership.lastAccessed ? ` · last accessed ${membership.lastAccessed}` : ""}`;
+}
+
 export function formatBlackboardDeadlines(report: BlackboardDeadlineReport): string {
   if (report.deadlines.length === 0) {
     const partial = report.failures.length > 0 ? ` (${report.failures.length} failure${report.failures.length === 1 ? "" : "s"})` : "";
-    return `Blackboard deadlines${partial}\nNo upcoming assignment deadlines.`;
+    return report.submissionState
+      ? `Blackboard deadlines${partial}\nNo upcoming assignment deadlines matched submission state ${report.submissionState}.`
+      : `Blackboard deadlines${partial}\nNo upcoming assignment deadlines.`;
   }
   return [
-    `Blackboard deadlines · ${report.deadlines.length}${report.days !== undefined ? ` within ${report.days} day(s)` : ""}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
+    `Blackboard deadlines · ${report.deadlines.length}${report.days !== undefined ? ` within ${report.days} day(s)` : ""}${report.submissionState ? ` · state ${report.submissionState}` : ""}${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`,
     ...report.deadlines.map((item) => formatBlackboardDeadlineLine(item)),
   ].join("\n");
 }
@@ -564,6 +1249,31 @@ export function formatBlackboardCalendar(report: BlackboardCalendarItemsReport):
       `${item.start || "?"} to ${item.end || "?"} · ${item.type || "unknown"} · ${item.title || "Untitled"}`,
       `  ${item.calendarName || item.calendarId}${item.location ? ` · ${item.location}` : ""}`,
     ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardTypes(report: BlackboardContentTypesReport): string {
+  if (report.courses.length === 0) return "Blackboard content types\nNo matching courses.";
+  return [
+    `Blackboard content types · ${report.coursesMatched} course(s) · ${report.totalItems} item(s)`,
+    `Totals · ${formatBlackboardKindCounts(report.totals)}`,
+    ...(report.partial ? [`Partial failures · ${report.failures.length}`] : []),
+    ...report.courses.map((course) => [
+      `${course.courseCode || course.courseId} · ${course.courseName || course.courseId}`,
+      `  ${course.totalItems} item(s) · ${formatBlackboardKindCounts(course.kindCounts)}`,
+    ].join("\n")),
+  ].join("\n");
+}
+
+export function formatBlackboardTree(report: BlackboardContentTreeReport): string {
+  const header = `Blackboard tree · ${report.courseCode || report.courseId} · ${report.returnedItems} item(s)`
+    + `${report.rootContentId ? ` · root ${report.rootContentId}` : ""}`
+    + `${report.truncated ? ` · truncated at ${report.maxItems}` : ""}`
+    + `${report.failures.length > 0 ? ` · ${report.failures.length} failure(s)` : ""}`;
+  if (report.entries.length === 0) return `${header}\nNo content returned.`;
+  return [
+    header,
+    ...report.entries.map((entry) => `${"  ".repeat(entry.depth)}- ${entry.kind} · ${entry.title || entry.contentId}${entry.hasChildren ? " [+]" : ""}`),
   ].join("\n");
 }
 
@@ -612,6 +1322,55 @@ export function formatBlackboardAttempts(
   ].join("\n");
 }
 
+function formatBlackboardAssignmentAttemptSummary(
+  summary: BlackboardAssignmentsWithAttemptsReport["assignments"][number]["attemptSummary"],
+): string {
+  if (!summary) return "attempt summary unavailable";
+  const labels = [
+    `state ${summary.state}`,
+    `attempts ${summary.totalAttempts}`,
+    summary.submittedAttempts > 0 ? `submitted ${summary.submittedAttempts}` : "",
+    summary.inProgressAttempts > 0 ? `in-progress ${summary.inProgressAttempts}` : "",
+    summary.completedAttempts > 0 ? `completed ${summary.completedAttempts}` : "",
+    summary.latestStatus ? `latest ${summary.latestStatus}` : "",
+    summary.latestDisplayGradeText ? `grade ${summary.latestDisplayGradeText}` : "",
+    summary.latestSubmissionDate
+      ? `submitted at ${summary.latestSubmissionDate}`
+      : summary.latestAttemptDate
+        ? `latest activity ${summary.latestAttemptDate}`
+        : "",
+  ].filter(Boolean);
+  return labels.join(" · ");
+}
+
+export function formatBlackboardAttemptFiles(
+  attemptId: string,
+  files: readonly BlackboardAttemptFile[],
+): string {
+  if (files.length === 0) {
+    return `Blackboard attempt files · attempt ${attemptId}\nNo submitted files returned.`;
+  }
+  return [
+    `Blackboard attempt files · attempt ${attemptId} · ${files.length}`,
+    ...files.map((file) => `${file.id.padEnd(10)} ${file.name}`),
+  ].join("\n");
+}
+
+export function formatBlackboardAttemptFileDownload(
+  result: BlackboardAttemptFileDownload,
+  attemptId: string,
+): string {
+  return [
+    `Blackboard attempt file downloaded · attempt ${attemptId}`,
+    `File: ${result.file.name} · ${result.file.id}`,
+    `Saved to: ${result.destination}`,
+    `Size: ${result.size} bytes`,
+    `SHA-256: ${result.sha256}`,
+    `Content type: ${result.contentType || "unavailable"}`,
+    `Overwritten: ${result.overwritten ? "yes" : "no"}`,
+  ].join("\n");
+}
+
 export function formatBlackboardSubmitPreview(input: {
   target: { courseId: string; contentId?: string; columnId?: string };
   assignment: BlackboardAssignment;
@@ -619,7 +1378,9 @@ export function formatBlackboardSubmitPreview(input: {
   attemptsUsed: number;
   remainingAttempts?: number;
   inProgressAttempts: number;
-  file: BlackboardSubmissionFile;
+  submission:
+    | { kind: "file"; file: BlackboardSubmissionFile }
+    | { kind: "text"; textFile: BlackboardSubmissionText };
   commentSummary: { present: boolean; length: number };
   blockers: readonly { code: string; message: string }[];
   warnings: readonly { code: string; message: string }[];
@@ -630,6 +1391,19 @@ export function formatBlackboardSubmitPreview(input: {
   const attemptsSummary = input.assignment.grading.attemptsAllowed !== undefined && input.assignment.grading.attemptsAllowed > 0
     ? `${input.attemptsUsed}/${input.assignment.grading.attemptsAllowed}`
     : `${input.attemptsUsed}`;
+  const submissionLines = input.submission.kind === "file"
+    ? [
+      `File: ${input.submission.file.absolutePath}`,
+      `Filename: ${input.submission.file.name}`,
+      `Size: ${input.submission.file.size} bytes`,
+      `SHA-256: ${input.submission.file.sha256}`,
+    ]
+    : [
+      `Text file: ${input.submission.textFile.absolutePath}`,
+      `Size: ${input.submission.textFile.size} bytes`,
+      `Characters: ${input.submission.textFile.charCount}`,
+      `SHA-256: ${input.submission.textFile.sha256}`,
+    ];
   return [
     "Blackboard submission preview — authenticated read-only checks completed; no mutation was performed.",
     "",
@@ -641,10 +1415,7 @@ export function formatBlackboardSubmitPreview(input: {
     ...(input.assignment.grading.due ? [`Due: ${input.assignment.grading.due}${input.late ? " (past due)" : ""}`] : []),
     `Attempts used: ${attemptsSummary}${input.remainingAttempts !== undefined ? ` · remaining ${input.remainingAttempts}` : ""}`,
     `In-progress attempts: ${input.inProgressAttempts}`,
-    `File: ${input.file.absolutePath}`,
-    `Filename: ${input.file.name}`,
-    `Size: ${input.file.size} bytes`,
-    `SHA-256: ${input.file.sha256}`,
+    ...submissionLines,
     ...(input.commentSummary.present ? [`Comment: present (${input.commentSummary.length} chars)`] : []),
     ...(input.blockers.length > 0 ? ["", "Blockers:", ...input.blockers.map((issue) => `- [${issue.code}] ${issue.message}`)] : []),
     ...(input.warnings.length > 0 ? ["", "Warnings:", ...input.warnings.map((issue) => `- [${issue.code}] ${issue.message}`)] : []),
@@ -657,13 +1428,18 @@ export function formatBlackboardSubmitPreview(input: {
 
 export function formatBlackboardSubmissionSuccess(input: {
   assignment: BlackboardAssignment;
+  submission:
+    | { kind: "file"; file: BlackboardSubmissionFile }
+    | { kind: "text"; textFile: BlackboardSubmissionText };
   attempt: BlackboardAttempt;
   files: readonly BlackboardAttemptFile[];
   verification: { status: "confirmed" | "not_observed" | "unavailable"; message: string };
 }): string {
-  const fileLine = input.files.length > 0
-    ? input.files.map((file) => file.name).join(", ")
-    : "No files were read back.";
+  const submissionLine = input.submission.kind === "file"
+    ? input.files.length > 0
+      ? `Files: ${input.files.map((file) => file.name).join(", ")}`
+      : "Files: No files were read back."
+    : `Text file: ${input.submission.textFile.absolutePath} · ${input.submission.textFile.charCount} chars`;
   return [
     input.verification.status === "confirmed"
       ? "Blackboard submission confirmed by read-back."
@@ -671,7 +1447,7 @@ export function formatBlackboardSubmissionSuccess(input: {
     `Assignment: ${input.assignment.title}`,
     `Attempt: ${input.attempt.id}`,
     `Status: ${input.attempt.status || "unknown"}`,
-    `Files: ${fileLine}`,
+    submissionLine,
     ...(input.attempt.attemptReceipt
       ? [`Receipt: ${input.attempt.attemptReceipt.receiptId} · ${input.attempt.attemptReceipt.submissionDate}`]
       : []),
@@ -684,7 +1460,27 @@ function formatBlackboardDeadlineLine(item: BlackboardDeadline): string {
   return [
     `${item.courseCode.padEnd(12)} ${item.title}`,
     `  due ${item.dueAt} · in ${item.daysLeft} day(s) · content ${item.contentId} · column ${item.columnId}`,
+    ...(item.attemptSummary ? [`  ${formatBlackboardAssignmentAttemptSummary(item.attemptSummary)}`] : []),
   ].join("\n");
+}
+
+function formatBlackboardAnnouncement(item: BlackboardAnnouncement): string {
+  const owner = item.source === "system"
+    ? `system${item.showAtLogin ? " · login" : ""}${item.showInCourses ? " · courses" : ""}`
+    : [item.courseCode, item.courseName].filter(Boolean).join(" · ") || item.courseId || "course";
+  const timing = item.modified || item.created || "time unavailable";
+  const snippet = item.body.length <= 160 ? item.body : `${item.body.slice(0, 157)}...`;
+  return [
+    `${timing} · ${owner} · ${item.title || "Untitled announcement"}`,
+    `  ${snippet || "No body returned."}`,
+  ].join("\n");
+}
+
+function formatBlackboardKindCounts(
+  counts: readonly { kind: string; count: number }[],
+): string {
+  if (counts.length === 0) return "no content";
+  return counts.map((entry) => `${entry.kind} ${entry.count}`).join(" · ");
 }
 
 export function formatWsPrograms(programs: readonly WsProgramSummary[]): string {

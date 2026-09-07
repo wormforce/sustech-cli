@@ -6,6 +6,7 @@ import { CAPABILITIES } from "../core/capabilities.js";
 import { CLI_VERSION } from "../core/version.js";
 import { describeCliForMcp, runCliForMcp, type McpRunnerOptions } from "./runner.js";
 import { registerSustechMcpPrompts } from "./prompts.js";
+import { PUBLIC_MCP_TOOL_BY_COMMAND } from "./public-tool-names.js";
 import { isMcpExecutableCapability, mcpToolForCommand } from "./registry.js";
 import { registerPublicMcpTools } from "./public-tools.js";
 import { registerSustechMcpResources } from "./resources.js";
@@ -18,6 +19,7 @@ const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD.")
 const QUERY = z.string().trim().min(1).max(500);
 const IDENTIFIER = z.string().trim().min(1).max(500);
 const LIMIT = z.number().int().min(1).max(200);
+const ONLINE_MANUAL_SOURCE = z.enum(["service", "study", "transport", "life", "facility", "calendar"]);
 
 export interface SustechMcpServerOptions {
   runner?: Pick<McpRunnerOptions, "cliPath" | "timeoutMs">;
@@ -137,22 +139,36 @@ export function createSustechMcpServer(options: SustechMcpServerOptions = {}): M
     "sustech_online_search",
     {
       title: "Search selected SUSTech Online public information",
-      description: "Search talks and institutional contacts from selected community-maintained SUSTech Online pages, with provenance and freshness metadata.",
-      inputSchema: z.object({
-        query: QUERY,
-        section: z.enum(["talks", "contact"]).optional(),
-        since: ISO_DATE.optional(),
-        until: ISO_DATE.optional(),
-        limit: LIMIT.optional(),
-      }),
+      description: "Search selected handbook sections, talks, and institutional contacts from community-maintained SUSTech Online pages, with provenance and freshness metadata.",
+      inputSchema: z.union([
+        z.object({
+          query: QUERY,
+          section: z.literal("talks").optional(),
+          since: ISO_DATE.optional(),
+          until: ISO_DATE.optional(),
+          limit: LIMIT.optional(),
+        }).strict(),
+        z.object({
+          query: QUERY,
+          section: z.literal("contact"),
+          limit: LIMIT.optional(),
+        }).strict(),
+        z.object({
+          query: QUERY,
+          section: z.literal("manual"),
+          source: z.array(ONLINE_MANUAL_SOURCE).min(1).max(6).optional(),
+          limit: LIMIT.optional(),
+        }).strict(),
+      ]),
       annotations: readOnlyAnnotations(true),
     },
-    async ({ query, section, since, until, limit }, ctx) => execute("online search", [
-      query,
-      ...option("--section", section),
-      ...option("--since", since),
-      ...option("--until", until),
-      ...numberOption("--limit", limit),
+    async (input, ctx) => execute("online search", [
+      input.query,
+      ...option("--section", input.section),
+      ...repeatedOptions("--source", "source" in input ? input.source : undefined),
+      ...option("--since", "since" in input ? input.since : undefined),
+      ...option("--until", "until" in input ? input.until : undefined),
+      ...numberOption("--limit", input.limit),
     ], ctx.mcpReq.signal),
   );
 
@@ -188,7 +204,7 @@ export function createSustechMcpServer(options: SustechMcpServerOptions = {}): M
   );
 
   server.registerTool(
-    "sustech_online_talks_get",
+    PUBLIC_MCP_TOOL_BY_COMMAND["online talks get"],
     {
       title: "Read one public SUSTech talk",
       description: "Read one exact talk by the stable identifier returned by a talks list or search.",
@@ -199,7 +215,41 @@ export function createSustechMcpServer(options: SustechMcpServerOptions = {}): M
   );
 
   server.registerTool(
-    "sustech_online_contact_search",
+    PUBLIC_MCP_TOOL_BY_COMMAND["online manual list"],
+    {
+      title: "List selected SUSTech Online handbook records",
+      description: "List public handbook records from the selected SUSTech Online allowlist, with community-source provenance and freshness metadata.",
+      inputSchema: z.object({
+        source: z.array(ONLINE_MANUAL_SOURCE).min(1).max(6).optional(),
+        limit: LIMIT.optional(),
+      }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ source, limit }, ctx) => execute("online manual list", [
+      ...repeatedOptions("--source", source),
+      ...numberOption("--limit", limit),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["online manual get"],
+    {
+      title: "Read one SUSTech Online handbook record",
+      description: "Read one exact public handbook record by the deterministic id returned by list/search, or by exact title, with community-source provenance.",
+      inputSchema: z.object({
+        identifier: QUERY,
+        source: z.array(ONLINE_MANUAL_SOURCE).min(1).max(6).optional(),
+      }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ identifier, source }, ctx) => execute("online manual get", [
+      identifier,
+      ...repeatedOptions("--source", source),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["online contact search"],
     {
       title: "Search institutional SUSTech contacts",
       description: "Search selected public institutional contacts from SUSTech Online. Personal, social, finance, and emergency content is excluded.",
@@ -210,7 +260,7 @@ export function createSustechMcpServer(options: SustechMcpServerOptions = {}): M
   );
 
   server.registerTool(
-    "sustech_online_contact_get",
+    PUBLIC_MCP_TOOL_BY_COMMAND["online contact get"],
     {
       title: "Read one institutional SUSTech contact",
       description: "Read one exact institutional public contact by the stable identifier returned by contact search.",
@@ -261,6 +311,10 @@ function option(name: string, value: string | undefined): string[] {
 
 function numberOption(name: string, value: number | undefined): string[] {
   return value === undefined ? [] : [name, String(value)];
+}
+
+function repeatedOptions(name: string, values: readonly string[] | undefined): string[] {
+  return values === undefined ? [] : values.flatMap((value) => [name, value]);
 }
 
 function readOnlyAnnotations(openWorldHint: boolean) {

@@ -89,6 +89,26 @@ export async function fetchText(adapter: ServiceAdapter, url: string, init?: Req
   return text;
 }
 
+export async function fetchTextResponse(
+  adapter: ServiceAdapter,
+  url: string,
+  init?: RequestInit,
+): Promise<{ text: string; finalUrl: string }> {
+  const response = await fetchResponse(adapter, url, init);
+  const text = await response.text();
+  if (!response.ok) {
+    throw new ServiceError("Upstream service returned an HTTP error.", {
+      url,
+      status: response.status,
+      bodySample: sampleText(text),
+    });
+  }
+  return {
+    text,
+    finalUrl: response.url || url,
+  };
+}
+
 export function parseJson<T>(text: string, url?: string): T {
   try {
     return JSON.parse(text) as T;
@@ -116,7 +136,15 @@ export function decodeHtml(value: string): string {
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, "\"")
-    .replace(/&#39;/gi, "'");
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/giu, (_, rawHex: string) => {
+      const codePoint = Number.parseInt(rawHex, 16);
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : _;
+    })
+    .replace(/&#([0-9]+);/gu, (_, rawDecimal: string) => {
+      const codePoint = Number.parseInt(rawDecimal, 10);
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : _;
+    });
 }
 
 export function collapseWhitespace(value: string): string {

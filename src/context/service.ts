@@ -1,6 +1,7 @@
 import type { AcademicCalendar } from "../calendar/client.js";
 import type { CalendarDayInfo } from "../calendar/types.js";
 import type {
+  AnnouncementSummary,
   AirQualitySummary,
   ContextInput,
   ContextLevel,
@@ -24,6 +25,7 @@ export class ContextService {
       academicDay: academic.state,
       schedule: input.schedule ? "provided" : "missing",
       nextDeadline: sourceState(input.nextDeadline),
+      recentAnnouncement: sourceState(input.recentAnnouncement),
       nextEvaluation: sourceState(input.nextEvaluation),
       nextExam: sourceState(input.nextExam),
       weather: input.weather === undefined ? "missing" : "provided",
@@ -48,6 +50,7 @@ export class ContextService {
       schedule: input.schedule ?? {},
       ...(LEVEL_ORDER[level] >= LEVEL_ORDER.normal ? {
         nextDeadline: input.nextDeadline ?? null,
+        recentAnnouncement: input.recentAnnouncement ?? null,
         nextEvaluation: input.nextEvaluation ?? null,
         nextExam: input.nextExam ?? null,
         weather: environmentFreshness(input.weather, now),
@@ -82,6 +85,7 @@ export class ContextService {
     if (snapshot.weekParity) record.weekParity = snapshot.weekParity;
     if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) {
       record.nextDeadline = snapshot.nextDeadline ?? null;
+      record.recentAnnouncement = snapshot.recentAnnouncement ?? null;
       record.nextEvaluation = snapshot.nextEvaluation ?? null;
       record.nextExam = snapshot.nextExam ?? null;
       record.weather = snapshot.weather ?? null;
@@ -108,7 +112,15 @@ function renderLines(snapshot: ContextSnapshot): string[] {
     ...(snapshot.academicDay?.compensatory ? [`Makeup timetable: ${snapshot.academicDay.compensatory.weekType} ${snapshot.academicDay.compensatory.workday}`] : []),
   ];
   appendSchedule(lines, snapshot.schedule);
-  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) appendNormal(lines, snapshot.nextDeadline ?? null, snapshot.nextEvaluation ?? null, snapshot.nextExam ?? null);
+  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) {
+    appendNormal(
+      lines,
+      snapshot.nextDeadline ?? null,
+      snapshot.recentAnnouncement ?? null,
+      snapshot.nextEvaluation ?? null,
+      snapshot.nextExam ?? null,
+    );
+  }
   if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) appendVerbose(lines, snapshot.weather ?? null, snapshot.airQuality ?? null, snapshot.libraryStatus ?? null);
   if (snapshot.sourceStatus.nextDeadline === "empty" && LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) lines.push("No upcoming assignments in the retrieved Blackboard deadlines.");
   if (snapshot.sourceStatus.nextExam === "empty" && LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) lines.push("No upcoming exams in the retrieved TIS records.");
@@ -133,15 +145,24 @@ function appendSchedule(lines: string[], schedule: ScheduleReminder): void {
 function appendNormal(
   lines: string[],
   nextDeadline: DeadlineSummary | null,
+  recentAnnouncement: AnnouncementSummary | null,
   nextEvaluation: EvaluationSummary | null,
   nextExam: ExamSummary | null,
 ): void {
   if (nextDeadline) lines.push(`Next deadline: [${nextDeadline.name}] — ${deadlineStatus(nextDeadline.daysLeft, nextDeadline.dueAt)}${nextDeadline.dueAt ? ` (${nextDeadline.dueAt})` : ""}`);
+  if (recentAnnouncement) lines.push(`Recent Blackboard announcement: [${recentAnnouncement.title}] — ${announcementStatus(recentAnnouncement)}`);
   if (nextEvaluation) lines.push(`Next evaluation: [${nextEvaluation.course} — ${nextEvaluation.name}] — ${deadlineStatus(nextEvaluation.daysLeft, nextEvaluation.dueAt, "Evaluation")}`);
   if (nextExam) {
     const location = [nextExam.building, nextExam.room].filter(Boolean).join(" ").trim() || nextExam.campus || "";
     lines.push(`Next exam: [${nextExam.name} (${nextExam.code})] — ${nextExam.date}${nextExam.time ? ` ${nextExam.time}` : ""}${location ? ` @ ${location}` : ""}`);
   }
+}
+
+function announcementStatus(announcement: AnnouncementSummary): string {
+  const owner = announcement.source === "system"
+    ? "System"
+    : announcement.course || "Course";
+  return announcement.activityAt ? `${owner} · ${announcement.activityAt}` : owner;
 }
 
 function appendVerbose(

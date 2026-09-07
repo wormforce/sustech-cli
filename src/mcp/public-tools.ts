@@ -15,6 +15,13 @@ const PRIMO_SEGMENT = z.string().trim().min(1).max(500)
 const RESOURCE_CATEGORIES = ["official", "academic", "maps", "papers", "community"] as const satisfies readonly ResourceCategory[];
 const TRANSIT_DAY_TYPES = ["workday", "holiday"] as const;
 const NCES_SORTS = ["rating", "reviews", "name"] as const;
+const NCES_SEARCH_TYPES = ["all", "course", "teacher", "review"] as const;
+const NCES_REVIEW_SORTS = ["helpful", "newest", "oldest", "rating-high", "rating-low"] as const;
+const NCES_RANKING_CATEGORIES = ["top-teachers", "top-rated-courses", "popular-courses", "top-reviews", "long-reviews", "top-users"] as const;
+const NCES_COURSE_CODE = z.string().trim().regex(/^[A-Za-z0-9._-]{1,40}$/u, "Unsupported NCES course-code format.");
+const NCES_TERM = z.string().regex(/^\d{5}$/u, "Expected a five-digit NCES term ID.");
+const NCES_OFFERING_UNIT = z.string().trim().min(1).max(200);
+const NCES_TEACHER = z.string().trim().min(1).max(200);
 const FACULTY_LIMIT = z.number().int().min(1).max(200);
 const TRANSIT_LIMIT = z.number().int().min(1).max(100);
 const PAPERS_MAX = z.number().int().min(1).max(100);
@@ -134,45 +141,166 @@ export function registerPublicMcpTools(server: McpServer): void {
     PUBLIC_MCP_TOOL_BY_COMMAND["nces browse"],
     {
       title: "Browse NCES community course evaluations",
-      description: "Browse public NCES courses by page, page size, and supported sort order.",
+      description: "Browse public NCES courses by page, page size, supported sort order, and optional live offering-unit filter.",
       inputSchema: z.object({
         page: NCES_PAGE.optional(),
         pageSize: NCES_PAGE_SIZE.optional(),
         sort: z.enum(NCES_SORTS).optional(),
+        offeringUnit: NCES_OFFERING_UNIT.optional(),
       }),
       annotations: readOnlyAnnotations(true),
     },
-    async ({ page, pageSize, sort }, ctx) => runTypedCommand("nces browse", [
+    async ({ page, pageSize, sort, offeringUnit }, ctx) => runTypedCommand("nces browse", [
       ...numberOption("--page", page),
       ...numberOption("--page-size", pageSize),
       ...option("--sort", sort),
+      ...option("--offering-unit", offeringUnit),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces filter-options"],
+    {
+      title: "Read NCES browse filter options",
+      description: "Read the live NCES offering-unit values accepted by course browse.",
+      inputSchema: z.object({}),
+      annotations: readOnlyAnnotations(true),
+    },
+    async (_input, ctx) => runTypedCommand("nces filter-options", [], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces global-stats"],
+    {
+      title: "Read NCES global stats",
+      description: "Read NCES-wide public counts, averages, and distributions.",
+      inputSchema: z.object({}),
+      annotations: readOnlyAnnotations(true),
+    },
+    async (_input, ctx) => runTypedCommand("nces global-stats", [], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces rankings"],
+    {
+      title: "Read NCES rankings",
+      description: "Read one public NCES ranking list for teachers, courses, reviews, or users.",
+      inputSchema: z.object({
+        category: z.enum(NCES_RANKING_CATEGORIES),
+        limit: z.number().int().min(1).max(50).optional(),
+      }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ category, limit }, ctx) => runTypedCommand("nces rankings", [
+      category,
+      ...numberOption("--limit", limit),
     ], ctx.mcpReq.signal),
   );
 
   server.registerTool(
     PUBLIC_MCP_TOOL_BY_COMMAND["nces search"],
     {
-      title: "Search NCES courses",
-      description: "Search public NCES courses and review samples by keyword.",
+      title: "Search NCES courses, teachers, and reviews",
+      description: "Search public NCES course, teacher, or review buckets by keyword.",
       inputSchema: z.object({
         query: QUERY,
+        page: NCES_PAGE.optional(),
+        pageSize: NCES_PAGE_SIZE.optional(),
+        type: z.enum(NCES_SEARCH_TYPES).optional(),
       }),
       annotations: readOnlyAnnotations(true),
     },
-    async ({ query }, ctx) => runTypedCommand("nces search", [query], ctx.mcpReq.signal),
+    async ({ query, page, pageSize, type }, ctx) => runTypedCommand("nces search", [
+      query,
+      ...numberOption("--page", page),
+      ...numberOption("--page-size", pageSize),
+      ...option("--type", type),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces by-code"],
+    {
+      title: "Resolve one NCES course by code",
+      description: "Resolve a public NCES course by exact course code with optional term and teacher disambiguation, then return its current community detail with an optional full-review expansion.",
+      inputSchema: z.object({
+        code: NCES_COURSE_CODE,
+        term: NCES_TERM.optional(),
+        teacher: z.array(NCES_TEACHER).min(1).max(20).optional(),
+        allReviews: z.boolean().optional(),
+      }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ code, term, teacher, allReviews }, ctx) => runTypedCommand("nces by-code", [
+      code,
+      ...option("--term", term),
+      ...repeatedOptions("--teacher", teacher),
+      ...(allReviews ? ["--all-reviews"] : []),
+    ], ctx.mcpReq.signal),
   );
 
   server.registerTool(
     PUBLIC_MCP_TOOL_BY_COMMAND["nces course"],
     {
       title: "Read one NCES course",
-      description: "Read one public NCES course and its reviews by numeric course identifier.",
+      description: "Read one public NCES course by numeric identifier, with an optional full-review expansion.",
       inputSchema: z.object({
         id: z.number().int().min(1),
+        allReviews: z.boolean().optional(),
       }),
       annotations: readOnlyAnnotations(true),
     },
-    async ({ id }, ctx) => runTypedCommand("nces course", [String(id)], ctx.mcpReq.signal),
+    async ({ id, allReviews }, ctx) => runTypedCommand("nces course", [
+      String(id),
+      ...(allReviews ? ["--all-reviews"] : []),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces reviews"],
+    {
+      title: "Read NCES course reviews",
+      description: "Read one filtered page of public community reviews for an NCES course.",
+      inputSchema: z.object({
+        id: z.number().int().min(1),
+        page: NCES_PAGE.optional(),
+        pageSize: NCES_PAGE_SIZE.optional(),
+        sort: z.enum(NCES_REVIEW_SORTS).optional(),
+        term: NCES_TERM.optional(),
+        rating: z.number().int().min(1).max(10).optional(),
+      }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ id, page, pageSize, sort, term, rating }, ctx) => runTypedCommand("nces reviews", [
+      String(id),
+      ...numberOption("--page", page),
+      ...numberOption("--page-size", pageSize),
+      ...option("--sort", sort),
+      ...option("--term", term),
+      ...numberOption("--rating", rating),
+    ], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces teacher"],
+    {
+      title: "Read one NCES teacher",
+      description: "Read one public NCES teacher profile and its associated courses by numeric identifier.",
+      inputSchema: z.object({ id: z.number().int().min(1) }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ id }, ctx) => runTypedCommand("nces teacher", [String(id)], ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    PUBLIC_MCP_TOOL_BY_COMMAND["nces stats"],
+    {
+      title: "Read NCES course statistics",
+      description: "Read public community rating distributions and per-term statistics for one NCES course.",
+      inputSchema: z.object({ id: z.number().int().min(1) }),
+      annotations: readOnlyAnnotations(true),
+    },
+    async ({ id }, ctx) => runTypedCommand("nces stats", [String(id)], ctx.mcpReq.signal),
   );
 
   server.registerTool(
@@ -416,6 +544,10 @@ function option(name: string, value: string | undefined): string[] {
 
 function numberOption(name: string, value: number | undefined): string[] {
   return value === undefined ? [] : [name, String(value)];
+}
+
+function repeatedOptions(name: string, values: readonly string[] | undefined): string[] {
+  return values?.flatMap((value) => [name, value]) ?? [];
 }
 
 function readOnlyAnnotations(openWorldHint: boolean) {

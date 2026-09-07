@@ -47,7 +47,8 @@ The entrypoint behavior is intentionally narrow:
 
 ## Tool surface
 
-The server exposes `33` typed public/local read-only tools. It does not expose
+The server exposes `42` typed read-only tools in total (`39` public allowlisted
+tools plus `3` metadata tools). It does not expose
 a generic string runner such as `sustech_run`.
 
 Core metadata:
@@ -66,11 +67,37 @@ Public research and catalog data:
 
 - `sustech_papers_search`
 - `sustech_nces_browse`
+- `sustech_nces_filter_options`
+- `sustech_nces_global_stats`
+- `sustech_nces_rankings`
 - `sustech_nces_search`
+- `sustech_nces_by_code`
 - `sustech_nces_course`
+- `sustech_nces_reviews`
+- `sustech_nces_teacher`
+- `sustech_nces_stats`
 - `sustech_library_search`
 - `sustech_library_detail`
 - `sustech_library_search_url`
+
+`sustech_nces_browse` accepts an optional `offeringUnit` string that maps to
+NCES `offering_unit`, and `sustech_nces_filter_options` returns the live
+accepted values from NCES.
+
+`sustech_nces_search` accepts `type=all|course|teacher|review`. Its top-level
+`items`, `total`, `pages`, `page`, and `perPage` always describe the selected
+bucket (`course` when `type=all`). For `type=all`, the response also exposes
+`aggregateTotal` as the sum of the current course, teacher, and review bucket
+totals, plus `aggregateItems` and `aggregateShown` for the currently returned
+mixed page. It keeps explicit per-bucket totals and page counts, plus
+`courseItems`, `selectedBucket`, and `selectedItems` so MCP callers can render
+the compatibility bucket directly while still inspecting the mixed counts
+without pretending they share one real combined pagination stream.
+
+`sustech_nces_course` and `sustech_nces_by_code` return the current review
+window by default. `sustech_nces_by_code` also accepts repeated `teacher`
+filters for section disambiguation. Pass `allReviews: true` only when you
+explicitly want the tool to fetch every currently exposed review page.
 
 Public faculty and campus datasets:
 
@@ -92,8 +119,27 @@ Public SUSTech Online layer:
 - `sustech_online_talks_list`
 - `sustech_online_talks_search`
 - `sustech_online_talks_get`
+- `sustech_online_manual_list`
+- `sustech_online_manual_get`
 - `sustech_online_contact_search`
 - `sustech_online_contact_get`
+
+`sustech_online_search` accepts `section: "manual"` for the selected handbook
+corpus. Each returned hit preserves community authority, source path, license,
+fetch/update metadata, and freshness advisories. The `since` and `until` fields
+are available only when the section is omitted or set to `"talks"`; the typed
+schema excludes them for `"contact"` and `"manual"`. The manual branch also
+accepts optional allowlisted `source` filters from
+`service|study|transport|life|facility|calendar`, and returns
+`manualMatchedTotal` when the section is `"manual"` so callers can distinguish
+returned hits from the full pre-limit manual match count.
+
+`sustech_online_manual_list` accepts repeated allowlisted `source` filters from
+`service|study|transport|life|facility|calendar`, and
+`sustech_online_manual_get` accepts the deterministic handbook id returned by
+list or search, or an exact handbook title. `sustech_online_manual_list` also
+returns `matchedTotal` so callers can distinguish the allowlisted corpus size
+from the current limited result count.
 
 All tools return the same versioned JSON envelope that the direct CLI already
 uses, both as `structuredContent` and as a text fallback. This keeps the CLI as
