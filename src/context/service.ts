@@ -23,9 +23,9 @@ export class ContextService {
     const sourceStatus: ContextSourceStatus = {
       academicDay: academic.state,
       schedule: input.schedule ? "provided" : "missing",
-      nextDeadline: input.nextDeadline === undefined ? "missing" : "provided",
-      nextEvaluation: input.nextEvaluation === undefined ? "missing" : "provided",
-      nextExam: input.nextExam === undefined ? "missing" : "provided",
+      nextDeadline: sourceState(input.nextDeadline),
+      nextEvaluation: sourceState(input.nextEvaluation),
+      nextExam: sourceState(input.nextExam),
       weather: input.weather === undefined ? "missing" : "provided",
       airQuality: input.airQuality === undefined ? "missing" : "provided",
       libraryStatus: input.libraryStatus === undefined ? "missing" : "provided",
@@ -33,10 +33,14 @@ export class ContextService {
 
     const snapshot: ContextSnapshot = {
       level,
-      generatedAt: now.toISOString(),
+      generatedAt: (input.generatedAt ?? new Date()).toISOString(),
+      referenceAt: now.toISOString(),
+      timezone: "Asia/Shanghai",
       date: formatDate(now),
       time: formatTime(now),
-      weekday: WEEKDAY_NAMES[now.getDay()],
+      weekday: new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", weekday: "long" }).format(now),
+      ...(academic.day ? { academicDay: academic.day } : {}),
+      ...(academic.day && academic.day.week > 0 ? { weekParity: academic.day.week % 2 ? "odd" as const : "even" as const } : {}),
       ...(academic.day?.week ? { week: academic.day.week } : {}),
       ...(academic.day?.label ? { label: academic.day.label } : {}),
       ...(academic.day?.phase ? { phase: academic.day.phase } : {}),
@@ -46,10 +50,10 @@ export class ContextService {
         nextDeadline: input.nextDeadline ?? null,
         nextEvaluation: input.nextEvaluation ?? null,
         nextExam: input.nextExam ?? null,
+        weather: environmentFreshness(input.weather, now),
+        airQuality: environmentFreshness(input.airQuality, now),
       } : {}),
       ...(LEVEL_ORDER[level] >= LEVEL_ORDER.verbose ? {
-        weather: input.weather ?? null,
-        airQuality: input.airQuality ?? null,
         libraryStatus: input.libraryStatus ?? null,
       } : {}),
       sourceStatus,
@@ -61,6 +65,9 @@ export class ContextService {
 
   public toRecord(snapshot: ContextSnapshot): Record<string, unknown> {
     const record: Record<string, unknown> = {
+      generatedAt: snapshot.generatedAt,
+      referenceAt: snapshot.referenceAt,
+      timezone: snapshot.timezone,
       date: snapshot.date,
       time: snapshot.time,
       weekday: snapshot.weekday,
@@ -71,14 +78,16 @@ export class ContextService {
     if (snapshot.label) record.label = snapshot.label;
     if (snapshot.phase) record.phase = snapshot.phase;
     if (snapshot.holiday) record.holiday = snapshot.holiday;
+    if (snapshot.academicDay) record.academicDay = snapshot.academicDay;
+    if (snapshot.weekParity) record.weekParity = snapshot.weekParity;
     if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) {
       record.nextDeadline = snapshot.nextDeadline ?? null;
       record.nextEvaluation = snapshot.nextEvaluation ?? null;
       record.nextExam = snapshot.nextExam ?? null;
-    }
-    if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.verbose) {
       record.weather = snapshot.weather ?? null;
       record.airQuality = snapshot.airQuality ?? null;
+    }
+    if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.verbose) {
       record.libraryStatus = snapshot.libraryStatus ?? null;
     }
     return record;
@@ -90,29 +99,33 @@ export class ContextService {
 }
 
 function renderLines(snapshot: ContextSnapshot): string[] {
+  const isToday = snapshot.date === formatDate(new Date(snapshot.generatedAt));
   const lines = [
-    `Today is [${snapshot.date}], [${snapshot.weekday}]`,
+    `${isToday ? "Today is" : "Date preview:"} [${snapshot.date}], [${snapshot.weekday}]`,
     ...(snapshot.label ? [`According to SUSTech academic calendar, this is [${snapshot.label}]`] : []),
-    `Current time is [${snapshot.time}]`,
+    `${isToday ? "Current time is" : "Reference time:"} [${snapshot.time}] (Asia/Shanghai)`,
     ...(snapshot.holiday ? [`Today is [${snapshot.holiday}]`] : []),
+    ...(snapshot.academicDay?.compensatory ? [`Makeup timetable: ${snapshot.academicDay.compensatory.weekType} ${snapshot.academicDay.compensatory.workday}`] : []),
   ];
   appendSchedule(lines, snapshot.schedule);
   if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) appendNormal(lines, snapshot.nextDeadline ?? null, snapshot.nextEvaluation ?? null, snapshot.nextExam ?? null);
-  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.verbose) appendVerbose(lines, snapshot.weather ?? null, snapshot.airQuality ?? null, snapshot.libraryStatus ?? null);
+  if (LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) appendVerbose(lines, snapshot.weather ?? null, snapshot.airQuality ?? null, snapshot.libraryStatus ?? null);
+  if (snapshot.sourceStatus.nextDeadline === "empty" && LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) lines.push("No upcoming assignments in the retrieved Blackboard deadlines.");
+  if (snapshot.sourceStatus.nextExam === "empty" && LEVEL_ORDER[snapshot.level] >= LEVEL_ORDER.normal) lines.push("No upcoming exams in the retrieved TIS records.");
   return lines;
 }
 
 function appendSchedule(lines: string[], schedule: ScheduleReminder): void {
+  if (schedule.todayClasses?.length === 0 && !schedule.omissionCount) lines.push("No classes scheduled today in the retrieved timetable.");
   if (schedule.now) {
     lines.push(`Now: [${schedule.now}]`);
-    return;
   }
   if (schedule.next) {
     const detail = schedule.nextDetail ? ` — ${schedule.nextDetail}` : "";
     lines.push(`Next: [${schedule.next}]${detail}`);
     return;
   }
-  if (schedule.tomorrowMorning) {
+  if (!schedule.next && schedule.tomorrowMorning) {
     lines.push(`Tomorrow morning: [${schedule.tomorrowMorning}]`);
   }
 }
@@ -123,7 +136,7 @@ function appendNormal(
   nextEvaluation: EvaluationSummary | null,
   nextExam: ExamSummary | null,
 ): void {
-  if (nextDeadline) lines.push(`Next deadline: [${nextDeadline.name}] — ${deadlineStatus(nextDeadline.daysLeft, nextDeadline.dueAt)}`);
+  if (nextDeadline) lines.push(`Next deadline: [${nextDeadline.name}] — ${deadlineStatus(nextDeadline.daysLeft, nextDeadline.dueAt)}${nextDeadline.dueAt ? ` (${nextDeadline.dueAt})` : ""}`);
   if (nextEvaluation) lines.push(`Next evaluation: [${nextEvaluation.course} — ${nextEvaluation.name}] — ${deadlineStatus(nextEvaluation.daysLeft, nextEvaluation.dueAt, "Evaluation")}`);
   if (nextExam) {
     const location = [nextExam.building, nextExam.room].filter(Boolean).join(" ").trim() || nextExam.campus || "";
@@ -139,10 +152,10 @@ function appendVerbose(
 ): void {
   if (weather?.condition) {
     const temperature = weather.tempC !== undefined ? ` ${weather.tempC}C` : "";
-    lines.push(`Weather at SUSTech: [${weather.condition}]${temperature}`);
+    lines.push(`Weather at SUSTech: [${weather.condition}]${temperature}${observationLabel(weather)}`);
   }
   if (airQuality) {
-    lines.push(`Air quality: [AQI ${airQuality.aqi}]${airQuality.level ? ` ${airQuality.level}` : ""}`);
+    lines.push(`Air quality: [${airQuality.standard ? `${airQuality.standard} ` : ""}AQI ${airQuality.aqi}]${airQuality.level ? ` ${airQuality.level}` : ""}${observationLabel(airQuality)}`);
   }
   if (libraryStatus) {
     lines.push(`Library: [${libraryStatus}]`);
@@ -176,23 +189,24 @@ function normaliseNow(value: Date | string | undefined): Date {
 }
 
 function formatDate(now: Date): string {
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(now);
 }
 
 function formatTime(now: Date): string {
-  return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
 }
 
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
+function sourceState(value: unknown): SourceState {
+  return value === undefined ? "missing" : value === null ? "empty" : "provided";
 }
 
-const WEEKDAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-];
+function environmentFreshness<T extends WeatherSummary | AirQualitySummary>(value: T | null | undefined, now: Date): T | null {
+  if (!value) return null;
+  const observed = value.observedAt ? Date.parse(value.observedAt) : NaN;
+  return { ...value, freshness: !Number.isFinite(observed) ? "unknown" : now.getTime() - observed > 3 * 3600000 ? "stale" : "fresh" };
+}
+
+function observationLabel(value: WeatherSummary | AirQualitySummary): string {
+  return value.freshness === "stale" ? ` (stale; observed ${value.observedAt})`
+    : value.observedAt ? ` (observed ${value.observedAt})` : " (observation time unavailable)";
+}

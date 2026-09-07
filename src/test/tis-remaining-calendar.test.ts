@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import test from "node:test";
 import { CalendarTerm } from "../calendar/client.js";
+import { buildContextSchedule } from "../context/schedule.js";
 import {
   buildIcsContent,
   buildScheduleIcs,
@@ -61,6 +62,26 @@ const FALL_2026 = new CalendarTerm({
 
 test("week-one inference backtracks from today's week index to the semester anchor", () => {
   assert.equal(inferWeekOneMonday("2026-03-04", 2), "2026-02-23");
+});
+
+test("daily snapshot exposes current and next classes together on the adjusted makeup date", () => {
+  const morning = { ...ENTRIES[0], day: 5, weeks: [3], periodStart: 5, periodEnd: 6 };
+  const afternoon = { ...morning, rwh: "R2", periodStart: 7, periodEnd: 8 };
+  const snapshot = buildContextSchedule([morning, afternoon], FALL_2026, new Date("2026-09-20T14:30:00+08:00"));
+  assert.equal(snapshot.todayClasses?.length, 2);
+  assert.equal(snapshot.currentClass?.startAt, "2026-09-20T06:00:00Z");
+  assert.equal(snapshot.nextClass?.startAt, "2026-09-20T08:20:00Z");
+  assert.equal(snapshot.currentClass?.makeupFor, "2026-09-25");
+  assert.ok(snapshot.now && snapshot.next);
+  const holiday = buildContextSchedule([morning], FALL_2026, new Date("2026-09-25T14:30:00+08:00"));
+  assert.deepEqual(holiday.todayClasses, []);
+  assert.equal(holiday.nextClass, undefined);
+  const beforeTerm = buildContextSchedule([{ ...ENTRIES[0], weeks: [1] }], FALL_2026, new Date("2026-09-05T10:00:00+08:00"));
+  assert.equal(beforeTerm.nextClass?.startAt, "2026-09-07T02:20:00Z");
+  const priorDay = buildContextSchedule([morning], FALL_2026, new Date("2026-09-19T10:00:00+08:00"));
+  assert.equal(priorDay.tomorrowMorning, undefined);
+  const unknownTime = buildContextSchedule([{ ...morning, weeks: [] }], FALL_2026, new Date("2026-09-20T10:00:00+08:00"));
+  assert.equal(unknownTime.omissionCount, 1);
 });
 
 test("ICS export expands schedule entries into dated UTC events", () => {
