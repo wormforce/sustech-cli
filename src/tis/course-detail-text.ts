@@ -15,7 +15,6 @@ export function formatCourseDetail(report: TisCourseDetail): string {
     `  ${counts(enrollment.counts)}`,
     `  Quotas: ${counts(enrollment.quotas)}`,
     `  Counts paired with quotas: ${counts(enrollment.quotaCounts)}`);
-  if (enrollment.femalePercentage !== undefined) lines.push(`  Female: ${enrollment.femalePercentage}%`);
   if (enrollment.undergraduatePercentage !== undefined) lines.push(`  Undergraduate: ${enrollment.undergraduatePercentage}%`);
   if (enrollment.status) lines.push(`  My selection status: ${enrollment.status.label} (${enrollment.status.code})`);
   if (report.selection) {

@@ -41,7 +41,6 @@ export interface TisCourseDetail {
     counts: PopulationCounts;
     quotas: PopulationCounts;
     quotaCounts: PopulationCounts;
-    femalePercentage?: number;
     undergraduatePercentage?: number;
     status?: { code: string; label: string };
   };
@@ -201,7 +200,6 @@ export async function readCourseDetail(
     enrollment: {
       source: available ? "available" : enrolled ? "enrolled" : cart ? "cart" : "catalog",
       counts, quotas, quotaCounts,
-      ...percentage("femalePercentage", counts.female, counts.male, counts.total),
       ...percentage("undergraduatePercentage", counts.undergraduate, counts.graduate, counts.total),
       ...(enrolled && scalar(enrolled.sxbj) ? { status: enrollmentStatus(scalar(enrolled.sxbj)) } : {}),
     },

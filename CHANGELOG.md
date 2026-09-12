@@ -4,6 +4,12 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-12
+
+### Fixed
+
+- Maintenance fixes.
+
 ## [0.12.0] - 2026-09-12
 
 ### Added

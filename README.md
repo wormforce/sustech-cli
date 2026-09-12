@@ -259,7 +259,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.12.0",
+    "version": "0.12.1",
     "runtime": "node v22.19.0"
   }
 }
