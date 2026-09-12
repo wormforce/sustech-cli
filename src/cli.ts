@@ -207,9 +207,9 @@ import { CasSession, type CasServiceConfig } from "./sso/cas.js";
 import { BookingSession } from "./services/booking-auth.js";
 import { LibraryBookingSession } from "./services/library-booking-auth.js";
 import { PmsSession } from "./services/pms-auth.js";
+import { applyBlackboardOriginalSubmission } from "./services/blackboard-submission.js";
 import {
   SERVICE_STATUSES,
-  attachBlackboardAttemptFile,
   browseNces,
   buildPrimoSearchUrl,
   buildBookingCreatePreview,
@@ -221,7 +221,6 @@ import {
   applyLibraryBookingCreate,
   applyLibraryBookingCancel,
   cleanText,
-  createBlackboardAttempt,
   createBlackboardBrowserAdapter,
   createBlackboardCourseMessage,
   createBlackboardDiscussionMessage,
@@ -234,7 +233,6 @@ import {
   formatBrowserPrimoCatalogDetail,
   formatBrowserPrimoCatalogSearch,
   formatServiceStatuses,
-  getBlackboardAttempt,
   getBlackboardContentItem,
   listBlackboardCourseMessageFolders,
   listBlackboardCourseMessageParticipants,
@@ -311,8 +309,6 @@ import {
   sampleText,
   listBlackboardAnnouncements,
   syncBlackboardAttachments,
-  updateBlackboardAttempt,
-  uploadBlackboardTemporaryFile,
   verifyPmsPrintDeletion,
   verifyPmsPrintUpload,
   deleteBlackboardCalendarLink,
@@ -5591,111 +5587,14 @@ async function runBlackboard(
     const preflight = await buildBlackboardSubmissionPreflight(adapter, values, target, submission, comment);
     ensureBlackboardSubmissionAllowed(preflight, values["allow-late"] === true);
 
-    const assignment = preflight.assignment;
-    let createdAttemptId = "";
-    let uploadedId = "";
-    let stage: "upload" | "create_attempt" | "attach_file" | "submit_attempt" | "verify" = submission.kind === "file" ? "upload" : "create_attempt";
-    try {
-      if (submission.kind === "file") {
-        stage = "upload";
-        const uploaded = await uploadBlackboardTemporaryFile(adapter, submission.file, submission.bytes);
-        uploadedId = uploaded.id;
-      }
-      stage = "create_attempt";
-      const attempt = await createBlackboardAttempt(adapter, target.courseId, assignment.id, {
-        ...(submission.kind === "text" ? { studentSubmission: submission.text } : {}),
-        ...(comment ? { studentComments: comment } : {}),
-      });
-      createdAttemptId = attempt.id;
-      if (submission.kind === "file") {
-        stage = "attach_file";
-        await attachBlackboardAttemptFile(adapter, target.courseId, createdAttemptId, {
-          name: submission.file.name,
-          uploadId: uploadedId,
-        });
-      }
-      stage = "submit_attempt";
-      const submitted = await updateBlackboardAttempt(adapter, target.courseId, assignment.id, createdAttemptId, {
-        status: "NeedsGrading",
-      });
-      stage = "verify";
-      const snapshot = await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId);
-      const observedAttempt = snapshot.attempt ?? submitted;
-      const verification = snapshot.attempt
-        ? verifyBlackboardSubmission(snapshot.attempt, snapshot.files, submission)
-        : {
-            status: "unavailable" as const,
-            message: "The submitted attempt status could not be read back from Blackboard.",
-          };
-      if (verification.status !== "confirmed") {
-        throw new CliError(
-          "Blackboard accepted the submission request, but the read-back verification was inconclusive.",
-          "BLACKBOARD_SUBMISSION_NOT_CONFIRMED",
-          1,
-          {
-            courseId: target.courseId,
-            contentId: assignment.contentId,
-            columnId: assignment.id,
-            attemptId: createdAttemptId,
-            verification,
-            warning: "DO_NOT_RETRY_AUTOMATICALLY",
-          },
-        );
-      }
-      writeBlackboardSubmissionResult(output, preflight, submission, comment, observedAttempt, snapshot.files, verification);
-      return;
-    } catch (error) {
-      if (error instanceof CliError && error.code === "BLACKBOARD_FILE_CHANGED") throw error;
-      let candidateAttemptIds: string[] = [];
-      if (!createdAttemptId) {
-        const drift = stage === "create_attempt"
-          ? await observeBlackboardAttemptCreation(adapter, target.courseId, assignment.id, preflight.attempts)
-          : undefined;
-        candidateAttemptIds = drift?.candidateAttemptIds ?? [];
-        if (drift?.attempt) createdAttemptId = drift.attempt.id;
-      }
-      const snapshot = createdAttemptId
-        ? await observeBlackboardAttemptSnapshot(adapter, target.courseId, assignment.id, createdAttemptId)
-        : { files: [] as BlackboardAttemptFile[] };
-      const verification = snapshot.attempt
-        ? verifyBlackboardSubmission(snapshot.attempt, snapshot.files, submission)
-        : { status: "unavailable" as const, message: "Blackboard did not expose enough read-back state to confirm the submission." };
-      if (snapshot.attempt && verification.status === "confirmed") {
-        writeBlackboardSubmissionResult(
-          output,
-          preflight,
-          submission,
-          comment,
-          snapshot.attempt,
-          snapshot.files,
-          verification,
-          true,
-        );
-        return;
-      }
-      throw new CliError(
-        "Blackboard submission outcome is uncertain. Do not retry automatically.",
-        "BLACKBOARD_SUBMISSION_OUTCOME_UNKNOWN",
-        5,
-        {
-          stage,
-          courseId: target.courseId,
-          contentId: assignment.contentId,
-          columnId: assignment.id,
-          ...(createdAttemptId ? { attemptId: createdAttemptId } : {}),
-          candidateAttemptIds,
-          ...(uploadedId ? { uploadId: uploadedId } : {}),
-          ...(submission.kind === "file"
-            ? { fileName: submission.file.name }
-            : { textFile: submission.textFile.absolutePath }),
-          ...(snapshot.attempt?.status ? { attemptStatus: snapshot.attempt.status } : {}),
-          observedFiles: snapshot.files.map((entry) => entry.name),
-          verification,
-          cause: error instanceof Error ? error.message : String(error),
-          warning: "DO_NOT_RETRY_AUTOMATICALLY",
-        },
-      );
-    }
+    const result = await applyBlackboardOriginalSubmission(adapter, {
+      courseId: target.courseId,
+      contentId: preflight.assignment.contentId,
+      columnId: preflight.assignment.id,
+    }, submission, preflight.attempts, { ...(comment ? { comment } : {}) });
+    writeBlackboardSubmissionResult(output, preflight, submission, comment,
+      result.attempt, result.files, result.verification, result.recoveredAfterError);
+    return;
   }
   throw usageError(`Unknown command: ${positionals.join(" ")}`);
 }
@@ -7799,82 +7698,6 @@ function isOptionalBlackboardUploadSettingsError(error: unknown): boolean {
   if (!(error instanceof CliError)) return false;
   const status = Number(error.details?.status);
   return status === 401 || status === 403 || status === 404;
-}
-
-async function observeBlackboardAttemptSnapshot(
-  adapter: ServiceAdapter,
-  courseId: string,
-  columnId: string,
-  attemptId: string,
-): Promise<{
-  attempt?: Awaited<ReturnType<typeof getBlackboardAttempt>>;
-  files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>>;
-}> {
-  let attempt: Awaited<ReturnType<typeof getBlackboardAttempt>> | undefined;
-  let files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>> = [];
-  try {
-    attempt = await getBlackboardAttempt(adapter, courseId, columnId, attemptId);
-  } catch {
-    attempt = undefined;
-  }
-  try {
-    files = await listBlackboardAttemptFiles(adapter, courseId, attemptId);
-  } catch {
-    files = [];
-  }
-  return { attempt, files };
-}
-
-async function observeBlackboardAttemptCreation(
-  adapter: ServiceAdapter,
-  courseId: string,
-  columnId: string,
-  previousAttempts: readonly { id: string }[],
-): Promise<{
-  attempt?: Awaited<ReturnType<typeof listBlackboardAttempts>>[number];
-  candidateAttemptIds: string[];
-}> {
-  try {
-    const current = await listBlackboardAttempts(adapter, courseId, columnId);
-    const previousIds = new Set(previousAttempts.map((attempt) => attempt.id));
-    const candidates = current.filter((attempt) => !previousIds.has(attempt.id));
-    return {
-      ...(candidates.length === 1 ? { attempt: candidates[0] } : {}),
-      candidateAttemptIds: candidates.map((attempt) => attempt.id),
-    };
-  } catch {
-    return { candidateAttemptIds: [] };
-  }
-}
-
-function verifyBlackboardSubmission(
-  attempt: BlackboardAttempt,
-  files: Awaited<ReturnType<typeof listBlackboardAttemptFiles>>,
-  submission: BlackboardCliSubmissionInput,
-): BlackboardSubmissionVerification {
-  if (submission.kind === "file") {
-    const observedFile = files.some((entry) => entry.name === submission.file.name);
-    if ((attempt.status === "NeedsGrading" || attempt.status === "Completed") && observedFile) {
-      return { status: "confirmed", message: "NeedsGrading/Completed and the uploaded filename were read back from Blackboard." };
-    }
-    if (attempt.status) {
-      return {
-        status: "not_observed",
-        message: `Attempt status was ${attempt.status}, but the expected uploaded filename was not fully observed in the read-back state.`,
-      };
-    }
-    return { status: "unavailable", message: "Blackboard did not expose enough read-back state to confirm the submission." };
-  }
-  if ((attempt.status === "NeedsGrading" || attempt.status === "Completed") && attempt.studentSubmission === submission.text) {
-    return { status: "confirmed", message: "NeedsGrading/Completed and the submitted text were read back from Blackboard." };
-  }
-  if (attempt.status) {
-    return {
-      status: "not_observed",
-      message: `Attempt status was ${attempt.status}, but the expected submission text was not fully observed in the read-back state.`,
-    };
-  }
-  return { status: "unavailable", message: "Blackboard did not expose enough read-back state to confirm the submission." };
 }
 
 function writeBlackboardSubmissionResult(

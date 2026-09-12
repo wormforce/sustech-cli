@@ -87,3 +87,9 @@ names rather than raw download URLs. A successful `bb attempt-download` result
 contains the selected file identity, the absolute destination path, byte count,
 content type, and SHA-256. The `files` read-back inside a successful
 `bb submit apply` result uses the same URL-free file identity shape.
+
+Blackboard submission preparation failures report `submissionPostSent: false`.
+After a POST starts, an unverified result returns
+`BLACKBOARD_SUBMISSION_OUTCOME_UNKNOWN` with exit code 5. Diagnostics retain the
+stage and available upstream status/path, excluding form nonces, response bodies,
+and credential-bearing URL queries.

@@ -459,8 +459,8 @@ test("Blackboard submission preflight surfaces blockers and late-submission warn
     uploadSettings: { supportsInlineRender: true, maxUploadSizeInBytes: 1024 },
     now: new Date("2026-08-26T00:00:00.000Z"),
   });
-  assert.equal(unsupported.ready, true);
-  assert.deepEqual(unsupported.blockers, []);
+  assert.equal(unsupported.ready, false);
+  assert.deepEqual(unsupported.blockers.map((entry) => entry.code), ["UNSUPPORTED_CONTENT_TYPE", "UNSUPPORTED_SCORE_PROVIDER"]);
 
   const ultraFile = evaluateBlackboardSubmissionPreflight({
     assignment: {

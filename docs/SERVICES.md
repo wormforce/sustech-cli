@@ -21,7 +21,7 @@ while the CLI already supplies that transport for a specific command family.
 
 | Service | Availability | Auth | CLI surface today | Notes |
 | --- | --- | --- | --- | --- |
-| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb tree`, `bb types`, `bb attachments`, `bb download`, `bb roster`, `bb message-folders`, `bb messages`, `bb message-participants`, `bb message-send preview/apply`, `bb discussions`, `bb discussion-groups`, `bb discussion`, `bb discussion-replies`, `bb assignments`, `bb grades`, `bb attempt-files`, `bb attempt-download`, `bb announcements`, `bb deadlines`, `bb calendar`, `bb search`, `bb sync`, `bb attempts`, `bb submit preview`, `bb submit apply`, `bb calendar-link set/show/fetch/delete` | CLI CAS login and announcement aggregation passed opt-in read-only live smoke tests. Recursive content-tree reads via `bb tree`; course roster reads via `bb roster`; course-message reads via `bb message-folders` / `bb messages` / `bb message-participants`; and discussion/forum reads via `bb discussions` / `bb discussion-groups` / `bb discussion` / `bb discussion-replies` when Blackboard exposes a compatible Learn REST discussion surface. For Blackboard Original courses that reject the REST discussion API, `bb discussions` falls back to the HTML discussion-board forum list, `bb discussion` falls back to the HTML thread list, and `bb discussion-replies` falls back to the HTML thread-detail reply list, while group reads and discussion writes that still require the REST surface fail closed with `BLACKBOARD_DISCUSSIONS_UNSUPPORTED`. `bb message-send preview/apply` uses the official Learn REST course-message create endpoint, validates exact recipient IDs against the live course roster, binds apply to the reviewed text SHA-256, and verifies the created message by Sent-folder read-back. Cross-course `bb grades`, cross-course `bb assignments --course ...`, `bb assignments --with-attempts`, `bb assignments --submission-state ...`, `bb deadlines --submission-state ...`, and `bb types` preserve accessible results and record per-course, per-folder, or per-assignment failures as partial output where applicable. Content download/sync supports the official Original endpoint and embedded BBML links. Attempt-file reads expose the authenticated student's submitted files separately from teacher attachments; attempt-file downloads work when Blackboard exposes a usable download endpoint for that record and otherwise fail closed as unavailable. Blackboard message-send and assignment submission remain fixture-tested only: file attachments still follow the Classic/Original attempt-file path, while supported Blackboard assignment targets can also submit text through the official attempt payload. |
+| `blackboard` | `adapter_required` | CAS cookie session | `bb user`, `bb courses`, `bb content`, `bb tree`, `bb types`, `bb attachments`, `bb download`, `bb roster`, `bb message-folders`, `bb messages`, `bb message-participants`, `bb message-send preview/apply`, `bb discussions`, `bb discussion-groups`, `bb discussion`, `bb discussion-replies`, `bb assignments`, `bb grades`, `bb attempt-files`, `bb attempt-download`, `bb announcements`, `bb deadlines`, `bb calendar`, `bb search`, `bb sync`, `bb attempts`, `bb submit preview`, `bb submit apply`, `bb calendar-link set/show/fetch/delete` | CLI CAS login and announcement aggregation passed opt-in read-only live smoke tests. Recursive content-tree reads via `bb tree`; course roster reads via `bb roster`; course-message reads via `bb message-folders` / `bb messages` / `bb message-participants`; and discussion/forum reads via `bb discussions` / `bb discussion-groups` / `bb discussion` / `bb discussion-replies` when Blackboard exposes a compatible Learn REST discussion surface. For Blackboard Original courses that reject the REST discussion API, `bb discussions` falls back to the HTML discussion-board forum list, `bb discussion` falls back to the HTML thread list, and `bb discussion-replies` falls back to the HTML thread-detail reply list, while group reads and discussion writes that still require the REST surface fail closed with `BLACKBOARD_DISCUSSIONS_UNSUPPORTED`. `bb message-send preview/apply` uses the official Learn REST course-message create endpoint, validates exact recipient IDs against the live course roster, binds apply to the reviewed text SHA-256, and verifies the created message by Sent-folder read-back. Cross-course `bb grades`, cross-course `bb assignments --course ...`, `bb assignments --with-attempts`, `bb assignments --submission-state ...`, `bb deadlines --submission-state ...`, and `bb types` preserve accessible results and record per-course, per-folder, or per-assignment failures as partial output where applicable. Content download/sync supports the official Original endpoint and embedded BBML links. Attempt-file reads expose the authenticated student's submitted files separately from teacher attachments; attempt-file downloads work when Blackboard exposes a usable download endpoint for that record and otherwise fail closed as unavailable. Blackboard message-send and assignment text submission remain fixture-tested only; individual Original file resubmission passed live CLI submission and REST read-back on 2026-09-11. Individual Classic/Original assignment files and text use a fresh HTTP form with the CAS session and REST read-back; Ultra/group submission is unsupported. |
 | `booking` | `implemented` | CAS cookie session plus booking bearer token, campus reachability | `booking whoami`, `booking rooms`, `booking my-meetings`, `booking create preview/apply`, `booking cancel preview/apply` | CLI login and room-list read passed an opt-in live smoke test on 2026-08-26. Create preview now checks the live room calendar for the exact day/time and fails closed when overlaps or unreadable calendar state prevent a safe decision. Remote writes still require preview, `--confirm`, and exact read-back. |
 | `library-catalog` | `implemented` | public HTTP or manual browser session | `library search`, `library detail` | Primo public search/detail normalization is implemented, and `--browser [--interactive]` provides a manual browser-backed fallback. The CLI never fabricates records, never accepts browser credentials, never solves CAPTCHAs, and never persists browser cookies. Some runtimes may still need the browser path because upstream TLS behavior can differ by host. |
 | `library-booking` | `implemented` | IC booking cookie session, campus reachability | `lib-booking whoami`, `lib-booking home-summary`, `lib-booking labs`, `lib-booking rooms`, `lib-booking reservation-count`, `lib-booking reservations`, `lib-booking create preview/apply`, `lib-booking cancel preview/apply` | Login plus identity, summary, labs, and count reads passed an opt-in live smoke test on 2026-08-26. Create preview now combines room open-times with reservation metadata and fails closed when exact availability cannot be proved safely. Membership and capacity rules remain conservative. |
@@ -126,18 +126,31 @@ defaults as `bb download`. If Blackboard exposes only metadata and the
 official download endpoint still returns `404`, the CLI reports
 `BLACKBOARD_ATTEMPT_FILE_UNAVAILABLE` instead of a generic transport error.
 
-Blackboard assignment submission uses the official Learn REST APIs: v2 grade
-columns and attempts, v1 temporary uploads, and v1 attempt files. Text
-submissions can use the official attempt payload on supported assignment
-targets. The attempt-file endpoint is still limited by Blackboard to
-Classic/Original assignments, which the read-only preflight verifies from both
-the content handler and grade-column metadata.
+Blackboard assignment submission uses the Classic/Original HTTP form with the
+existing CAS cookie session. The CLI reads a fresh form during apply, validates
+its target and nonce, and sends one multipart POST to `uploadAssignment`.
+No Playwright is involved in this submission path. File and plain-text submissions
+are supported; text/comments require the corresponding form editor fields.
+Ultra and group assignments are not supported by this form workflow.
+
+Attempt discovery and read-back use Learn REST. An initial attempts-list `404`
+is treated as an empty history only when the exact accessible Classic assignment's
+read-only `mode=view` page exposes a matching blank first-submission form.
+An inaccessible/ambiguous page, existing draft/history, or later-page failure
+remains an error. Preview never requests `action=newAttempt` or sends a POST.
 
 `bb submit preview` authenticates but only reads. `bb submit apply` requires
 `--confirm`, the previewed `--expected-sha256`, a fresh preflight, and a
-post-submit read-back of both attempt status and filename. Existing in-progress
-attempts are not silently resumed. An uncertain write returns exit code 5 with
-`DO_NOT_RETRY_AUTOMATICALLY`; the CLI never falls back to the legacy HTML form.
+post-submit read-back of a single new attempt's status and filename or text,
+plus comments when supplied. Existing in-progress attempts and drafts are not
+silently resumed. An uncertain write returns exit code 5 with
+`DO_NOT_RETRY_AUTOMATICALLY`; the CLI does not retry or redirect-replay a POST.
+Error diagnostics retain the stage and sanitized upstream status/path without
+form nonces or response bodies. On 2026-09-11, an explicitly authorized
+individual Original file resubmission passed live CLI submission and REST
+read-back: a new NeedsGrading attempt, the expected filename, and a matching
+receipt byte count were observed. Text submission and the first-submission
+404 fallback remain covered by isolated HTTP fixtures only.
 
 ## TIS degree surfaces
 

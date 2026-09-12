@@ -140,7 +140,13 @@ commands for them.
 - Remote mutations cover TIS enroll/cart/drop/bid, Blackboard submission,
   eHall and library booking create/cancel, and PMS queue upload/delete. Every
   path requires `--confirm`; file-bound uploads additionally require the
-  previewed SHA-256. These paths are protocol-fixture-tested, not live-written.
+  previewed SHA-256. These paths have protocol-fixture coverage. An authorized
+  individual Blackboard Original file resubmission additionally passed live
+  submission and REST read-back on 2026-09-11.
+- Blackboard Original submission reads a fresh assignment form with CAS cookies
+  and sends one multipart HTTP POST. Nonces stay in memory; redirects cannot
+  replay the POST. REST read-back must identify one new submitted attempt and
+  verify its file/text and optional comment before reporting success.
 - eHall booking and library-booking create previews attempt exact slot
   availability checks first and fail closed when the live evidence is missing,
   malformed, or ambiguous.

@@ -237,7 +237,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.11.0",
+    "version": "0.11.1",
     "runtime": "node v22.19.0"
   }
 }
@@ -453,8 +453,10 @@ review instead of being promoted to a definite requirement match.
 
 ## Current limitations
 
-- Blackboard submission follows official Learn REST attempt/upload endpoints
-  and is fixture-tested, but it has not yet performed a real Blackboard write.
+- Blackboard submission uses a Classic/Original HTTP form with the CAS session
+  and REST attempt read-back. An individual Original file resubmission passed
+  live CLI submission and read-back on 2026-09-11. Text submission and the
+  first-submission 404 fallback remain fixture-tested only.
 - Student-submitted attempt files are separate from teacher-provided content
   attachments. `bb attempt-files` lists one attempt's files, and
   `bb attempt-download` downloads one of them to an explicit local path when
@@ -469,11 +471,12 @@ review instead of being promoted to a definite requirement match.
   an interactive slide CAPTCHA. The CLI will not bypass that challenge. A
   previously stored Blackboard native calendar link can still be fetched
   without CAS.
-- Blackboard submission stays on the official Learn REST path: file attachments
-  remain limited to Classic/Original assignment attempts, and supported
-  assignment targets can also submit text through the attempt payload. The CLI
-  does not scrape or silently fall back to the legacy `uploadAssignment` HTML
-  form.
+- Blackboard submission remains entirely in the CLI: a fresh form nonce and
+  exact target are validated before one multipart POST to `uploadAssignment`.
+  It supports individual Classic/Original file or text submissions with no
+  Playwright dependency in the write path. Ultra/group assignments and silent
+  draft resumption are unsupported. An attempts-list 404 becomes empty only
+  after a matching blank first-submission view form confirms that state.
 - Blackboard `bb message-send preview/apply` stays on the official course
   message create endpoint, binds apply to the previewed SHA-256 plus exact
   recipient IDs, and verifies the created message by Sent-folder read-back. It
