@@ -4,6 +4,8 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-12
+
 ### Fixed
 
 - Submit Classic/Original Blackboard assignments with a fresh, target-validated
@@ -15,6 +17,13 @@ All notable changes to `sustech-cli` are documented in this file.
   and later-page failures remain errors.
 - Preserve submission failure stage and sanitized upstream status/path. Never
   automatically replay a submission POST, including across HTTP redirects.
+- Use a portable file URL for the offline submission fixture on Windows.
+
+### Validation
+
+- An authorized Original file resubmission passed live CLI submission and REST
+  read-back on 2026-09-11. Text submission and first-submission 404 recovery remain
+  covered by isolated HTTP fixtures.
 
 ## [0.11.0] - 2026-09-07
 

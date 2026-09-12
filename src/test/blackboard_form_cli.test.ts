@@ -20,7 +20,7 @@ test("compiled bb submit CLI uses CAS and one HTTP form POST, including first-at
       writeFileSync(trace, "");
       const args = ["bb", "submit", operation, "--course-id", "8343", "--content-id", "629896", source === file ? "--file" : "--text-file", source, "--comment", "Please <review>", "--json"];
       if (operation === "apply") args.push("--confirm", "--expected-sha256", createHash("sha256").update(readFileSync(source)).digest("hex"));
-      const result = spawnSync(process.execPath, ["--import", fileURLToPath(new URL("./fixtures/blackboard-form-fetch.js", import.meta.url)), fileURLToPath(new URL("../cli.js", import.meta.url)), ...args], {
+      const result = spawnSync(process.execPath, ["--import", new URL("./fixtures/blackboard-form-fetch.js", import.meta.url).href, fileURLToPath(new URL("../cli.js", import.meta.url)), ...args], {
         encoding: "utf8", timeout: 15000,
         env: { ...process.env, SUSTECH_SID: "fixture-student", SUSTECH_PASSWORD: "fixture-password", SUSTECH_TEST_BB_TRACE: trace, SUSTECH_TEST_BB_MODE: mode },
       });
