@@ -5,8 +5,10 @@ Ports are fixture-driven and land in this standalone repository. Opt-in,
 read-only live smoke tests on 2026-08-26 covered TIS enrollment reads,
 Blackboard courses, WS programs, eHall rooms, and library-booking identity,
 summary, lab, and reservation-count reads. PMS remained blocked by its
-campus-network gate. All newly added mutation paths remain fixture-tested only;
-no real account mutation was attempted while completing this expansion.
+campus-network gate. That expansion did not perform real account mutations.
+A later authorized individual Blackboard Original file resubmission passed live
+CLI submission and REST read-back on 2026-09-11; other mutation paths remain
+fixture-tested only.
 
 | Area | Read operations | Mutations | Status | Priority |
 | --- | --- | --- | --- | --- |
@@ -25,7 +27,7 @@ no real account mutation was attempted while completing this expansion.
 | Academic snapshots | normalized TIS state with optional Blackboard deadlines; `academic changes`; one-shot `academic watch` | guarded versioned snapshot files | Implemented with digest verification, no-overwrite defaults, and no remote write behavior | P1 |
 | Resources | built-in campus resource registry and search | none | Implemented | P1 |
 | Wi-Fi | current association and recent macOS SUSTC Wi-Fi events | none | Implemented on macOS only | P1 |
-| Blackboard | courses, content, roster, course messages, course-message send preview/apply, discussions, teacher-provided attachment listing/download, per-course and cross-course assignments, cross-course grades, deadlines, calendar REST reads, search, attempts, native calendar-link storage/fetch | guarded local sync, optional ICS write, Classic/Original file submission plus supported text submission | CLI CAS login and courses read live-smoked; roster, course-message, discussion-group discovery, and course-message send now follow official current Learn REST endpoints. Message send validates exact roster recipients, binds apply to the previewed text SHA-256, and verifies the created Sent-folder record. Calendar reads, native feed-link storage/fetch, local download/sync, and the hash-bound submission workflow use official Learn REST/BBML paths or keyring fixtures and remain conservatively documented | P2 |
+| Blackboard | courses, content, roster, course messages, course-message send preview/apply, discussions, teacher-provided attachment listing/download, per-course and cross-course assignments, cross-course grades, deadlines, calendar REST reads, search, attempts, native calendar-link storage/fetch | guarded local sync, optional ICS write, individual Classic/Original file and text submission | CLI CAS login and courses read live-smoked; roster, course-message, discussion-group discovery, and course-message send now follow official current Learn REST endpoints. Message send validates exact roster recipients, binds apply to the previewed text SHA-256, and verifies the created Sent-folder record. Calendar reads, native feed-link storage/fetch and local download/sync use Learn REST/BBML paths or keyring fixtures. Assignment submission uses a fresh Classic/Original HTTP form with CAS cookies, hash binding and REST read-back; individual Original file resubmission passed a live check on 2026-09-11, while text remains fixture-tested | P2 |
 | Library catalog | Primo search/detail reads, browser fallback transport | none | Implemented with direct public HTTP plus manual `--browser [--interactive]` fallback; browser auth stays user-completed and cookies are not persisted by the CLI | P2 |
 | Library booking | account state, idle summary, labs, rooms, reservation counts, reservations | guarded create/cancel | Login, account, summary, labs, and count live-smoked; previews now use conservative exact-availability checks and fail closed when the slot cannot be proved safe | P2 |
 | E-Hall booking | redacted user profile, rooms, meetings | guarded create/cancel | Login and rooms read live-smoked; previews now use conservative exact day/time availability checks and fail closed on unreadable overlap state | P2 |

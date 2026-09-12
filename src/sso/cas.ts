@@ -280,6 +280,7 @@ export class CasSession {
       }
       this.cookies.add(response, currentUrl);
 
+      if (init.redirect === "manual") return response;
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers.get("location");
       if (!location) return response;

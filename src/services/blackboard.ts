@@ -19,6 +19,7 @@ import {
   stringValue,
 } from "./base.js";
 import type { ServiceAdapter, ServiceStatus } from "./base.js";
+import { confirmBlackboardNoAttempts } from "./blackboard-assignment-form.js";
 
 export const BLACKBOARD_BASE = "https://bb.sustech.edu.cn";
 
@@ -38,8 +39,8 @@ export const BLACKBOARD_STATUS: ServiceStatus = {
     "Course discussion forums, threads, and replies use the official Learn REST discussion endpoints when the target course exposes them; Blackboard Original courses can reject that API as unsupported.",
     "Course-message folders, message lists, and participant lists follow the official Learn REST course-message endpoints with explicit paging and server-side folder filters.",
     "Teacher-provided files use the Learn content-attachment endpoint or same-origin BBML links.",
-    "Student submission files use the official Learn REST attempt/files flow and remain limited to Classic/Original assignments; supported Blackboard assignment targets can also submit text through the official attempt payload.",
-    "No Blackboard write path has been live-submitted from this repository yet.",
+    "Assignment files and text are submitted through the Classic/Original HTTP form with the CAS cookie session; attempt and attachment read-back uses Learn REST. No browser automation is required for submission.",
+    "Individual Original file resubmission passed live CLI submission and REST read-back on 2026-09-11; text submission and first-submission 404 recovery remain fixture-tested only.",
   ],
   endpoints: [
     "/learn/api/public/v1/users/me",
@@ -63,7 +64,7 @@ export const BLACKBOARD_STATUS: ServiceStatus = {
     "/learn/api/public/v2/courses/{courseId}/gradebook/columns",
     "/learn/api/public/v2/courses/{courseId}/gradebook/columns/{columnId}/attempts",
     "/learn/api/public/v1/courses/{courseId}/gradebook/attempts/{attemptId}/files",
-    "/learn/api/public/v1/uploads",
+    "/webapps/assignment/uploadAssignment",
     "/learn/api/public/v1/uploads/settings",
   ],
 };
@@ -2618,7 +2619,15 @@ async function listBlackboardAttemptsForUser(
     userId,
     ...(options.status ? { attemptStatuses: options.status } : {}),
   });
-  const page = await fetchBlackboardPage(adapter, url, { absolute: true });
+  const page = await fetchBlackboardPage(adapter, url, { absolute: true, onInitialNotFound: async () => {
+    const assignment = await getBlackboardAssignment(adapter, courseId, columnId);
+    if (assignment.id !== canonicalIdBody(columnId) || !assignment.contentId
+      || assignment.availability !== "Yes" || assignment.grading.type !== "Attempts"
+      || assignment.scoreProviderHandle !== "resource/x-bb-assignment") return false;
+    const content = await getBlackboardContentItem(adapter, courseId, assignment.contentId);
+    if (content.handler !== "resource/x-bb-assignment") return false;
+    return confirmBlackboardNoAttempts(adapter, { courseId, contentId: assignment.contentId });
+  } });
   return page.results.map((item) => normaliseBlackboardAttempt(item));
 }
 
@@ -3062,7 +3071,7 @@ export async function readBlackboardSubmissionTextPayload(path: string): Promise
   }
   let text = "";
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
   } catch (error) {
     throw new CliError(
       "The Blackboard submission text file must be valid UTF-8.",
@@ -3735,37 +3744,21 @@ export function evaluateBlackboardSubmissionPreflight(input: {
 
   const contentHandler = input.content.handler || "";
   const scoreProviderHandle = input.assignment.scoreProviderHandle || "";
-  const classicFileSubmission = input.content.kind === "assignment"
+  const classicSubmission = input.content.kind === "assignment"
     && contentHandler === "resource/x-bb-assignment"
     && (!scoreProviderHandle || scoreProviderHandle === "resource/x-bb-assignment");
-  const ultraTextSubmission = (
-    contentHandler === "resource/x-bb-asmt-test-link"
-    || contentHandler === "resource/x-bb-assessment"
-  ) && scoreProviderHandle === "resource/x-bb-assessment";
-
-  if (
-    (input.submission.kind === "file" && !classicFileSubmission)
-    || (input.submission.kind === "text" && !classicFileSubmission && !ultraTextSubmission)
-  ) {
+  if (!classicSubmission) {
     blockers.push({
       code: "UNSUPPORTED_CONTENT_TYPE",
-      message: input.submission.kind === "file"
-        ? `Content handler ${contentHandler || "unknown"} does not support official REST file attachment; current Blackboard support is limited to Classic/Original assignments.`
-        : `Content handler ${contentHandler || "unknown"} is not a supported Blackboard assignment submission target.`,
+      message: `Content handler ${contentHandler || "unknown"} does not support the Classic/Original assignment form submission flow.`,
     });
   }
   if (
-    (input.submission.kind === "file" && scoreProviderHandle && scoreProviderHandle !== "resource/x-bb-assignment")
-    || (input.submission.kind === "text"
-      && scoreProviderHandle
-      && scoreProviderHandle !== "resource/x-bb-assignment"
-      && scoreProviderHandle !== "resource/x-bb-assessment")
+    scoreProviderHandle && scoreProviderHandle !== "resource/x-bb-assignment"
   ) {
     blockers.push({
       code: "UNSUPPORTED_SCORE_PROVIDER",
-      message: input.submission.kind === "file"
-        ? `Score provider ${scoreProviderHandle} does not support the official attempt-file endpoint.`
-        : `Score provider ${scoreProviderHandle} is not a supported Blackboard assignment submission target.`,
+      message: `Score provider ${scoreProviderHandle} does not support the Classic/Original assignment form submission flow.`,
     });
   }
   if (input.assignment.availability && input.assignment.availability !== "Yes") {
@@ -4252,8 +4245,8 @@ export function normaliseBlackboardAttempt(raw: unknown): BlackboardAttempt {
     ...(record.score !== undefined ? { score: numberValue(record.score) } : {}),
     ...(displayGrade.text !== undefined ? { displayGradeText: stringValue(displayGrade.text) } : {}),
     ...(displayGrade.score !== undefined ? { displayGradeScore: numberValue(displayGrade.score) } : {}),
-    studentComments: cleanText(record.studentComments),
-    studentSubmission: cleanText(record.studentSubmission),
+    studentComments: normaliseBlackboardSubmissionText(record.studentComments),
+    studentSubmission: normaliseBlackboardSubmissionText(record.studentSubmission),
     created: stringValue(record.created),
     modified: stringValue(record.modified),
     attemptDate: stringValue(record.attemptDate),
@@ -4274,6 +4267,10 @@ export function normaliseBlackboardAttemptReceipt(raw: unknown): BlackboardAttem
     responseStatus: stringValue(record.responseStatus),
     submissionType: stringValue(record.submissionType),
   };
+}
+
+function normaliseBlackboardSubmissionText(value: unknown): string {
+  return cleanText(stringValue(value).replace(/<br\b[^>]*>|<\/(?:p|div|li|pre|h[1-6])\s*>/giu, "\n"));
 }
 
 export function normaliseBlackboardAttemptFile(raw: unknown): BlackboardAttemptFile {
@@ -4397,7 +4394,7 @@ async function fetchBlackboardPageChunk(
 async function fetchBlackboardPage(
   adapter: ServiceAdapter,
   pathOrUrl: string,
-  options: { absolute?: boolean } = {},
+  options: { absolute?: boolean; onInitialNotFound?: () => Promise<boolean> } = {},
 ): Promise<{ results: unknown[] }> {
   let url = options.absolute ? pathOrUrl : buildBlackboardUrl(pathOrUrl);
   const results: unknown[] = [];
@@ -4412,7 +4409,15 @@ async function fetchBlackboardPage(
       throw new ServiceError("Blackboard pagination returned a repeated next-page URL.", { url });
     }
     visited.add(url);
-    const pageChunk = await fetchBlackboardPageChunk(adapter, url, { absolute: true });
+    let pageChunk: Awaited<ReturnType<typeof fetchBlackboardPageChunk>>;
+    try {
+      pageChunk = await fetchBlackboardPageChunk(adapter, url, { absolute: true });
+    } catch (error) {
+      // Never replace a later-page failure or an uncorroborated 404 with an empty history.
+      if (page === 1 && error instanceof CliError && error.details?.status === 404
+        && await options.onInitialNotFound?.().catch(() => false)) return { results: [] };
+      throw error;
+    }
     results.push(...pageChunk.results);
     if (!pageChunk.nextPage) return { results };
     url = new URL(pageChunk.nextPage, url).toString();

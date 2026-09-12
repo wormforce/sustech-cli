@@ -4,6 +4,18 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Submit Classic/Original Blackboard assignments with a fresh, target-validated
+  HTTP form and one multipart POST using the CAS session. Retain reviewed hashes,
+  confirmation and new-attempt read-back; no Playwright or public REST upload
+  authorization is required. Text/comments use the form's exposed editor fields.
+- Handle an initial attempts-list 404 as empty only after verifying the exact
+  accessible assignment and its blank first-submission view form. Other errors
+  and later-page failures remain errors.
+- Preserve submission failure stage and sanitized upstream status/path. Never
+  automatically replay a submission POST, including across HTTP redirects.
+
 ## [0.11.0] - 2026-09-07
 
 ### Added
