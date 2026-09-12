@@ -54,7 +54,7 @@ test("course detail preserves zero counts, separate quotas and prerequisite alte
   assert.equal(result.enrollment.counts.male, 0);
   assert.equal(result.enrollment.counts.graduate, 0);
   assert.equal(result.enrollment.counts.internal, undefined);
-  assert.equal(result.enrollment.femalePercentage, 100);
+  assert.equal(result.enrollment.counts.female, 10);
   assert.equal(result.enrollment.undergraduatePercentage, 100);
   assert.equal(result.enrollment.quotaCounts.total, 8);
   assert.equal(result.enrollment.counts.total, 10);
@@ -72,7 +72,7 @@ test("course detail preserves zero counts, separate quotas and prerequisite alte
   assert.equal(calls.find(call => call.path.endsWith("xsckViewByxk"))?.body.kcid, "COURSE-LIBRARY-ID");
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|SECRET_SQL|DO_NOT_/);
   const rendered = formatCourseDetail(result);
-  assert.match(rendered, /male 0/);
+  assert.match(rendered, /male 0 · female 10/);
   assert.match(rendered, /Week 1\nWeek 2/);
   assert.match(rendered, /Bring laptop/);
   assert.doesNotMatch(rendered, /<p>|PRIVATE_|SECRET_SQL/);
@@ -114,7 +114,8 @@ test("round enrichment reuses selection transport and exposes only matching task
   const result = await new TisClient(session as unknown as TisSession).courseDetail(semester, { code: "DEMO101", round: "bxxk" });
   assert.equal(result.enrollment.source, "available");
   assert.equal(result.enrollment.counts.total, 12);
-  assert.equal(result.enrollment.femalePercentage, 33.3);
+  assert.equal(result.enrollment.counts.male, 8);
+  assert.equal(result.enrollment.counts.female, 4);
   assert.equal(result.enrollment.status?.label, "候补");
   assert.equal(result.selection?.period, "补退选");
   assert.ok(result.notices.some(row => row.kind === "time-conflict"));
@@ -140,7 +141,8 @@ test("unavailable selection rounds do not discard course-library details", async
 test("inconsistent or unknown aggregate counts do not become invented percentages", async () => {
   const { session } = fixture({ selection: [{ ...task, yxzrs: "10", nansyxrs: "8", nvsyxrs: "5", bksyxrs: "", yjsyxrs: null, sxbj: "W" }] });
   const result = await readCourseDetail(session, semester, { code: "DEMO101" }, noSelection);
-  assert.equal(result.enrollment.femalePercentage, undefined);
+  assert.equal(result.enrollment.counts.male, 8);
+  assert.equal(result.enrollment.counts.female, 5);
   assert.equal(result.enrollment.undergraduatePercentage, undefined);
   assert.equal(result.enrollment.counts.undergraduate, undefined);
   assert.deepEqual(result.enrollment.status, { code: "W", label: "未知" });

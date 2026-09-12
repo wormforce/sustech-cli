@@ -43,9 +43,10 @@ HTML is converted to plain text; embedded scripts/styles are removed.
 - Total, undergraduate, graduate, male, female, internal (`对内`) and external
   (`对外`) counts are separate marginals. Their presence does not establish a
   breakdown by department, major or year, or a cross-tabulation of those groups.
-- Zero remains zero. Missing fields remain absent. Percentages are emitted only
-  when both component counts reconcile with a positive total. Quotas and counts
-  paired with quotas are separate from aggregate enrollment.
+- Zero remains zero. Missing fields remain absent. The undergraduate
+  percentage is emitted only when undergraduate and graduate counts reconcile
+  with a positive total. Quotas and counts paired with quotas are separate from
+  aggregate enrollment.
 - A missing prerequisite list does not establish that a course has no
   requirements. The upstream description preserves alternatives such as
   “CS112 or CS109”; listed course references are not interpreted as an AND rule.
