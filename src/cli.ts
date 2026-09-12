@@ -36,6 +36,8 @@ import {
   type AuthService,
 } from "./core/auth-check.js";
 import { inferCommandName } from "./core/argv.js";
+import { validateCourseDetailOptions } from "./tis/course-detail.js";
+import { formatCourseDetail } from "./tis/course-detail-text.js";
 import { formatBrandArt, shouldUseBrandColor } from "./core/branding.js";
 import { CAPABILITIES, formatCapabilities } from "./core/capabilities.js";
 import { CLI_PARSE_OPTIONS, COMMAND_OPTIONS, SHARED_OUTPUT_OPTION_NAMES, type CliOptionName } from "./core/command-metadata.js";
@@ -539,6 +541,7 @@ Usage:
   sustech pms delete apply JOB_ID --confirm
   sustech tis courses search [KEYWORD] [--semester YYYY-YYYY-N] [--limit N] [--refresh]
   sustech tis courses available [KEYWORD] --round ROUND [--semester YYYY-YYYY-N] [--limit N]
+  sustech tis courses detail CODE [--rwh RWH] [--round ROUND] [--semester YYYY-YYYY-N]
   sustech tis enrolled [--semester YYYY-YYYY-N]
   sustech tis schedule [--semester YYYY-YYYY-N] [--week N|--all]
   sustech tis grades [--semester YYYY-YYYY-N]
@@ -933,6 +936,18 @@ async function main(argv: string[]): Promise<void> {
       text: formatCourseSearch({ title: "Course catalog", semester, ...result }),
       items: result.courses,
       summary: { semester: semester.value, total: result.total, shown: result.courses.length, source: result.source },
+    }, output);
+    return;
+  }
+  if (command === "courses" && operation === "detail") {
+    if (parsed.positionals.length !== 4) throw usageError("Use: tis courses detail CODE [--rwh RWH] [--round ROUND]");
+    const options = validateCourseDetailOptions({ code: parsed.positionals[3], rwh: values.rwh, round: values.round });
+    const semester = parseSemester(values.semester);
+    const client = await tisClient(values);
+    const result = await client.courseDetail(semester, options);
+    writeSuccess({
+      command: "tis courses detail", data: result, text: formatCourseDetail(result), items: [result],
+      summary: { course: result.course.code, rwh: result.course.rwh, semester: semester.value },
     }, output);
     return;
   }

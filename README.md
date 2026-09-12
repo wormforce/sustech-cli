@@ -217,6 +217,28 @@ SUSTech Online source. The new official commands are CLI-only at present.
 
 ## Output contract
 
+Course details supplement the existing TIS course search and selection commands:
+
+```bash
+sustech tis courses detail BMEB316
+sustech tis courses detail BIO102B --rwh 2026-2027-1-BIO102B-001 --round bxxk --json
+```
+
+Use an exact course code; if multiple teaching tasks match, the command lists
+their identifiers and requires `--rwh`. `--semester` selects the catalog term.
+Details include course content, learning outcomes, readings, prerequisite
+descriptions and referenced courses, syllabus links, and aggregate enrollment
+counts. `--round` adds the relevant selection type's live counts, period, notes
+and conflicts. Without it, matching enrolled/cart records can supply counts;
+missing counts remain unknown. Optional read failures are reported in `sources`
+while the course details remain available.
+
+Teaching-task and course-library attributes stay separate. Syllabus documents
+may describe an older offering; links require TIS authentication and are not
+downloaded automatically. Population groups and quota-related counts retain
+their original meanings, and are not converted into guaranteed remaining seats.
+See [TIS course detail](docs/TIS_COURSE_DETAIL.md) for output fields and examples.
+
 ```bash
 # Human-readable text
 sustech tis courses search "machine learning"
@@ -237,7 +259,7 @@ review. A successful envelope looks like this:
   "ok": true,
   "command": "version",
   "data": {
-    "version": "0.11.1",
+    "version": "0.12.0",
     "runtime": "node v22.19.0"
   }
 }

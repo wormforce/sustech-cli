@@ -4,6 +4,23 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-12
+
+### Added
+
+- Add `tis courses detail CODE` with teaching-task selection, course content,
+  hours, readings, prerequisite descriptions, syllabus links and aggregate
+  enrollment statistics. Optional `--round` enriches selection-period metadata,
+  course notes and conflict hints; partial read failures retain the core detail.
+- Keep course-library and semester-specific task attributes separate, preserve
+  zero/unknown counts, and omit raw student records and internal configuration.
+
+### Validation
+
+- Type checks and all 460 tests passed. Read-only checks for BMEB316 and a
+  BIO102B teaching task verified course content, population counts and selection
+  period metadata; course notes are displayed when returned by TIS.
+
 ## [0.11.1] - 2026-09-12
 
 ### Fixed

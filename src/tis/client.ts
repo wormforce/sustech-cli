@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { CliError } from "../core/errors.js";
 import type { Semester } from "../core/semester.js";
 import { TisSession } from "./auth.js";
+import { readCourseDetail, type CourseDetailOptions, type TisCourseDetail } from "./course-detail.js";
 import {
   degreeProgressErrorMessage,
   degreeProgressPage,
@@ -56,6 +57,10 @@ export interface TisSelectionState {
 
 export class TisClient {
   public constructor(private readonly session: TisSession) {}
+
+  public async courseDetail(semester: Semester, options: CourseDetailOptions): Promise<TisCourseDetail> {
+    return readCourseDetail(this.session, semester, options, query => this.selectionResponse(semester, query));
+  }
 
   public async searchCatalog(
     semester: Semester,
@@ -113,6 +118,33 @@ export class TisClient {
     semester: Semester,
     options: { keyword?: string; round: string; limit: number; cultivation?: "1" | "2" } ,
   ): Promise<TisSelectionState> {
+    const { raw, dq } = await this.selectionResponseWithTerm(semester, options);
+    const list = asRecord(raw.kxrwList);
+    const directRound = asRecord(raw.xkgzszOne);
+    const currentRound = Object.keys(directRound).length > 0
+      ? directRound
+      : asRecord(asRecord(raw.xsxkPage).xkgzszOne);
+    return {
+      currentTerm: dq,
+      courses: asRecords(list.list).map(normaliseCourse),
+      total: numberValue(list.total) ?? 0,
+      enrolled: asRecords(raw.yxkcList),
+      cart: asRecords(raw.xkgwcList),
+      round: currentRound,
+    };
+  }
+
+  private async selectionResponse(
+    semester: Semester,
+    options: { keyword?: string; round: string; limit: number; cultivation?: "1" | "2" },
+  ): Promise<Record<string, unknown>> {
+    return (await this.selectionResponseWithTerm(semester, options)).raw;
+  }
+
+  private async selectionResponseWithTerm(
+    semester: Semester,
+    options: { keyword?: string; round: string; limit: number; cultivation?: "1" | "2" },
+  ): Promise<{ raw: Record<string, unknown>; dq: Record<string, unknown> }> {
     const dq = await this.currentTerm();
     const raw = asRecord(
       await this.session.postForm("/Xsxk/queryKxrw", {
@@ -154,19 +186,7 @@ export class TisClient {
         { round: options.round, tisCode: stringValue(raw.jg) },
       );
     }
-    const list = asRecord(raw.kxrwList);
-    const directRound = asRecord(raw.xkgzszOne);
-    const currentRound = Object.keys(directRound).length > 0
-      ? directRound
-      : asRecord(asRecord(raw.xsxkPage).xkgzszOne);
-    return {
-      currentTerm: dq,
-      courses: asRecords(list.list).map(normaliseCourse),
-      total: numberValue(list.total) ?? 0,
-      enrolled: asRecords(raw.yxkcList),
-      cart: asRecords(raw.xkgwcList),
-      round: currentRound,
-    };
+    return { raw, dq };
   }
 
   public async enrolled(semester: Semester): Promise<PersonalScheduleEntry[]> {

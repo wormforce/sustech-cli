@@ -132,6 +132,7 @@ export const CAPABILITIES: readonly Capability[] = [
   capability("auth check", "Verify credentials against TIS, Blackboard, WS, booking, lib-booking (library-booking alias), or PMS.", "read", { authentication: "selected-service", status: "preview" }),
   capability("tis courses search", "Search the campus-wide course catalog.", "read", { authentication: "tis", status: "preview" }),
   capability("tis courses available", "Search courses available to the authenticated student.", "read", { authentication: "tis", status: "preview" }),
+  capability("tis courses detail", "Read course content, prerequisites, syllabus links, teaching-task notices and aggregate enrollment counts.", "read", { authentication: "tis", status: "preview" }),
   capability("tis enrolled", "Read the normalized enrolled-course schedule.", "read", { authentication: "tis", status: "preview" }),
   capability("tis schedule", "Read a week or full semester personal schedule.", "read", { authentication: "tis", status: "preview" }),
   capability("tis grades", "Read normalized grades and calculate GPA.", "read", { authentication: "tis", status: "preview" }),
