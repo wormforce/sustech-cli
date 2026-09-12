@@ -14,11 +14,24 @@ import {
 
 const CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 
+test("TIS detail is discoverable and validates course selectors before authentication", () => {
+  const described = run(["describe", "tis", "courses", "detail", "--json"]);
+  assert.equal(described.status, 0);
+  const detail = JSON.parse(described.stdout).data;
+  assert.equal(detail.command, "tis courses detail");
+  assert.ok(detail.options.some((option: { name: string }) => option.name === "--rwh"));
+  for (const args of [["../profile"], [], ["CS101", "extra"]]) {
+    const invalid = runWithoutCredentials(["tis", "courses", "detail", ...args, "--json"]);
+    assert.equal(invalid.status, 2);
+    assert.equal(JSON.parse(invalid.stdout).error.code, "USAGE");
+  }
+});
+
 test("compiled CLI serves human text and versioned JSON from the real entrypoint", () => {
   const text = run(["version"]);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /:\*##: :#######:/);
-  assert.match(text.stdout, /sustech-cli 0\.11\.1/);
+  assert.match(text.stdout, /sustech-cli 0\.12\.0/);
   assert.doesNotMatch(text.stdout, /\u001b\[/);
 
   const json = run(["version", "--json"]);
@@ -27,7 +40,7 @@ test("compiled CLI serves human text and versioned JSON from the real entrypoint
     schemaVersion: "1",
     ok: true,
     command: "version",
-    data: { version: "0.11.1", runtime: `node ${process.version}` },
+    data: { version: "0.12.0", runtime: `node ${process.version}` },
   });
 });
 

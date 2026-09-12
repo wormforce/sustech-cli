@@ -252,6 +252,7 @@ export const COMMAND_OPTIONS: Readonly<Record<string, readonly CliOptionName[]>>
   "pms delete apply": ["credentials-file", "confirm"],
   "tis courses search": ["credentials-file", "semester", "limit", "refresh"],
   "tis courses available": ["credentials-file", "semester", "limit", "round"],
+  "tis courses detail": ["credentials-file", "semester", "rwh", "round"],
   "tis enrolled": ["credentials-file", "semester"],
   "tis schedule": ["credentials-file", "semester", "week", "all"],
   "tis grades": ["credentials-file", "semester"],
