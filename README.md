@@ -1,118 +1,144 @@
-# sustech-cli
+<p align="center">
+  <img src="docs/assets/sustech-cli.svg" alt="sustech cli" width="460">
+</p>
 
-[![npm](https://img.shields.io/npm/v/sustech-cli)](https://www.npmjs.com/package/sustech-cli)
-[![CI](https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/node/v/sustech-cli)](https://www.npmjs.com/package/sustech-cli)
+<p align="center">
+  <strong>One calm command line for life at SUSTech.</strong><br>
+  Courses, Blackboard, calendar, library, campus services, and agent-ready context.
+</p>
 
-An unofficial TypeScript CLI for SUSTech services, designed for people,
-scripts, and coding agents. Text is the default for humans; versioned JSON and
-JSONL are available for software. Python is not required at runtime.
+<p align="center">
+  <a href="https://www.npmjs.com/package/sustech-cli"><img alt="npm" src="https://img.shields.io/npm/v/sustech-cli?style=flat-square&color=ED6D00"></a>
+  <a href="https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/wormforce/sustech-cli/ci.yml?branch=main&style=flat-square&label=build&color=004748"></a>
+  <a href="https://www.npmjs.com/package/sustech-cli"><img alt="Node.js" src="https://img.shields.io/node/v/sustech-cli?style=flat-square&color=004748"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-555555?style=flat-square"></a>
+</p>
 
-> [!WARNING]
+<p align="center">
+  <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#for-ai-assistants">AI assistants</a> ·
+  <a href="#safety-by-default">Safety</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/sustech-cli-hero.png" alt="sustech-cli — a polished command line for SUSTech services" width="100%">
+</p>
+
+`sustech-cli` brings frequently used SUSTech services into one consistent
+TypeScript CLI. It is pleasant in a terminal, predictable in scripts, and
+self-describing for coding agents. Human-readable text is the default;
+versioned JSON and JSONL are available whenever software needs a stable
+interface.
+
+> [!IMPORTANT]
 > This is an independent community project, not an official SUSTech service.
-> Published npm releases may lag `main`. Inspect `sustech version` and
-> `sustech capabilities` on the installed copy before relying on a command or
-> allowing it to change state.
+> It never bypasses CAPTCHA or other interactive challenges. Review a command
+> before allowing it to change university or local state.
 
-## Install
+## Quick Start
 
-Requires Node.js 20.18 or newer:
+Requires Node.js 20.18 or newer.
 
 ```bash
 npm install --global sustech-cli
-sustech version
+sustech
 ```
 
-To try one command without a global install:
+The first screen shows the active account, runtime, and useful next actions.
+Public commands work immediately:
+
+```bash
+sustech calendar day
+sustech talks list
+sustech library search "graph neural networks" --limit 5
+sustech faculty search "computer vision"
+```
+
+Sign in once for personal services:
+
+```bash
+sustech auth login
+sustech context --live
+sustech tis schedule
+sustech bb deadlines --days 14
+```
+
+Try a command without installing globally:
 
 ```bash
 npm exec --package=sustech-cli -- sustech version
 ```
 
-`npm run build` only compiles a source checkout; it does not put `sustech` on
-your shell `PATH`. Package developers can use `npm install --global .` or
-`npm link` after building.
+## What It Does
 
-The CLI checks npm for a newer stable release at most once every 24 hours when
-run in an interactive terminal. If one is available, it asks before updating.
-JSON/JSONL output, redirected commands, and CI runs are never prompted. Use
-`sustech update` to check immediately, `sustech update --yes` to install
-without the confirmation prompt, or set `SUSTECH_DISABLE_UPDATE_CHECK=1` to
-disable automatic checks.
+| Area | Useful commands | Access |
+| --- | --- | --- |
+| Daily snapshot | `context`, `profile show`, `academic changes` | Public calendar plus optional TIS and Blackboard reads |
+| Teaching system | courses, schedule, grades, exams, degree progress, planning, iCalendar | SUSTech account |
+| Blackboard | courses, content, assignments, deadlines, grades, announcements, discussions, files | SUSTech account |
+| Campus calendar | teaching weeks, holidays, makeup days, term dates | Public |
+| Library | live Primo search/detail, rooms and reservations | Public catalog; account for bookings |
+| Campus services | classrooms, booking, printing, programs, Wi-Fi, transit | Public, local, or account-backed |
+| Discovery | faculty, lectures, handbook, contacts, NCES, papers | Public |
+| Agent interfaces | JSON, JSONL, Agent Skill, local MCP server | Local |
 
-## Quick start
-
-Public data does not require an account:
-
-```bash
-sustech calendar day 2026-09-01
-sustech faculty search "computer vision"
-sustech online search "校园卡" --section manual
-sustech online manual list --source service --limit 10
-sustech online manual get ID_OR_TITLE
-sustech online talks list --limit 10
-sustech talks list
-sustech online contact search "教学"
-sustech nces filter-options
-sustech nces browse --offering-unit "计算机科学与工程系" --page-size 5
-sustech nces global-stats
-sustech nces rankings top-teachers --limit 5
-sustech nces by-code CS302 --term 20252
-sustech nces reviews 244 --sort newest --page-size 5
-sustech transit lines
-sustech library search "graph neural networks" --limit 5
-```
-
-Authenticated services use a named local profile:
-
-```bash
-sustech auth login
-sustech auth status
-sustech context --live --level verbose
-sustech academic watch --state ./academic-state.json --include-blackboard
-sustech academic changes before.json after.json
-sustech tis plan recommend CS330 MA203 --round bxxk --max 5
-sustech tis plan explain CS330 --round bxxk
-sustech tis degree missing
-sustech tis degree progress
-sustech bb calendar --type GradebookColumn
-sustech bb announcements --days 14
-sustech bb deadlines --days 14 --submission-state not_attempted --json
-sustech bb tree _8537_1 --max 50
-sustech bb types --course MSE306
-sustech bb roster _8537_1 --role Student --page-size 10
-sustech bb discussions _5325_1 --page-size 10
-sustech bb grades --course MSE306 --submission-state completed --limit 10 --json
-sustech bb assignments --course MSE306 --with-attempts --json
-sustech bb assignments _8537_1 --with-attempts --json
-sustech bb assignments _8537_1 --submission-state not_attempted --json
-sustech bb messages _8537_1 --folder-type Inbox --page-size 10
-sustech bb attempt-files _8537_1 _2201_1
-sustech tis schedule
-sustech bb courses
-```
-
-Discover the complete command surface from the installed version:
+The installed version is the source of truth:
 
 ```bash
 sustech --help
 sustech capabilities --json --pretty
+sustech describe context --json --pretty
 ```
 
-## Use with an Agent
+### A useful day in one command
 
-The CLI is self-describing. Agents should inspect structured command and safety
-metadata instead of parsing `--help` or relying on a memorized command list:
+`context` creates a compact snapshot designed for people and assistants:
+date, teaching week and parity, holiday or makeup-day rules, current and next
+class, upcoming work, exams, weather, AQI, and library status.
 
 ```bash
-sustech version --json
-sustech capabilities --json
-sustech consequences --json
+sustech context --level terse
+sustech context --live
+sustech context --live --level verbose
+sustech context --live --json
 ```
 
-This repository also ships a portable
-[`sustech-cli` Agent Skill](skills/sustech-cli/SKILL.md). Install it directly
-from the public repository—no source clone is needed:
+Live sources run concurrently. Missing credentials and unavailable upstreams
+are reported as partial data rather than silently turned into “nothing found.”
+All academic times use Asia/Shanghai.
+
+### Live library catalog
+
+Library search reads the university's public Primo catalog directly, so results
+stay current without shipping a large offline database:
+
+```bash
+sustech library search "三体" --limit 5
+sustech library detail L:alma991001055219704181
+```
+
+The normal path uses Primo's public JSON endpoints. A manual browser transport
+is available when a host cannot complete the direct path:
+
+```bash
+sustech library search "三体" --browser --interactive
+```
+
+## For AI Assistants
+
+The CLI exposes its capabilities, output contracts, and mutation consequences
+as structured data. Agents should inspect these instead of parsing this README
+or guessing flags.
+
+```bash
+sustech capabilities --json
+sustech consequences --json
+sustech describe "tis enroll apply" --json
+```
+
+Install the bundled Agent Skill:
 
 ```bash
 npx skills add wormforce/sustech-cli --skill sustech-cli
@@ -124,403 +150,117 @@ For a global Codex installation:
 npx skills add wormforce/sustech-cli --skill sustech-cli --global --agent codex
 ```
 
-The [Agent Skills CLI](https://github.com/vercel-labs/skills) can target other
-supported agents and project-local scopes. Review the Skill before installing
-it: it teaches command discovery, structured output, credential boundaries,
-preview/confirm workflows, and the rule never to retry an ambiguous mutation
-automatically.
+Clients with MCP support can launch the local `sustech-mcp` stdio server. Its
+typed surface is intentionally read-only: authenticated data, browser flows,
+local writes, and remote mutations stay in the CLI. See [MCP setup](docs/MCP.md).
 
-Installing the npm package deliberately does **not** edit Codex, Claude Code,
-Cursor, or other agent configuration. The target agent and scope are user
-choices, so an npm `postinstall` script should not install instructions
-silently.
-
-For an agent without Skill support, provide this short instruction:
-
-> Use the installed `sustech` CLI. Start with `sustech capabilities --json` and
-> `sustech consequences --json`; request structured output, never expose login
-> secrets, and never add `--confirm` without approval for the exact target.
-
-A Skill is the onboarding layer; the CLI remains the executable source of
-truth. The package also ships a local `stdio` MCP entrypoint, `sustech-mcp`, for
-clients that support native tools. It needs no hosted server and exposes `42`
-typed read-only tools in total (`39` public allowlisted tools plus `3` metadata
-tools), plus JSON resources, resource templates, and
-prompts for discovery, public campus data, library, faculty, transit, NCES,
-papers, and selected SUSTech Online reads. Authenticated data, browser flows,
-local writes, and remote mutations remain unavailable through MCP. See
-[docs/MCP.md](docs/MCP.md) for configuration and the complete boundary.
-A repository-level `AGENTS.md` alone would only help agents that cloned the
-source.
-
-## What it covers
-
-This table is a summary. Use `sustech capabilities --json` for the installed
-version's exact command, authentication, network, and confirmation metadata.
-
-| Area | Examples | Access |
-| --- | --- | --- |
-| Diagnostics | version, capabilities, consequences, doctor | Local; optional live auth checks |
-| Academic context | calendar, Context v2 live summaries, profile reports, academic snapshots, `academic changes`, one-shot `academic watch` | Public and authenticated reads; guarded local exports |
-| TIS | catalog, schedule, grades, exams, TIS-reported degree progress, conservative missing-course report, persistent planning, `tis plan solve/explain/recommend`, local degree audit, live classrooms, iCalendar | CAS login; selection/enrollment writes are confirm-gated |
-| Blackboard | courses, roster, course messages, message send preview/apply, discussions, recursive content trees, content type summaries, announcements, deadlines, calendar reads, cross-course grades, per-course and cross-course assignment/attempt overviews, native calendar-link workflow, search, attachment download/sync, attempts, submission | CAS login for REST reads; `bb roster`, `bb messages` / `bb message-participants`, `bb message-send preview/apply`, `bb discussion-groups`, announcement aggregation, `bb tree`, cross-course `bb grades`, cross-course `bb assignments --course ...`, `bb assignments --with-attempts` / `--submission-state`, `bb deadlines --submission-state`, and `bb types` preserve partial failures. Blackboard discussions use the official Learn REST discussion API when the target course exposes it; Original-course forum lists, `bb discussion` thread reads, and `bb discussion-replies` thread-detail reads fall back to the Blackboard HTML discussion board, while group reads and discussion writes that still require the REST surface fail closed with `BLACKBOARD_DISCUSSIONS_UNSUPPORTED`. The native calendar link is a separate stored secret, and local writes are guarded |
-| Library and campus services | Primo catalog search/detail, WS programs, eHall booking, library booking, PMS jobs and usage | Public catalog reads plus authenticated reads; booking and queue writes are confirm-gated |
-| Research and courses | Crossref/OA papers, NCES browse/filter-options/global-stats/rankings/search/by-code/course/reviews/teacher/stats, SUSTech Online talks and selected handbook search | Public; OA downloads use guarded local paths; NCES and SUSTech Online remain community references only |
-| Campus and device context | faculty, resources, transit, Wi-Fi status/events | Public or local |
-| Community directory | Selected institutional SUSTech Online contacts with provenance and freshness advisories | Public community source; emergency, financial, personal, dining/chat, and professor-list sections are excluded |
-
-For the structured TIS-reported `tis degree progress` response, the derived
-`tis degree missing` report, and how both differ from local JSON
-`tis degree audit`, see
-[docs/DEGREE_PROGRESS.md](docs/DEGREE_PROGRESS.md). For the
-snapshot save/diff/change/watch workflow, see
-[docs/ACADEMIC_SNAPSHOTS.md](docs/ACADEMIC_SNAPSHOTS.md). For the
-`tis degree audit` requirements-file format, matching semantics, and current
-runtime limits, see [docs/DEGREE_AUDIT.md](docs/DEGREE_AUDIT.md).
-For the selected SUSTech Online source scope, provenance fields, freshness
-labels, and contact exclusions, see [docs/ONLINE.md](docs/ONLINE.md).
-
-Remote-state mutations are deliberately limited to these apply commands, all
-of which require an exact target plus `--confirm`:
-
-- `tis enroll apply`, `tis selection apply`, and `tis bid apply`
-- `bb submit apply`
-- `booking create apply` and `booking cancel apply`
-- `lib-booking create apply` and `lib-booking cancel apply`
-- `pms upload apply` and `pms delete apply`
-
-Local state can also change through credential login/logout, persistent
-`tis plan` edits, and explicit file outputs such as `profile export`,
-`academic snapshot save`, `tis ical --destination`, `papers fetch-oa`,
-`bb download`, and `bb sync`. File commands reject unsafe symbolic-link paths
-and do not overwrite an existing target unless the command explicitly permits
-and requests it.
-
-## Official campus lectures
-
-Official university lectures are available without login:
+## Output That Composes
 
 ```bash
-sustech talks list
-sustech talks list --all
-sustech talks list --json --pretty
-sustech talks search "物理" --jsonl
-sustech talks search "物理" --all
-```
-
-These commands read the lecture section of the official
-[homepage events page](https://www.sustech.edu.cn/zh/home-events.html), excluding
-notices. The default view shows lectures whose Beijing start time is still in
-the future, ordered from nearest to furthest. Records with an unparseable time
-remain visible under “time to confirm” rather than being silently omitted.
-`--all` adds lectures whose advertised start time has passed; it means all
-lectures currently displayed on the homepage, not the complete historical
-archive. Search matches titles, speakers, venues, and time text, and follows the
-same upcoming-by-default behavior. Results include title, speaker, venue,
-original time text, a normalized Beijing start time when parseable, timing
-classification, detail URL, reference time, and official source/fetch metadata.
-The existing `online talks` commands continue to use the community-maintained
-SUSTech Online source. The new official commands are CLI-only at present.
-
-## Output contract
-
-Course details supplement the existing TIS course search and selection commands:
-
-```bash
-sustech tis courses detail BMEB316
-sustech tis courses detail BIO102B --rwh 2026-2027-1-BIO102B-001 --round bxxk --json
-```
-
-Use an exact course code; if multiple teaching tasks match, the command lists
-their identifiers and requires `--rwh`. `--semester` selects the catalog term.
-Details include course content, learning outcomes, readings, prerequisite
-descriptions and referenced courses, syllabus links, and aggregate enrollment
-counts. `--round` adds the relevant selection type's live counts, period, notes
-and conflicts. Without it, matching enrolled/cart records can supply counts;
-missing counts remain unknown. Optional read failures are reported in `sources`
-while the course details remain available.
-
-Teaching-task and course-library attributes stay separate. Syllabus documents
-may describe an older offering; links require TIS authentication and are not
-downloaded automatically. Population groups and quota-related counts retain
-their original meanings, and are not converted into guaranteed remaining seats.
-See [TIS course detail](docs/TIS_COURSE_DETAIL.md) for output fields and examples.
-
-```bash
-# Human-readable text
+# Friendly terminal output
 sustech tis courses search "machine learning"
 
 # One versioned JSON envelope
 sustech tis courses search "machine learning" --json
 
-# One record per line for list commands
+# One item per line, followed by a summary
 sustech tis courses search "machine learning" --jsonl
 ```
 
-`--output text|json|jsonl` is the long form, and `--pretty` formats JSON for
-review. A successful envelope looks like this:
+Every machine-readable response has a stable envelope and the process exit
+status remains authoritative. See the [output contract](docs/OUTPUT.md).
 
-```json
-{
-  "schemaVersion": "1",
-  "ok": true,
-  "command": "version",
-  "data": {
-    "version": "0.12.1",
-    "runtime": "node v22.19.0"
-  }
-}
+## Safety by Default
+
+Read commands are easy; writes are deliberately explicit. Remote mutations
+follow the same lifecycle:
+
+```text
+resolve exact target → preview / preflight → approve → --confirm → read back
 ```
 
-The process exit status remains authoritative in every mode. See
-[docs/OUTPUT.md](docs/OUTPUT.md) for envelope, JSONL, error-code, and
-compatibility rules.
-
-## Credentials
-
-On a desktop, `sustech auth login` verifies the account and stores the password
-in the operating system's native credential store:
-
-- macOS: Keychain
-- Windows: Credential Manager
-- Linux desktop: Secret Service via `secret-tool`
-
-The password is entered through a hidden prompt, is never accepted as a normal
-command-line argument, and is never written to the CLI config. If no safe
-backend is available, the CLI returns `CREDENTIAL_STORE_UNAVAILABLE` instead of
-falling back to plaintext. Linux writes are verified by immediate read-back;
-locked collections and broken desktop D-Bus sessions produce distinct safe
-remediation in `auth status --json` instead of being reported as an expired
-password.
-
-On macOS, `auth status` checks Keychain item metadata without reading the
-password. Credential-helper commands are bounded to five seconds and report
-`CREDENTIAL_STORE_TIMEOUT` without an automatic retry.
+For example:
 
 ```bash
-sustech auth login --profile main
-sustech auth check --profile main --service bb --json
-sustech auth check --service bb --browser --interactive --json
-sustech doctor --service bb --live --browser --interactive --json
-sustech auth logout --profile main
-```
-
-Headless runners can use credentials supplied by their own secret manager via
-the documented environment variables or credentials file. Service sessions and
-cookies remain in memory. See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
-for precedence, backend requirements, and non-interactive use.
-
-For Blackboard only, `auth check` and `doctor --live` also support a read-only
-browser-backed verification path with `--browser`, plus `--interactive` when
-the user needs to finish CAS manually. That path never accepts browser
-credentials in the CLI and never persists browser cookies.
-
-Blackboard also exposes a private native calendar subscription link. Treat that
-link like a bearer token or password: store it only through stdin, let `show`
-mask it by default, and reveal it only with an explicit `--reveal`:
-
-```bash
-# macOS
-pbpaste | sustech bb calendar-link set --url-stdin
-# Windows PowerShell
-Get-Clipboard | sustech bb calendar-link set --url-stdin
-sustech bb calendar-link show
-sustech bb calendar-link fetch --destination ./blackboard.ics
-```
-
-The link is validated before storage and kept in the operating-system
-credential store under a separate Blackboard-calendar namespace, not in the
-credential metadata file. `bb calendar-link fetch` can later refresh that ICS
-feed without a fresh CAS login.
-
-## Guarded workflows
-
-Every remote mutation follows the same pattern: resolve the exact target, run a
-preview or read-only preflight, obtain explicit approval, apply with
-`--confirm`, then verify by reading the live state back.
-
-Enrollment example:
-
-```bash
-sustech tis courses available "machine learning" --round bxxk --json
 sustech tis enroll preview \
   --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2
+
 sustech tis enroll apply \
   --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --bid 2 --confirm
 ```
 
-Availability JSON groups lecture/lab rows into credit-deduplicated bundles and
-labels the exact `courseId` (`p_id`) and component `rwh` roles. If apply returns
-`TIS_SELECTION_OUTCOME_UNKNOWN`, preserve that exact pair and reconcile without
-repeating the write:
+If a write result is ambiguous, the CLI reports
+`DO_NOT_RETRY_AUTOMATICALLY`. It does not trade uncertainty for a duplicate
+submission.
+
+<details>
+<summary><strong>Commands that can change remote state</strong></summary>
+
+- `tis enroll apply`, `tis selection apply`, `tis bid apply`
+- `bb submit apply`, `bb message-send apply`,
+  `bb discussion-post apply`, `bb discussion-reply apply`
+- `booking create apply`, `booking cancel apply`
+- `lib-booking create apply`, `lib-booking cancel apply`
+- `pms upload apply`, `pms delete apply`
+
+All require an exact target and explicit confirmation. Local exports also use
+guarded paths and do not overwrite existing files unless the command documents
+and receives an overwrite option.
+
+</details>
+
+## Credentials
+
+`sustech auth login` verifies the account before storage. Passwords are entered
+through a hidden prompt, never accepted as ordinary command-line arguments, and
+never written to the normal config file.
+
+| Environment | Credential storage |
+| --- | --- |
+| macOS | Keychain |
+| Windows | Credential Manager |
+| Linux desktop | Secret Service |
+| Headless Linux | Password-encrypted local store when configured |
+| Automation | Explicit environment or credentials-file override |
 
 ```bash
-sustech tis selection reconcile enroll \
-  --course-id TIS_INTERNAL_ID --rwh TASK_ID --round bxxk --attempts 3 --json
+sustech auth status
+sustech auth check --service bb --json
+sustech doctor --live
+sustech auth logout
 ```
 
-See [docs/SELECTION_CONTRACTS.md](docs/SELECTION_CONTRACTS.md) for bundle,
-identifier, bounded reconciliation, and grade-free planning-output contracts.
+Service cookies remain in memory. Browser-backed authentication is
+user-completed and ephemeral. Read the full
+[authentication guide](docs/AUTHENTICATION.md) before setting up headless or
+automated use.
 
-Blackboard attachment and submission example:
+## Updates
+
+Interactive terminals check npm for a newer stable release at most once every
+24 hours and ask before installing it. CI, redirected commands, JSON, and JSONL
+are never interrupted by a prompt.
 
 ```bash
-sustech bb attachments _8537_1 _629896_1 --json
-sustech bb grades --course CS208 --submission-state completed --limit 10 --json
-sustech bb assignments --course CS208 --with-attempts --json
-sustech bb assignments _8537_1 --with-attempts --json
-sustech bb download _8537_1 _629896_1 ATTACHMENT_ID \
-  --destination ./homework.pdf
-sustech bb attempt-files _8537_1 _2201_1 --json
-sustech bb attempt-download _8537_1 _2201_1 FILE_ID \
-  --destination ./submitted-homework.pdf
-
-sustech bb submit preview \
-  --course-id _8537_1 --content-id _629896_1 --file homework.pdf
-sustech bb submit apply \
-  --course-id _8537_1 --content-id _629896_1 --column-id _12345_1 \
-  --file homework.pdf --expected-sha256 HASH --confirm
+sustech update
+sustech update --yes
 ```
 
-`bb submit preview` is authenticated but read-only. It resolves assignment IDs,
-checks attempts, due date and upload limit, hashes the file, and emits the exact
-apply command. The same preview/confirm/read-back contract applies to TIS
-selection and bid changes, booking and library-booking create/cancel actions,
-and PMS upload/delete actions. An ambiguous remote write result includes
-`DO_NOT_RETRY_AUTOMATICALLY` and must not be retried automatically.
+Set `SUSTECH_DISABLE_UPDATE_CHECK=1` to disable automatic checks.
 
-Booking and library-booking previews now also try to read exact point-in-time
-room availability before any write. If the live room calendar, room open-times,
-or reservation metadata cannot safely rule out an overlap, preview fails closed
-instead of guessing that the slot is free.
+## Documentation
 
-## Academic change tracking
-
-```bash
-sustech academic snapshot save --destination ./before.json --include-blackboard
-sustech academic changes before.json after.json
-sustech academic watch --state ./academic-state.json --include-blackboard
-```
-
-`academic changes BEFORE AFTER` is the read-only diff command for two saved
-snapshots. `academic watch --state PATH` is a one-shot command: it reads live
-academic state once, compares it against the existing local state file when
-present, reports the changes, and updates that local file. It does not poll, it
-does not loop in the background, and it does not write any remote campus state.
-
-## Daily context for AI assistants
-
-```bash
-sustech context --level terse
-sustech context --live --level normal
-sustech context --live --json
-sustech context --live --level verbose
-```
-
-`context` now has three explicit detail levels:
-
-- `terse`: date, teaching week and parity, holiday/makeup timetable, and current/next class; only the timetable is requested with `--live`
-- `normal` (default): adds the next assignment deadline, recent Blackboard announcement, evaluation, exam, weather and AQI with `--live`
-- `verbose`: also retrieves library opening status
-
-All dates and display times use **Asia/Shanghai**, including on overseas machines.
-JSON includes `generatedAt` (snapshot creation), `referenceAt` (the instant used
-for class/deadline selection), `timezone`, and the full public `academicDay`.
-`schedule.currentClass`, `nextClass`, and `todayClasses` expose ISO timestamps,
-periods, locations when available, and `makeupFor` dates. Current and next classes
-can appear together; holiday/makeup dates use the same rules as ICS exports.
-
-`sourceStatus` distinguishes a successful empty result (`empty`) from unavailable
-data (`missing`). `liveSources` adds errors, missing credentials, partial coverage,
-and intentionally skipped requests (`not-requested`). An empty result describes
-only the successfully retrieved sources; it is not a claim about all university
-systems. A failed public calendar fetch does not prevent other available sources
-from being returned.
-
-Weather and air quality include source URLs and upstream `observedAt` timestamps
-when supplied. Observations older than three hours are labeled `stale`; absent
-timestamps are `unknown`. AQI uses **US EPA** categories, not China's AQI scale.
-Public environmental requests time out after eight seconds, and TIS, Blackboard,
-and environmental reads run concurrently.
-
-Without `--live`, only the date/calendar snapshot is requested. Use
-`context --date YYYY-MM-DD` for a calendar preview (reference time: noon in
-Shanghai); combining a non-today date with `--live` is rejected so today's
-observations cannot be mistaken for historical data or forecasts.
-
-## Library catalog
-
-```bash
-sustech library search "graph neural networks" --limit 5
-sustech library detail PC:cdi_proquest_miscellaneous_1901310093
-sustech library search "graph neural networks" --browser --interactive
-sustech library detail L:alma991234567890106575 --browser
-```
-
-`library search` and `library detail` are read-only Primo catalog commands.
-`--browser` forces the browser-backed path. If that path redirects to CAS, the
-user must complete authentication manually in the browser window. The CLI does
-not accept browser credentials, does not solve CAPTCHAs, and does not persist
-browser cookies. On some hosts, public Primo HTTP access may still be limited by
-runtime TLS behavior; `--browser` is the supported fallback.
-
-## Conservative course planning
-
-```bash
-sustech tis plan recommend CS330 MA203 --round bxxk --path ./tis-plan.json --max 5
-sustech tis plan explain CS330 --round bxxk --path ./tis-plan.json
-```
-
-These commands are read-only planning helpers. They do not add courses, do not
-submit selection writes, do not treat NCES as official data, and do not guess
-prerequisites. `recommend` ranks candidate sections using the current
-selectable-course snapshot, timetable-fit evidence, seat observations, optional
-degree-progress or degree-missing data, and optional NCES matches. `explain`
-shows the same evidence for one exact course code or RWH. Degree relevance stays
-conservative: if the available evidence is ambiguous, the result stays in manual
-review instead of being promoted to a definite requirement match.
-
-## Current limitations
-
-- Blackboard submission uses a Classic/Original HTTP form with the CAS session
-  and REST attempt read-back. An individual Original file resubmission passed
-  live CLI submission and read-back on 2026-09-11. Text submission and the
-  first-submission 404 fallback remain fixture-tested only.
-- Student-submitted attempt files are separate from teacher-provided content
-  attachments. `bb attempt-files` lists one attempt's files, and
-  `bb attempt-download` downloads one of them to an explicit local path when
-  Blackboard exposes a working attempt-file download endpoint for that record;
-  otherwise the CLI now fails closed with
-  `BLACKBOARD_ATTEMPT_FILE_UNAVAILABLE`.
-- Primo catalog access has both direct and browser-backed paths, but direct
-  public HTTP access can still depend on the local runtime's TLS behavior. When
-  in doubt, use `--browser` and complete any CAS step manually.
-- Fresh CAS logins for TIS- and Blackboard-backed commands may stop before
-  password submission with `CAS_INTERACTIVE_CHALLENGE_REQUIRED` when CAS serves
-  an interactive slide CAPTCHA. The CLI will not bypass that challenge. A
-  previously stored Blackboard native calendar link can still be fetched
-  without CAS.
-- Blackboard submission remains entirely in the CLI: a fresh form nonce and
-  exact target are validated before one multipart POST to `uploadAssignment`.
-  It supports individual Classic/Original file or text submissions with no
-  Playwright dependency in the write path. Ultra/group assignments and silent
-  draft resumption are unsupported. An attempts-list 404 becomes empty only
-  after a matching blank first-submission view form confirms that state.
-- Blackboard `bb message-send preview/apply` stays on the official course
-  message create endpoint, binds apply to the previewed SHA-256 plus exact
-  recipient IDs, and verifies the created message by Sent-folder read-back. It
-  is still protocol/fixture-tested only.
-- Newly added TIS selection, booking, library-booking, and PMS write paths are
-  protocol/fixture-tested only. No real account mutation was performed while
-  building this expansion.
-- PMS may require the campus network, and first-time account linking may still
-  require a browser-side step.
-- Reusable service-adapter status can differ from the CLI's wired end-to-end
-  status. Inspect `sustech services status` and [docs/SERVICES.md](docs/SERVICES.md).
-
-Module-by-module migration status is tracked in
-[docs/MIGRATION.md](docs/MIGRATION.md). Architecture and safety invariants are
-documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+| Guide | What it covers |
+| --- | --- |
+| [Command output](docs/OUTPUT.md) | JSON envelopes, JSONL, exit codes |
+| [Authentication](docs/AUTHENTICATION.md) | profiles, credential backends, browser fallback |
+| [MCP](docs/MCP.md) | local server setup and read-only boundary |
+| [Academic snapshots](docs/ACADEMIC_SNAPSHOTS.md) | save, diff, changes, one-shot watch |
+| [Course detail](docs/TIS_COURSE_DETAIL.md) | exact teaching-task selection and enrichment |
+| [Degree progress](docs/DEGREE_PROGRESS.md) | official progress, missing courses, local audit |
+| [Selection contracts](docs/SELECTION_CONTRACTS.md) | previews, identifiers, reconciliation |
+| [Services](docs/SERVICES.md) | implementation and transport status |
+| [Architecture](docs/ARCHITECTURE.md) | module boundaries and safety invariants |
 
 ## Development
 
@@ -530,20 +270,25 @@ cd sustech-cli
 npm ci
 npm run check
 npm test
-npm run build
-node dist/cli.js --help
 ```
 
-Cross-platform CI runs checks, tests, native credential-store smoke tests where
-available, and `npm pack --dry-run` on Ubuntu, macOS, and Windows. Releases use
-the tagged, manually triggered Trusted Publishing workflow in
-[.github/workflows/publish.yml](.github/workflows/publish.yml); no long-lived npm
-token is stored in GitHub.
+Cross-platform CI covers Ubuntu, macOS, and Windows on supported Node.js
+versions. Releases use npm Trusted Publishing; no long-lived npm token is
+stored in GitHub.
 
-## Attribution and license
+## Project Status
 
-This project is a TypeScript reimplementation informed by
-[`dumixthestpd/sustech_survival`](https://github.com/dumixthestpd/sustech_survival).
-It preserves that project's required copyright notice and is distributed under
-the PolyForm Noncommercial License 1.0.0. See [NOTICE.md](NOTICE.md) and
-[LICENSE](LICENSE).
+Upstream university systems change independently and some authenticated flows
+can stop at an interactive CAPTCHA. The CLI fails visibly when it cannot
+establish reliable state; it does not claim success from an incomplete read.
+Current transport notes and known limitations live in
+[the service matrix](docs/SERVICES.md).
+
+## Attribution and License
+
+This project is informed by
+[`dumixthestpd/sustech_survival`](https://github.com/dumixthestpd/sustech_survival)
+and preserves its required copyright notice.
+
+Distributed under the [PolyForm Noncommercial License 1.0.0](LICENSE). See
+[NOTICE.md](NOTICE.md) for attribution details.
