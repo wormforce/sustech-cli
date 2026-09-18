@@ -67,7 +67,7 @@ export interface CredentialProfileStatus {
   persistent: boolean;
   storedAt?: string;
   profiles: string[];
-  reasonCode?: "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT";
+  reasonCode?: "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT" | "MASTER_PASSWORD_REQUIRED" | "MASTER_PASSWORD_INVALID";
   reason?: string;
   remediation?: string;
 }
@@ -638,7 +638,12 @@ async function resolveLinuxEncryptedFile(
     if (options.promptForMasterPassword) {
       return await options.promptForMasterPassword();
     }
-    throw new Error("Encrypted credential store requires a master password, but no password provider was configured.");
+    throw new CliError(
+      "Encrypted credential store requires a master password. Set SUSTECH_MASTER_PASSWORD or run interactively.",
+      "MASTER_PASSWORD_REQUIRED",
+      2,
+      { backend: "linux-encrypted-file" },
+    );
   };
 
   const encryptedStore = new EncryptedStore({ storePath, getMasterPassword });
@@ -779,6 +784,9 @@ function requireMatchingStore(resolution: BackendResolution, expected: Credentia
 }
 
 function storeAccessError(subject: string, operation: string, backend: CredentialBackend, error: unknown): CliError {
+  if (error instanceof CliError && (error.code === "MASTER_PASSWORD_REQUIRED" || error.code === "MASTER_PASSWORD_INVALID")) {
+    return error;
+  }
   return new CliError(
     `Could not ${operation} ${subject} using ${backend}.`,
     "CREDENTIAL_STORE_ERROR",
@@ -882,10 +890,16 @@ function safeStoreReason(error: unknown): string {
     : "The operating-system credential store rejected or could not complete the request.";
 }
 
-function credentialStatusReasonCode(error: unknown): "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT" {
-  return error && typeof error === "object" && "code" in error && error.code === "CREDENTIAL_STORE_TIMEOUT"
-    ? "CREDENTIAL_STORE_TIMEOUT"
-    : "CREDENTIAL_STORE_ERROR";
+function credentialStatusReasonCode(
+  error: unknown,
+): "CREDENTIAL_STORE_ERROR" | "CREDENTIAL_STORE_TIMEOUT" | "MASTER_PASSWORD_REQUIRED" | "MASTER_PASSWORD_INVALID" {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = error.code;
+    if (code === "CREDENTIAL_STORE_TIMEOUT") return "CREDENTIAL_STORE_TIMEOUT";
+    if (code === "MASTER_PASSWORD_REQUIRED") return "MASTER_PASSWORD_REQUIRED";
+    if (code === "MASTER_PASSWORD_INVALID") return "MASTER_PASSWORD_INVALID";
+  }
+  return "CREDENTIAL_STORE_ERROR";
 }
 
 function storeRemediation(error: unknown): string | undefined {

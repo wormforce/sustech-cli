@@ -5,6 +5,7 @@ export interface ScheduleSlot {
   periodStart: number;
   periodEnd: number;
   room: string;
+  rooms?: string[];
 }
 
 export interface Course {
@@ -57,11 +58,14 @@ export interface PersonalScheduleEntry {
   courseName: string;
   teacher: string;
   room: string;
+  rooms?: string[];
   description: string;
   descriptionEn: string;
   day?: number;
   periodStart?: number;
   periodEnd?: number;
+  startAt?: string;
+  endAt?: string;
   weeks: number[];
 }
 

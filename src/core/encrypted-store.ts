@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { CliError } from "./errors.js";
 
 const pbkdf2Async = promisify(pbkdf2);
 
@@ -77,7 +78,12 @@ export class EncryptedStore {
       if (error && typeof error === "object" && "message" in error) {
         const message = String(error.message);
         if (/Unsupported state|bad decrypt/i.test(message)) {
-          throw new Error("Encrypted store decryption failed; the master password may be incorrect.");
+          throw new CliError(
+            "Encrypted store decryption failed; the master password may be incorrect.",
+            "MASTER_PASSWORD_INVALID",
+            2,
+            { backend: "linux-encrypted-file" },
+          );
         }
       }
       throw error;

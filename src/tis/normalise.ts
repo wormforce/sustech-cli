@@ -94,13 +94,17 @@ export function parseScheduleLine(line: string): ScheduleSlot | undefined {
   if (match.groups.parity === "双") weeks = weeks.filter((week) => week % 2 === 0);
   const day = DAY_CHARS.indexOf(match.groups.day) + 1;
   const periodStart = Number(match.groups.start);
+  const periodEnd = Number(match.groups.end ?? match.groups.start);
+  const room = match.groups.room.trim();
+  const rooms = parseRoomList(room);
   return {
     weeks,
     day,
     dayName: DAY_NAMES[day] ?? `day${day}`,
     periodStart,
-    periodEnd: Number(match.groups.end ?? match.groups.start),
-    room: match.groups.room.trim(),
+    periodEnd,
+    room,
+    ...(rooms && rooms.length > 1 ? { rooms } : {}),
   };
 }
 
@@ -119,6 +123,10 @@ export function normalisePersonalScheduleEntry(raw: Record<string, unknown>): Pe
     ?? (keyMatch ? Number(keyMatch[2]) : descriptionMeeting ? Number(descriptionMeeting[4]) : undefined);
   const periodEnd = numberValue(raw.JSJC ?? raw.jsjc)
     ?? (descriptionMeeting ? Number(descriptionMeeting[5] ?? descriptionMeeting[4]) : periodStart);
+  
+  const room = firstString(raw, ["SKDD", "JXDD", "JXCDMC", "room"]) || descriptionMeeting?.[3]?.trim() || "";
+  const rooms = room ? parseRoomList(room) : undefined;
+  
   return {
     rwh: firstString(raw, ["RWH", "rwh"]),
     key,
@@ -127,7 +135,8 @@ export function normalisePersonalScheduleEntry(raw: Record<string, unknown>): Pe
       || description.split("\n")[0]?.trim()
       || "",
     teacher: firstString(raw, ["SKJS", "DGJSMC", "dgjsmc", "teacher"]) || descriptionTeacher,
-    room: firstString(raw, ["SKDD", "JXDD", "JXCDMC", "room"]) || descriptionMeeting?.[3]?.trim() || "",
+    room,
+    ...(rooms && rooms.length > 1 ? { rooms } : {}),
     description,
     descriptionEn: firstString(raw, ["SKSJ_EN", "sksj_en"]),
     ...(keyMatch ? { day: Number(keyMatch[1]) } : {}),
@@ -188,6 +197,12 @@ export function gradePoints(letterGrade: string, numericScore?: number): number 
   if (numericScore >= 63) return 1.7;
   if (numericScore >= 62) return 1;
   return 1;
+}
+
+function parseRoomList(room: string): string[] | undefined {
+  if (!room) return undefined;
+  const parts = room.split(/[,，、;；]/).map((part) => part.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
 }
 
 function expandWeeks(value: string): number[] {

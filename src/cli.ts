@@ -76,7 +76,7 @@ import {
 import { parseSemester, type Semester } from "./core/semester.js";
 import { CLI_VERSION } from "./core/version.js";
 import { checkForUpdate, installLatest, shouldAutomaticallyCheck } from "./core/update.js";
-import { AcademicCalendar, CalendarClient } from "./calendar/client.js";
+import { AcademicCalendar, CalendarClient, CalendarTerm } from "./calendar/client.js";
 import { formatCalendarDay, formatCalendarTerms } from "./calendar/text.js";
 import type { CalendarLevel } from "./calendar/types.js";
 import {
@@ -548,7 +548,7 @@ Usage:
   sustech tis courses available [KEYWORD] --round ROUND [--semester YYYY-YYYY-N] [--limit N]
   sustech tis courses detail CODE [--rwh RWH] [--round ROUND] [--semester YYYY-YYYY-N]
   sustech tis enrolled [--semester YYYY-YYYY-N]
-  sustech tis schedule [--semester YYYY-YYYY-N] [--week N|--all]
+  sustech tis schedule [--semester YYYY-YYYY-N] [--week N|--date YYYY-MM-DD|--all]
   sustech tis grades [--semester YYYY-YYYY-N]
   sustech tis exams
   sustech tis timetable CODE... [--semester YYYY-YYYY-N] [--block MON:1-4] [--max N] [--refresh]
@@ -1044,22 +1044,66 @@ async function main(argv: string[]): Promise<void> {
   }
   if (command === "schedule" && operation === undefined) {
     if (values.all && values.week !== undefined) throw usageError("Choose either --week or --all, not both.");
+    if (values.all && values.date !== undefined) throw usageError("Choose either --date or --all, not both.");
+    if (values.date !== undefined && values.week !== undefined) throw usageError("Choose either --date or --week, not both.");
     const semester = parseSemester(values.semester);
     const client = await tisClient(values);
-    const week = values.all
-      ? undefined
-      : values.week === undefined
-        ? await client.currentWeek()
-        : parsePositiveInteger(values.week, 1, "--week");
+    let week: number | undefined;
+    let resolvedDate: string | undefined;
+    if (values.all) {
+      week = undefined;
+    } else if (values.date !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(values.date)) {
+        throw usageError("--date must be in YYYY-MM-DD format.");
+      }
+      resolvedDate = values.date;
+      const calendar = await new CalendarClient().loadYear(Number(semester.xn.split("-")[0]), "undergraduate");
+      const term = calendar.terms().find((t: CalendarTerm) => t.snapshot.semester.value === semester.value);
+      if (!term) {
+        throw new CliError(`Calendar term not found for semester ${semester.value}.`, "CALENDAR_TERM_NOT_FOUND", 2);
+      }
+      week = term.weekOf(resolvedDate);
+      if (week === 0) {
+        throw new CliError(`Date ${resolvedDate} is not within the teaching period of ${semester.value}.`, "DATE_OUT_OF_SEMESTER", 2);
+      }
+    } else if (values.week === undefined) {
+      week = await client.currentWeek();
+    } else {
+      week = parsePositiveInteger(values.week, 1, "--week");
+    }
     if (week !== undefined && week > 36) throw usageError("--week must be between 1 and 36.");
-    const entries = await client.schedule(semester, week);
-    const data = { semester, ...(week !== undefined ? { week } : {}), entries, total: entries.length };
+    let entries = await client.schedule(semester, week);
+    
+    if (week !== undefined) {
+      const calendar = await new CalendarClient().loadYear(Number(semester.xn.split("-")[0]), "undergraduate");
+      const term = calendar.terms().find((t: CalendarTerm) => t.snapshot.semester.value === semester.value);
+      if (term) {
+        const { enrichScheduleEntriesWithDatetimes } = await import("./tis/client.js");
+        entries = enrichScheduleEntriesWithDatetimes(entries, {
+          teachingStartDate: term.snapshot.teachingStart,
+          week,
+        });
+      }
+    }
+    
+    const data = {
+      semester,
+      ...(week !== undefined ? { week } : {}),
+      ...(resolvedDate ? { date: resolvedDate } : {}),
+      entries,
+      total: entries.length,
+    };
     writeSuccess({
       command: "tis schedule",
       data,
       text: formatScheduleEntries(semester, entries, week),
       items: entries,
-      summary: { semester: semester.value, ...(week !== undefined ? { week } : {}), total: entries.length },
+      summary: {
+        semester: semester.value,
+        ...(week !== undefined ? { week } : {}),
+        ...(resolvedDate ? { date: resolvedDate } : {}),
+        total: entries.length,
+      },
     }, output);
     return;
   }

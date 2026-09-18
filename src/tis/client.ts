@@ -27,6 +27,7 @@ import {
   type EvaluationCourseStatus,
   type EvaluationStatusFilter,
 } from "./remaining-evaluation.js";
+import { PERIOD_START_TIMES, PERIOD_DURATION_MINUTES } from "./remaining-calendar.js";
 import type { SelectionPreview } from "./remaining-selection.js";
 import { bundleSelectionCourses, type SelectionCourseBundle } from "./selection-bundles.js";
 import type {
@@ -660,4 +661,51 @@ function mutationTransportError(
       next: "Run `sustech tis selection reconcile` for this exact courseId/rwh/round target; do not repeat the mutation.",
     },
   );
+}
+
+export function enrichScheduleEntriesWithDatetimes(
+  entries: PersonalScheduleEntry[],
+  options: { teachingStartDate: string; week?: number },
+): PersonalScheduleEntry[] {
+  return entries.map((entry) => enrichScheduleEntryWithDatetime(entry, options));
+}
+
+function enrichScheduleEntryWithDatetime(
+  entry: PersonalScheduleEntry,
+  options: { teachingStartDate: string; week?: number },
+): PersonalScheduleEntry {
+  if (entry.periodStart === undefined || entry.periodEnd === undefined || entry.day === undefined) {
+    return entry;
+  }
+  
+  const startSlot = PERIOD_START_TIMES[entry.periodStart];
+  const endSlot = PERIOD_START_TIMES[entry.periodEnd];
+  if (!startSlot || !endSlot) {
+    return entry;
+  }
+
+  if (options.week === undefined || !entry.weeks.includes(options.week)) {
+    return entry;
+  }
+
+  const teachingStart = new Date(options.teachingStartDate);
+  const mondayOfWeek = new Date(teachingStart);
+  mondayOfWeek.setUTCDate(teachingStart.getUTCDate() + (options.week - 1) * 7);
+  
+  const classDate = new Date(mondayOfWeek);
+  classDate.setUTCDate(mondayOfWeek.getUTCDate() + (entry.day - 1));
+  
+  const dateStr = classDate.toISOString().slice(0, 10);
+  
+  const startHour = String(startSlot[0]).padStart(2, "0");
+  const startMinute = String(startSlot[1]).padStart(2, "0");
+  const endMinutes = endSlot[0] * 60 + endSlot[1] + PERIOD_DURATION_MINUTES;
+  const endHour = String(Math.floor(endMinutes / 60)).padStart(2, "0");
+  const endMinute = String(endMinutes % 60).padStart(2, "0");
+  
+  return {
+    ...entry,
+    startAt: `${dateStr}T${startHour}:${startMinute}:00+08:00`,
+    endAt: `${dateStr}T${endHour}:${endMinute}:00+08:00`,
+  };
 }

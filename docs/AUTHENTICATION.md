@@ -115,9 +115,17 @@ profile metadata or assume the password expired merely because the collection
 is locked.
 
 For the encrypted-file backend, decryption failures indicate an incorrect
-master password. The backend does not impose a retry limit or lockout; protect
-the master password accordingly. Each encrypted credential entry uses a unique
-salt and initialization vector to prevent cross-entry attacks.
+master password and produce `MASTER_PASSWORD_INVALID`. Missing master passwords
+produce `MASTER_PASSWORD_REQUIRED` with remediation mentioning
+`SUSTECH_MASTER_PASSWORD` or interactive unlock. The backend does not impose a
+retry limit or lockout; protect the master password accordingly. Each encrypted
+credential entry uses a unique salt and initialization vector to prevent
+cross-entry attacks.
+
+`auth status`, `doctor`, and credential read paths now consistently distinguish:
+backend available vs profile metadata present vs secret unlockable vs remote
+auth OK. When the linux-encrypted-file backend is active, missing or incorrect
+master passwords fail with stable error codes rather than generic store errors.
 
 ## Profiles
 
