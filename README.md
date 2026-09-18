@@ -8,13 +8,6 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/sustech-cli"><img alt="npm" src="https://img.shields.io/npm/v/sustech-cli?style=flat-square&color=ED6D00"></a>
-  <a href="https://github.com/wormforce/sustech-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/wormforce/sustech-cli/ci.yml?branch=main&style=flat-square&label=build&color=004748"></a>
-  <a href="https://www.npmjs.com/package/sustech-cli"><img alt="Node.js" src="https://img.shields.io/node/v/sustech-cli?style=flat-square&color=004748"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-555555?style=flat-square"></a>
-</p>
-
-<p align="center">
   <a href="#quick-start"><strong>Quick start</strong></a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#for-ai-assistants">AI assistants</a> ·
