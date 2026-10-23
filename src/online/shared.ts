@@ -13,7 +13,39 @@ export const ONLINE_SITE_ORIGIN = "https://sustech.online";
 export const ONLINE_REPO_OWNER = "SUSTech-CRA";
 export const ONLINE_REPO_NAME = "sustech-online-ng";
 export const ONLINE_REPO_BRANCH = "master";
-export const ONLINE_RAW_ORIGIN = "https://raw.githubusercontent.com";
+const DEFAULT_ONLINE_RAW_BASE = `https://raw.githubusercontent.com/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}`;
+
+function normaliseOnlineRawBase(value: string): string | undefined {
+  const candidate = value.trim().replace(/\/+$/, "");
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" || url.search || url.hash) return undefined;
+  } catch {
+    return undefined;
+  }
+  return candidate;
+}
+
+export function onlineRawBase(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.SUSTECH_ONLINE_RAW_BASE?.trim();
+  if (!configured) return DEFAULT_ONLINE_RAW_BASE;
+  const normalised = normaliseOnlineRawBase(configured);
+  if (!normalised) {
+    throw new CliError(
+      "SUSTECH_ONLINE_RAW_BASE must be a plain HTTPS URL without a query string or fragment.",
+      "ONLINE_RAW_BASE_INVALID",
+      2,
+      { variable: "SUSTECH_ONLINE_RAW_BASE" },
+    );
+  }
+  return normalised;
+}
+
+export const ONLINE_RAW_BASE = normaliseOnlineRawBase(process.env.SUSTECH_ONLINE_RAW_BASE ?? "") ?? DEFAULT_ONLINE_RAW_BASE;
+const ONLINE_RAW_BASE_URL = new URL(ONLINE_RAW_BASE);
+export const ONLINE_RAW_ORIGIN = ONLINE_RAW_BASE_URL.origin;
+export const ONLINE_RAW_BASE_PATH = `${ONLINE_RAW_BASE_URL.pathname.replace(/\/+$/, "")}/`;
 export const ONLINE_TALKS_INDEX_REPO_PATH = "docs/study/talks/README.md";
 export const ONLINE_TALKS_DIRECTORY_REPO_PATH = "docs/study/talks";
 export const ONLINE_CONTACT_REPO_PATH = "docs/contact/README.md";
@@ -95,7 +127,7 @@ export function buildOnlineProvenance(
 export function onlineRawUrl(repoPath: string): string {
   assertAllowedOnlineRepoPath(repoPath);
   const segments = repoPath.split("/").map((segment) => encodeURIComponent(segment));
-  return `${ONLINE_RAW_ORIGIN}/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}/${segments.join("/")}`;
+  return `${onlineRawBase()}/${segments.join("/")}`;
 }
 
 export function onlineSiteUrl(sitePath: string): string {
@@ -387,8 +419,7 @@ function validateFetchedUrl(value: string, expected: string, kind: "raw" | "site
     });
   }
   if (kind === "raw") {
-    const expectedPrefix = `/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}/docs/`;
-    if (url.origin !== ONLINE_RAW_ORIGIN || !url.pathname.startsWith(expectedPrefix)) {
+    if (url.origin !== ONLINE_RAW_ORIGIN || !url.pathname.startsWith(`${ONLINE_RAW_BASE_PATH}docs/`)) {
       throw new CliError("The fetched SUSTech Online source escaped the raw allowlist.", "ONLINE_SOURCE_NOT_ALLOWED", 2, {
         sourceUrl: value,
       });

@@ -100,6 +100,24 @@ the community site. Poster links are limited to those hosts plus the exact
 image-mirror host currently used by the upstream talks archive; unrelated,
 social, document-sharing, and deceptive lookalike domains are omitted.
 
+### Mirrors and restricted networks
+
+Some networks cannot reach `raw.githubusercontent.com`. Set
+`SUSTECH_ONLINE_RAW_BASE` to a plain HTTPS base that serves the same repository;
+the default is
+`https://raw.githubusercontent.com/SUSTech-CRA/sustech-online-ng/master`.
+
+```bash
+export SUSTECH_ONLINE_RAW_BASE="https://ghfast.top/https://raw.githubusercontent.com/SUSTech-CRA/sustech-online-ng/master"
+sustech online talks list --limit 5
+```
+
+The raw allowlist is derived from this base. Redirects are still rejected and
+the final URL must still match the constructed target exactly, so mirrors that
+answer with a 3xx redirect cannot be used. Values that are not HTTPS URLs
+without a query string or fragment are rejected with
+`ONLINE_RAW_BASE_INVALID`.
+
 Rendered-page metadata is optional; raw Markdown is required. Tests use frozen
 synthetic fixtures and do not copy the upstream contact or talks content into
 the package.

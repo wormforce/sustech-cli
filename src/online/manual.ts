@@ -7,11 +7,10 @@ import {
   ONLINE_DEFAULT_STALE_AFTER_DAYS,
   ONLINE_DEFAULT_TIMEOUT_MS,
   ONLINE_MAX_DOCUMENT_BYTES,
+  ONLINE_RAW_BASE_PATH,
   ONLINE_RAW_ORIGIN,
-  ONLINE_REPO_BRANCH,
-  ONLINE_REPO_NAME,
-  ONLINE_REPO_OWNER,
   ONLINE_SITE_ORIGIN,
+  onlineRawBase,
   scoreSearchMatch,
   type OnlineFetchOptions,
 } from "./shared.js";
@@ -242,7 +241,7 @@ export function createOnlineManualAdapter(fetchImpl: typeof fetch = globalThis.f
 export function onlineManualRawUrl(repoPath: string): string {
   assertAllowedManualRepoPath(repoPath);
   const segments = repoPath.split("/").map((segment) => encodeURIComponent(segment));
-  return `${ONLINE_RAW_ORIGIN}/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}/${segments.join("/")}`;
+  return `${onlineRawBase()}/${segments.join("/")}`;
 }
 
 export function onlineManualSiteUrl(sitePath: string): string {
@@ -774,13 +773,12 @@ function validateFetchedManualUrl(value: string, expected: string, kind: "raw" |
     );
   }
   if (kind === "raw") {
-    const expectedPrefix = `/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}/docs/`;
-    if (url.origin !== ONLINE_RAW_ORIGIN || !url.pathname.startsWith(expectedPrefix)) {
+    if (url.origin !== ONLINE_RAW_ORIGIN || !url.pathname.startsWith(`${ONLINE_RAW_BASE_PATH}docs/`)) {
       throw new CliError("The fetched SUSTech Online manual source escaped the raw allowlist.", "ONLINE_SOURCE_NOT_ALLOWED", 2, {
         sourceUrl: value,
       });
     }
-    assertAllowedManualRepoPath(decodeOnlinePath(url.pathname.slice(expectedPrefix.length - "docs/".length)));
+    assertAllowedManualRepoPath(decodeOnlinePath(url.pathname.slice(ONLINE_RAW_BASE_PATH.length)));
     return;
   }
   if (url.origin !== ONLINE_SITE_ORIGIN) {
