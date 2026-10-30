@@ -115,7 +115,7 @@ sustech online talks list --limit 5
 The raw allowlist is derived from this base. Redirects are still rejected and
 the final URL must still match the constructed target exactly, so mirrors that
 answer with a 3xx redirect cannot be used. Values that are not HTTPS URLs
-without a query string or fragment are rejected with
+without embedded credentials, a query string, or a fragment are rejected with
 `ONLINE_RAW_BASE_INVALID`.
 
 Rendered-page metadata is optional; raw Markdown is required. Tests use frozen

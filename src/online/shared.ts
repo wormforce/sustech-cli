@@ -1,4 +1,5 @@
 import { CliError } from "../core/errors.js";
+import { normaliseHttpsBase, resolveHttpsBase } from "../core/raw-base.js";
 import { USER_AGENT } from "../core/version.js";
 import {
   collapseWhitespace,
@@ -15,34 +16,11 @@ export const ONLINE_REPO_NAME = "sustech-online-ng";
 export const ONLINE_REPO_BRANCH = "master";
 const DEFAULT_ONLINE_RAW_BASE = `https://raw.githubusercontent.com/${ONLINE_REPO_OWNER}/${ONLINE_REPO_NAME}/${ONLINE_REPO_BRANCH}`;
 
-function normaliseOnlineRawBase(value: string): string | undefined {
-  const candidate = value.trim().replace(/\/+$/, "");
-  if (!candidate) return undefined;
-  try {
-    const url = new URL(candidate);
-    if (url.protocol !== "https:" || url.search || url.hash) return undefined;
-  } catch {
-    return undefined;
-  }
-  return candidate;
-}
-
 export function onlineRawBase(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.SUSTECH_ONLINE_RAW_BASE?.trim();
-  if (!configured) return DEFAULT_ONLINE_RAW_BASE;
-  const normalised = normaliseOnlineRawBase(configured);
-  if (!normalised) {
-    throw new CliError(
-      "SUSTECH_ONLINE_RAW_BASE must be a plain HTTPS URL without a query string or fragment.",
-      "ONLINE_RAW_BASE_INVALID",
-      2,
-      { variable: "SUSTECH_ONLINE_RAW_BASE" },
-    );
-  }
-  return normalised;
+  return resolveHttpsBase("SUSTECH_ONLINE_RAW_BASE", DEFAULT_ONLINE_RAW_BASE, "ONLINE_RAW_BASE_INVALID", env);
 }
 
-export const ONLINE_RAW_BASE = normaliseOnlineRawBase(process.env.SUSTECH_ONLINE_RAW_BASE ?? "") ?? DEFAULT_ONLINE_RAW_BASE;
+export const ONLINE_RAW_BASE = normaliseHttpsBase(process.env.SUSTECH_ONLINE_RAW_BASE) ?? DEFAULT_ONLINE_RAW_BASE;
 const ONLINE_RAW_BASE_URL = new URL(ONLINE_RAW_BASE);
 export const ONLINE_RAW_ORIGIN = ONLINE_RAW_BASE_URL.origin;
 export const ONLINE_RAW_BASE_PATH = `${ONLINE_RAW_BASE_URL.pathname.replace(/\/+$/, "")}/`;

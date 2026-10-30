@@ -1,5 +1,6 @@
 import { CliError } from "../core/errors.js";
 import { fetchJson } from "../core/http.js";
+import { resolveHttpsBase } from "../core/raw-base.js";
 import type { Semester } from "../core/semester.js";
 import type {
   CalendarDayInfo,
@@ -15,6 +16,10 @@ import type {
 } from "./types.js";
 
 const DEFAULT_REPO_BASE = "https://raw.githubusercontent.com/dumixthestpd/sustech-calendar/main";
+
+export function calendarRepoBase(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveHttpsBase("SUSTECH_CALENDAR_RAW_BASE", DEFAULT_REPO_BASE, "CALENDAR_RAW_BASE_INVALID", env);
+}
 const WEEKDAYS: WeekdayName[] = [
   "Monday",
   "Tuesday",
@@ -206,7 +211,7 @@ export class CalendarClient {
     level: CalendarLevel = "undergraduate",
     options: { baseUrl?: string; timeoutMs?: number } = {},
   ): Promise<AcademicCalendar> {
-    const baseUrl = yearBaseUrl(options.baseUrl ?? DEFAULT_REPO_BASE, year);
+    const baseUrl = yearBaseUrl(options.baseUrl ?? calendarRepoBase(), year);
     const [undergraduate, graduate, general] = await Promise.all([
       fetchJson(`${baseUrl}/undergraduate.json`, options),
       fetchJson(`${baseUrl}/graduate.json`, options),
