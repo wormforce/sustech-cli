@@ -4,6 +4,13 @@ All notable changes to `sustech-cli` are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS Keychain credentials no longer prompt for the login password on every
+  command after a Node/Homebrew upgrade. The stored item now trusts the stable
+  `/usr/bin/security` helper instead of the Node interpreter that created it,
+  and `auth login` can replace an item whose ACL no longer permits reads.
+
 ## [0.13.0] - 2026-10-19
 
 ### Added
