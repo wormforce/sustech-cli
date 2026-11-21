@@ -101,6 +101,36 @@ test("saving a named profile never changes the implicit default profile", async 
   }
 });
 
+test("a new login replaces a credential the old ACL no longer allows reading", async () => {
+  const configDir = await mkdtemp(join(tmpdir(), "sustech-cli-keyring-stale-acl-"));
+  const store = new MemoryStore();
+  try {
+    await saveStoredCredentials({ sid: "12410000", password: "old-secret" }, { configDir, store });
+    const readableGet = store.get.bind(store);
+    let denyNextRead = true;
+    store.get = async (account: string) => {
+      if (denyNextRead) {
+        denyNextRead = false;
+        throw new Error("macOS Keychain read was denied by the item ACL.");
+      }
+      return await readableGet(account);
+    };
+
+    const saved = await saveStoredCredentials(
+      { sid: "12410000", password: "new-secret" },
+      { configDir, store },
+    );
+    assert.equal(saved.backend, "macos-keychain");
+    assert.equal(store.values.get("default:12410000"), "new-secret");
+    assert.deepEqual(
+      (await loadStoredCredentials(undefined, { configDir, store, env: {} })).password,
+      "new-secret",
+    );
+  } finally {
+    await rm(configDir, { recursive: true, force: true });
+  }
+});
+
 test("an unverified credential write is rolled back before metadata is committed", async () => {
   const configDir = await mkdtemp(join(tmpdir(), "sustech-cli-keyring-verify-"));
   const store = new MemoryStore();

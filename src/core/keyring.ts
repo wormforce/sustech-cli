@@ -166,9 +166,17 @@ export async function saveStoredCredentials(
 
   const account = existing?.account ?? credentialAccount(profile, sid);
   let previousPassword: string | undefined;
-  let secretTouched = false;
+  let previousReadable = false;
   try {
     previousPassword = await store.get(account);
+    previousReadable = true;
+  } catch {
+    // The old item may be protected by an ACL that no longer trusts this
+    // interpreter (for example after a Node/Homebrew upgrade). A fresh login
+    // must still be able to replace it, so carry on without a rollback baseline.
+  }
+  let secretTouched = false;
+  try {
     await store.set(account, password);
     secretTouched = true;
     const verifiedPassword = await store.get(account);
@@ -182,7 +190,7 @@ export async function saveStoredCredentials(
       );
     }
   } catch (error) {
-    if (secretTouched && !await restoreSecret(store, account, previousPassword)) {
+    if (secretTouched && previousReadable && !await restoreSecret(store, account, previousPassword)) {
       throw credentialRollbackError("save", store.backend);
     }
     throw storeAccessError("credentials", "write", store.backend, error);
@@ -484,9 +492,6 @@ async function resolveMacosKeychain(
   const timeoutMs = credentialCommandTimeoutMs(options);
   try {
     await access(executable, constants.X_OK);
-    const { AsyncEntry } = await import("@napi-rs/keyring");
-    // Construction initializes the native Security-framework store without reading or writing a credential.
-    new AsyncEntry(namespace.service, "availability-probe");
     const store: SecretStore = {
       backend,
       persistent: true,
@@ -494,20 +499,30 @@ async function resolveMacosKeychain(
         return await macosCredentialExists(executable, namespace.service, account, env, timeoutMs);
       },
       async get(account) {
-        const password = await new AsyncEntry(namespace.service, account).getPassword() ?? undefined;
-        if (password !== undefined) return password;
-        if (!await macosCredentialExists(executable, namespace.service, account, env, timeoutMs)) return undefined;
-        throw new Error("macOS Keychain item exists, but its secret could not be read.");
+        const result = await runCredentialCommand(executable, [
+          "find-generic-password", "-s", namespace.service, "-a", account, "-w",
+        ], undefined, env, timeoutMs);
+        if (macosItemNotFound(result)) return undefined;
+        if (result.code !== 0) throw macosKeychainCommandError("read", result);
+        return result.stdout.replace(/\r?\n$/, "") || undefined;
       },
       async set(account, password) {
-        await new AsyncEntry(namespace.service, account).setPassword(password);
+        // Trust the stable system helper this backend already uses instead of
+        // the Node interpreter. Otherwise macOS binds the item to the Homebrew
+        // Node path that created it, and every Node upgrade makes later
+        // invocations prompt for the login password again.
+        const result = await runCredentialCommand(executable, [
+          "add-generic-password", "-U", "-T", executable, "-s", namespace.service, "-a", account, "-w",
+        ], `${password}\n${password}\n`, env, timeoutMs);
+        if (result.code !== 0) throw macosKeychainCommandError("write", result);
       },
       async delete(account) {
-        const deleted = await new AsyncEntry(namespace.service, account).deleteCredential();
-        if (await macosCredentialExists(executable, namespace.service, account, env, timeoutMs)) {
-          throw new Error("macOS Keychain delete could not be verified.");
-        }
-        return deleted;
+        const result = await runCredentialCommand(executable, [
+          "delete-generic-password", "-s", namespace.service, "-a", account,
+        ], undefined, env, timeoutMs);
+        if (macosItemNotFound(result)) return false;
+        if (result.code !== 0) throw macosKeychainCommandError("delete", result);
+        return true;
       },
     };
     return { backend, available: true, persistent: true, store };
@@ -517,7 +532,7 @@ async function resolveMacosKeychain(
       available: false,
       persistent: true,
       reason: safeStoreReason(error),
-      remediation: "Reinstall sustech-cli so its native keyring package matches this macOS system and CPU.",
+      remediation: "Unlock the login keychain in the current graphical session, then retry.",
     };
   }
 }
@@ -540,6 +555,16 @@ async function macosCredentialExists(
 function macosItemNotFound(result: { code: number; stderr: string }): boolean {
   return result.code === 44
     && /(?:specified item could not be found|errSecItemNotFound|-25300)/i.test(result.stderr);
+}
+
+function macosKeychainCommandError(
+  action: "read" | "write" | "delete",
+  result: { code: number; stderr: string },
+): Error {
+  const detail = result.stderr.trim().split("\n")[0];
+  return new Error(
+    `macOS Keychain ${action} failed (security exit ${result.code})${detail ? `: ${detail}` : ""}.`,
+  );
 }
 
 async function resolveWindowsCredentialManager(namespace: SecretNamespace): Promise<BackendResolution> {
